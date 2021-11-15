@@ -1,0 +1,12 @@
+[package]
+name = "polynomial-solver"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+num-traits = "0.2"
+
+[dependencies.rug]
+version = "1.13"
+default-features = false
+features = ["integer"]
