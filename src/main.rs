@@ -1,3 +1,4 @@
+mod ordered_sum;
 mod polynomial;
 
 fn main() {

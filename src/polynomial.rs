@@ -1,3 +1,4 @@
+use super::ordered_sum;
 use std::cmp::Ordering as CmpOrd;
 
 trait Id: Eq + Ord {}
@@ -10,6 +11,24 @@ trait Power: Eq + Ord + Clone + num_traits::Unsigned + num_traits::Zero + num_tr
 struct VariablePower<I, P> {
     id: I,
     power: P,
+}
+
+impl<I, P> ordered_sum::Term for VariablePower<I, P> {
+    type Key = I;
+    type Value = P;
+
+    fn key(&self) -> &Self::Key {
+        &self.id
+    }
+    fn value(self) -> Self::Value {
+        self.power
+    }
+    fn value_ref(&self) -> &Self::Value {
+        &self.power
+    }
+    fn value_ref_mut(&mut self) -> &mut Self::Value {
+        &mut self.power
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -89,6 +108,24 @@ where
     }
 }
 
+impl<I, C, P> ordered_sum::Term for Term<I, C, P> {
+    type Key = Monomial<I, P>;
+    type Value = C;
+
+    fn key(&self) -> &Self::Key {
+        &self.monomial
+    }
+    fn value(self) -> Self::Value {
+        self.coefficient
+    }
+    fn value_ref(&self) -> &Self::Value {
+        &self.coefficient
+    }
+    fn value_ref_mut(&mut self) -> &mut Self::Value {
+        &mut self.coefficient
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Polynomial<I, C, P> {
     // Terms are sorted in decreasing order of monomials
@@ -128,62 +165,9 @@ where
 {
     type Output = Polynomial<I, C, P>;
 
-    fn add(mut self, rhs: Polynomial<I, C, P>) -> Self::Output {
-        let mut new_terms = Vec::new();
-        let mut a_iter = self.terms.into_iter();
-        let mut b_iter = rhs.terms.into_iter();
-
-        let remainer;
-        loop {
-            let a = a_iter.next();
-            let b = b_iter.next();
-
-            match (a, b) {
-                (Some(mut a), Some(mut b)) => loop {
-                    if a.monomial == b.monomial {
-                        a.coefficient += b.coefficient;
-                        if !a.coefficient.is_zero() {
-                            new_terms.push(a);
-                        }
-                        break;
-                    } else if b.monomial > a.monomial {
-                        new_terms.push(b);
-                        b = a;
-                        std::mem::swap(&mut a_iter, &mut b_iter);
-                    } else {
-                        new_terms.push(a);
-                    }
-
-                    if let Some(v) = a_iter.next() {
-                        a = v;
-                    } else {
-                        new_terms.push(b);
-                        break;
-                    }
-                },
-                (None, Some(b)) => {
-                    remainer = b_iter;
-                    new_terms.push(b);
-                    break;
-                }
-                (Some(a), None) => {
-                    remainer = a_iter;
-                    new_terms.push(a);
-                    break;
-                }
-                (None, None) => {
-                    remainer = a_iter;
-                    break;
-                }
-            }
-        }
-
-        new_terms.extend(remainer);
-
-        if new_terms.is_empty() {
-            Self::new_constant(C::zero())
-        } else {
-            Self { terms: new_terms }
+    fn add(self, rhs: Polynomial<I, C, P>) -> Self::Output {
+        Self {
+            terms: ordered_sum::ordered_sum(self.terms, rhs.terms),
         }
     }
 }
