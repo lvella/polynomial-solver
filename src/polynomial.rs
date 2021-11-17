@@ -1,12 +1,22 @@
 use super::ordered_sum;
-use std::{cmp::Ordering as CmpOrd, slice::SliceIndex};
+use std::cmp::Ordering as CmpOrd;
 
 trait Id: Eq + Ord + Clone {}
 
-trait Coefficient: Clone + std::ops::AddAssign + num_traits::Zero + num_traits::One {}
+trait Coefficient:
+    Clone + std::ops::AddAssign + std::ops::SubAssign + num_traits::Zero + num_traits::One
+{
+}
 
 trait Power:
-    Eq + Ord + Clone + std::ops::AddAssign + num_traits::Unsigned + num_traits::Zero + num_traits::One
+    Eq
+    + Ord
+    + Clone
+    + std::ops::AddAssign
+    + for<'a> std::ops::AddAssign<&'a Self>
+    + num_traits::Unsigned
+    + num_traits::Zero
+    + num_traits::One
 {
 }
 
@@ -170,12 +180,67 @@ where
 
     fn add(self, rhs: Polynomial<I, C, P>) -> Self::Output {
         Self {
-            terms: ordered_sum::ordered_sum(self.terms, rhs.terms),
+            terms: ordered_sum::ordered_sum(self.terms, rhs.terms, std::ops::AddAssign::add_assign),
         }
     }
 }
 
-impl<I, C, P> std::ops::Mul<Polynomial<I, C, P>> for Polynomial<I, C, P>
+impl<I, C, P> std::ops::Add<C> for Polynomial<I, C, P>
+where
+    C: Coefficient,
+    P: Power,
+{
+    type Output = Polynomial<I, C, P>;
+
+    fn add(mut self, rhs: C) -> Self::Output {
+        let size = self.terms.len();
+        let last = &mut self.terms[size - 1];
+        if last.monomial.product.is_empty() {
+            last.coefficient += rhs;
+        } else {
+            self.terms.push(Term::new_constant(rhs));
+        }
+
+        self
+    }
+}
+
+impl<I, C, P> std::ops::Sub<Polynomial<I, C, P>> for Polynomial<I, C, P>
+where
+    I: Id,
+    C: Coefficient,
+    P: Power,
+{
+    type Output = Polynomial<I, C, P>;
+
+    fn sub(self, rhs: Polynomial<I, C, P>) -> Self::Output {
+        Self {
+            terms: ordered_sum::ordered_sum(self.terms, rhs.terms, std::ops::SubAssign::sub_assign),
+        }
+    }
+}
+
+impl<I, C, P> std::ops::Sub<C> for Polynomial<I, C, P>
+where
+    C: Coefficient,
+    P: Power,
+{
+    type Output = Polynomial<I, C, P>;
+
+    fn sub(mut self, rhs: C) -> Self::Output {
+        let size = self.terms.len();
+        let last = &mut self.terms[size - 1];
+        if last.monomial.product.is_empty() {
+            last.coefficient -= rhs;
+        } else {
+            self.terms.push(Term::new_constant(rhs));
+        }
+
+        self
+    }
+}
+
+impl<'a, I, C, P> std::ops::Mul<Polynomial<I, C, P>> for Polynomial<I, C, P>
 where
     I: Id,
     C: Coefficient,
@@ -199,10 +264,12 @@ where
                 let product = ordered_sum::ordered_sum(
                     a.monomial.product.iter().cloned(),
                     b.monomial.product.iter().cloned(),
+                    std::ops::AddAssign::add_assign,
                 );
-                let total_power = product
-                    .iter()
-                    .fold(P::zero(), |acc, e| acc + e.power.clone());
+                let mut total_power = P::zero();
+                for e in product.iter() {
+                    total_power += &e.power;
+                }
 
                 let new_monomial = Monomial {
                     product,
@@ -238,29 +305,9 @@ where
     }
 }
 
-impl<I, C, P> std::ops::Add<C> for Polynomial<I, C, P>
-where
-    C: Coefficient,
-    P: Power,
-{
-    type Output = Polynomial<I, C, P>;
-
-    fn add(mut self, rhs: C) -> Self::Output {
-        let size = self.terms.len();
-        let last = &mut self.terms[size - 1];
-        if last.monomial.product.is_empty() {
-            last.coefficient += rhs;
-        } else {
-            self.terms.push(Term::new_constant(rhs));
-        }
-
-        self
-    }
-}
-
 impl Id for u8 {}
-impl Power for u32 {}
 impl Coefficient for u32 {}
+impl Power for u32 {}
 
 type SmallPoly = Polynomial<u8, u32, u32>;
 
@@ -269,7 +316,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn addition_ordering() {
+    fn addition_and_subtraction_ordering() {
         let [z, y, x]: [SmallPoly; 3] = SmallPoly::new_variables([0u8, 1u8, 2u8])
             .try_into()
             .unwrap();
@@ -279,7 +326,7 @@ mod tests {
         assert_eq!(a, b);
         println!("a = {:#?}", a);
 
-        let c = a + b;
+        let c = a.clone() + b;
         println!("c = {:#?}", c);
 
         assert_eq!(c.terms.len(), 4);
@@ -298,21 +345,66 @@ mod tests {
         // The last term has no variables and the coefficient is 84:
         assert!(c.terms[3].monomial.product.is_empty());
         assert_eq!(c.terms[3].coefficient, 84);
+
+        // The inverse operation must yield the original polynomial:
+        let d = c - a.clone();
+        assert_eq!(a, d);
     }
 
     #[test]
-    fn many_terms_addition() {
+    fn many_terms_addition_and_subtraction() {
         let [x0, x1, x2, x3, x4, x5, x6, x7]: [SmallPoly; 8] =
             SmallPoly::new_variables(0u8..8).try_into().unwrap();
 
         let a = x0 + x1 + x3.clone() + x4;
         let b = x2 + x3 + x5 + x6 + x7 + 42;
 
+        // Test commutativity:
         let c = a.clone() + b.clone();
-        let d = b + a;
+        let d = b.clone() + a.clone();
 
         println!("c = {:#?}", c);
 
         assert_eq!(c, d);
+
+        // Check the first 8 terms:
+        for i in 0..8 {
+            let t = &c.terms[i];
+            let m = &t.monomial;
+            let var = &m.product[0];
+
+            assert_eq!(m.product.len(), 1);
+            assert_eq!(var.power, 1);
+            assert_eq!(var.id, 7 - i as u8);
+
+            let expected_coef = if var.id == 3 { 2 } else { 1 };
+            assert_eq!(t.coefficient, expected_coef);
+        }
+
+        // Test that we get the original polynomials by subtracting:
+        let a_restored = c - b.clone();
+        let b_restored = d - a.clone();
+
+        println!("a_restored = {:#?}", a_restored);
+        println!("b_restored = {:#?}", b_restored);
+
+        assert_eq!(a, a_restored);
+        assert_eq!(b, b_restored);
+    }
+
+    #[test]
+    fn assemble_factors() {
+        let [y, x]: [SmallPoly; 2] = SmallPoly::new_variables([0u8, 1u8]).try_into().unwrap();
+
+        let p = (x.clone() - 1)
+            * (x.clone() - 5)
+            * (x.clone() + 12)
+            * (y.clone() - 42)
+            * (y.clone() + 42);
+
+        println!("{:#?}", p);
+
+        // According to symbolab, answer should be:
+        // -1764x^3 + x^3y^2 + 60y^2 - 10584x^2 + 6x^2y^2 - 67xy^2 + 118188x - 105840
     }
 }

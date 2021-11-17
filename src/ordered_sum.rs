@@ -14,12 +14,13 @@ pub trait Term {
 
 /// Implements sum, when sum depends on summing two ordered sequence.
 /// Used to multiply two monomials or sum two polynomials.
-pub fn ordered_sum<T, K, V, I>(lhs: I, rhs: I) -> Vec<T>
+pub fn ordered_sum<T, K, V, I, Sum>(lhs: I, rhs: I, op: Sum) -> Vec<T>
 where
     I: IntoIterator<Item = T>,
     K: Ord,
-    V: std::ops::AddAssign + num_traits::Zero,
+    V: num_traits::Zero,
     T: Term<Key = K, Value = V>,
+    Sum: Fn(&mut V, V),
 {
     let mut new_terms = Vec::new();
     let mut a_iter = lhs.into_iter();
@@ -34,7 +35,8 @@ where
             (Some(mut a), Some(mut b)) => loop {
                 match a.key().cmp(b.key()) {
                     std::cmp::Ordering::Equal => {
-                        *a.value_ref_mut() += b.value();
+                        // Do the "sum"
+                        op(a.value_ref_mut(), b.value());
                         if !a.value_ref().is_zero() {
                             new_terms.push(a);
                         }
