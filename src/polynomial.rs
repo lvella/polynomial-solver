@@ -1,11 +1,14 @@
 use super::ordered_sum;
-use std::cmp::Ordering as CmpOrd;
+use std::{cmp::Ordering as CmpOrd, slice::SliceIndex};
 
-trait Id: Eq + Ord {}
+trait Id: Eq + Ord + Clone {}
 
-trait Coefficient: std::ops::AddAssign + num_traits::Zero + num_traits::One {}
+trait Coefficient: Clone + std::ops::AddAssign + num_traits::Zero + num_traits::One {}
 
-trait Power: Eq + Ord + Clone + num_traits::Unsigned + num_traits::Zero + num_traits::One {}
+trait Power:
+    Eq + Ord + Clone + std::ops::AddAssign + num_traits::Unsigned + num_traits::Zero + num_traits::One
+{
+}
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 struct VariablePower<I, P> {
@@ -172,7 +175,6 @@ where
     }
 }
 
-/*
 impl<I, C, P> std::ops::Mul<Polynomial<I, C, P>> for Polynomial<I, C, P>
 where
     I: Id,
@@ -182,19 +184,59 @@ where
     type Output = Polynomial<I, C, P>;
 
     fn mul(self, rhs: Polynomial<I, C, P>) -> Self::Output {
-        let new_terms = std::collections::BTreeMap::new();
-        let outer_iter = self.terms.into_iter();
+        let mut new_terms = std::collections::BTreeMap::new();
 
-        for a in self.terms {
-            for b in rhs.terms.iter() {
-                let new_coef = a.coefficient * b.coefficient;
+        let (outer, inner) = if self.terms.len() > rhs.terms.len() {
+            (rhs.terms, self.terms)
+        } else {
+            (self.terms, rhs.terms)
+        };
+
+        for a in outer {
+            for b in inner.iter() {
+                let new_coef = a.coefficient.clone() * b.coefficient.clone();
+
+                let product = ordered_sum::ordered_sum(
+                    a.monomial.product.iter().cloned(),
+                    b.monomial.product.iter().cloned(),
+                );
+                let total_power = product
+                    .iter()
+                    .fold(P::zero(), |acc, e| acc + e.power.clone());
+
+                let new_monomial = Monomial {
+                    product,
+                    total_power,
+                };
+
+                let entry = new_terms.entry(new_monomial);
+                match entry {
+                    std::collections::btree_map::Entry::Vacant(e) => {
+                        if !new_coef.is_zero() {
+                            e.insert(new_coef);
+                        }
+                    }
+                    std::collections::btree_map::Entry::Occupied(mut e) => {
+                        *e.get_mut() += new_coef;
+                        if e.get().is_zero() {
+                            e.remove();
+                        }
+                    }
+                }
             }
         }
 
-        self
+        let terms: Vec<_> = new_terms
+            .into_iter()
+            .rev()
+            .map(|(monomial, coefficient)| Term {
+                coefficient,
+                monomial,
+            })
+            .collect();
+        Self { terms }
     }
 }
-*/
 
 impl<I, C, P> std::ops::Add<C> for Polynomial<I, C, P>
 where
