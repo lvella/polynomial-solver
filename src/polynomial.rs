@@ -13,6 +13,7 @@ pub trait Power:
     + Ord
     + Clone
     + std::ops::AddAssign
+    + std::ops::SubAssign
     + for<'a> std::ops::AddAssign<&'a Self>
     + num_traits::Unsigned
     + num_traits::Zero
@@ -21,7 +22,7 @@ pub trait Power:
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-struct VariablePower<I, P> {
+pub struct VariablePower<I, P> {
     id: I,
     power: P,
 }
@@ -45,10 +46,34 @@ impl<I, P> ordered_sum::Term for VariablePower<I, P> {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-struct Monomial<I, P> {
+pub struct Monomial<I, P> {
     // Product is sorted in decreasing order of id:
     product: Vec<VariablePower<I, P>>,
     total_power: P,
+}
+
+impl<I, P> Monomial<I, P>
+where
+    I: Id,
+    P: Power,
+{
+    pub fn whole_division(mut self: Self, divisor: &Self) -> Option<Self> {
+        let mut iter = self.product.iter();
+
+        for var in divisor.product.iter() {
+            let found = iter.find(|e| e.id == var.id)?;
+            if found.power < var.power {
+                return None;
+            }
+
+            found.power -= var.power;
+            self.total_power -= var.power;
+        }
+
+        self.product.retain(|e| !e.power.is_zero());
+
+        Some(self)
+    }
 }
 
 impl<I, P> std::cmp::PartialOrd for Monomial<I, P>
@@ -133,6 +158,10 @@ where
             },
         }
     }
+
+    pub fn get_monomial(&self) -> &Monomial<I, P> {
+        &self.monomial
+    }
 }
 
 impl<I, C, P> ordered_sum::Term for Term<I, C, P> {
@@ -187,6 +216,10 @@ where
                 vec![Term::new_constant(value)]
             },
         }
+    }
+
+    pub fn get_terms(&self) -> &[Term<I, C, P>] {
+        &self.terms[..]
     }
 }
 
