@@ -1,14 +1,14 @@
 use super::ordered_sum;
-use std::cmp::Ordering as CmpOrd;
+use std::{cmp::Ordering as CmpOrd, fmt::Write};
 
-trait Id: Eq + Ord + Clone {}
+pub trait Id: Eq + Ord + Clone {}
 
-trait Coefficient:
-    Clone + std::ops::AddAssign + std::ops::SubAssign + num_traits::Zero + num_traits::One
+pub trait Coefficient:
+    PartialEq + Clone + std::ops::AddAssign + std::ops::SubAssign + num_traits::Zero + num_traits::One
 {
 }
 
-trait Power:
+pub trait Power:
     Eq
     + Ord
     + Clone
@@ -95,22 +95,36 @@ struct Term<I, C, P> {
 
 impl<I, C, P> Term<I, C, P>
 where
+    C: Coefficient,
     P: Power,
 {
     fn new(coefficient: C, id: I, power: P) -> Self {
-        Term {
-            coefficient,
-            monomial: Monomial {
-                product: vec![VariablePower {
-                    id,
-                    power: power.clone(),
-                }],
-                total_power: power,
-            },
+        assert!(
+            !coefficient.is_zero(),
+            "zero coefficient term is non-normalized, thus it is not valid"
+        );
+        if power.is_zero() {
+            // No product is implictly one
+            Self::new_constant(coefficient)
+        } else {
+            Term {
+                coefficient,
+                monomial: Monomial {
+                    product: vec![VariablePower {
+                        id,
+                        power: power.clone(),
+                    }],
+                    total_power: power,
+                },
+            }
         }
     }
 
     fn new_constant(value: C) -> Self {
+        assert!(
+            !value.is_zero(),
+            "zero coefficient term is non-normalized, thus it is not valid"
+        );
         Term {
             coefficient: value,
             monomial: Monomial {
@@ -140,37 +154,43 @@ impl<I, C, P> ordered_sum::Term for Term<I, C, P> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Polynomial<I, C, P> {
+pub struct Polynomial<I, C, P> {
     // Terms are sorted in decreasing order of monomials
     terms: Vec<Term<I, C, P>>,
 }
 
+// TODO optimization: implement term * polynomial multiplication
 impl<I, C, P> Polynomial<I, C, P>
 where
     C: Coefficient,
     P: Power,
 {
-    fn new_variables(var_ids: impl IntoIterator<Item = I>) -> Vec<Self> {
+    pub fn new_variables(var_ids: impl IntoIterator<Item = I>) -> Vec<Self> {
         var_ids
             .into_iter()
             .map(|id| Self::new_monomial_term(C::one(), id, P::one()))
             .collect()
     }
 
-    fn new_monomial_term(coefficient: C, id: I, power: P) -> Self {
+    pub fn new_monomial_term(coefficient: C, id: I, power: P) -> Self {
         Self {
             terms: vec![Term::new(coefficient, id, power)],
         }
     }
 
-    fn new_constant(value: C) -> Self {
+    pub fn new_constant(value: C) -> Self {
         Self {
-            terms: vec![Term::new_constant(value)],
+            terms: if value.is_zero() {
+                // No terms means zero implictly
+                Vec::new()
+            } else {
+                vec![Term::new_constant(value)]
+            },
         }
     }
 }
 
-impl<I, C, P> std::ops::Add<Polynomial<I, C, P>> for Polynomial<I, C, P>
+impl<I, C, P> std::ops::Add for Polynomial<I, C, P>
 where
     I: Id,
     C: Coefficient,
@@ -180,7 +200,7 @@ where
 
     fn add(self, rhs: Polynomial<I, C, P>) -> Self::Output {
         Self {
-            terms: ordered_sum::ordered_sum(self.terms, rhs.terms, std::ops::AddAssign::add_assign),
+            terms: ordered_sum::ordered_sum(self.terms, rhs.terms),
         }
     }
 }
@@ -205,7 +225,24 @@ where
     }
 }
 
-impl<I, C, P> std::ops::Sub<Polynomial<I, C, P>> for Polynomial<I, C, P>
+impl<I, C, P> std::ops::Neg for Polynomial<I, C, P>
+where
+    I: Id,
+    C: Coefficient,
+    P: Power,
+{
+    type Output = Self;
+
+    fn neg(mut self) -> Self {
+        for term in self.terms.iter_mut() {
+            let tmp = std::mem::replace(&mut term.coefficient, C::zero());
+            term.coefficient -= tmp;
+        }
+        self
+    }
+}
+
+impl<I, C, P> std::ops::Sub for Polynomial<I, C, P>
 where
     I: Id,
     C: Coefficient,
@@ -214,8 +251,9 @@ where
     type Output = Polynomial<I, C, P>;
 
     fn sub(self, rhs: Polynomial<I, C, P>) -> Self::Output {
+        let rhs = -rhs;
         Self {
-            terms: ordered_sum::ordered_sum(self.terms, rhs.terms, std::ops::SubAssign::sub_assign),
+            terms: ordered_sum::ordered_sum(self.terms, rhs.terms),
         }
     }
 }
@@ -233,14 +271,16 @@ where
         if last.monomial.product.is_empty() {
             last.coefficient -= rhs;
         } else {
-            self.terms.push(Term::new_constant(rhs));
+            let mut neg = C::zero();
+            neg -= rhs;
+            self.terms.push(Term::new_constant(neg));
         }
 
         self
     }
 }
 
-impl<'a, I, C, P> std::ops::Mul<Polynomial<I, C, P>> for Polynomial<I, C, P>
+impl<I, C, P> std::ops::Mul for Polynomial<I, C, P>
 where
     I: Id,
     C: Coefficient,
@@ -264,7 +304,6 @@ where
                 let product = ordered_sum::ordered_sum(
                     a.monomial.product.iter().cloned(),
                     b.monomial.product.iter().cloned(),
-                    std::ops::AddAssign::add_assign,
                 );
                 let mut total_power = P::zero();
                 for e in product.iter() {
@@ -305,15 +344,74 @@ where
     }
 }
 
-impl Id for u8 {}
-impl Coefficient for u32 {}
-impl Power for u32 {}
+impl<I, C, P> std::ops::Mul<C> for Polynomial<I, C, P>
+where
+    I: Id,
+    C: Coefficient,
+    P: Power,
+{
+    type Output = Polynomial<I, C, P>;
 
-type SmallPoly = Polynomial<u8, u32, u32>;
+    fn mul(self, rhs: C) -> Self {
+        self * Polynomial::new_constant(rhs)
+    }
+}
+
+impl<I, C, P> std::fmt::Display for Term<I, C, P>
+where
+    I: Id + std::fmt::Display,
+    C: Coefficient + std::fmt::Display,
+    P: Power + std::fmt::Display,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if !self.coefficient.is_one() || self.monomial.product.is_empty() {
+            self.coefficient.fmt(f)?;
+        }
+        for v in self.monomial.product.iter() {
+            write!(f, "x{}", v.id)?;
+            if !v.power.is_one() {
+                write!(f, "^{}", v.power)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<I, C, P> std::fmt::Display for Polynomial<I, C, P>
+where
+    I: Id + std::fmt::Display,
+    C: Coefficient + std::fmt::Display,
+    P: Power + std::fmt::Display,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut iter = self.terms.iter();
+        match iter.next() {
+            None => {
+                f.write_char('0')?;
+                return Ok(());
+            }
+            Some(t) => {
+                t.fmt(f)?;
+            }
+        }
+
+        for t in iter {
+            write!(f, " + {}", t)?;
+        }
+
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    impl Id for u8 {}
+    impl Coefficient for i32 {}
+    impl Power for u32 {}
+
+    type SmallPoly = Polynomial<u8, i32, u32>;
 
     #[test]
     fn addition_and_subtraction_ordering() {
@@ -324,10 +422,10 @@ mod tests {
         let b = y + 42 + z + x;
 
         assert_eq!(a, b);
-        println!("a = {:#?}", a);
+        println!("a = {}", a);
 
         let c = a.clone() + b;
-        println!("c = {:#?}", c);
+        println!("c = {}", c);
 
         assert_eq!(c.terms.len(), 4);
         // For the first 3 terms:
@@ -357,13 +455,13 @@ mod tests {
             SmallPoly::new_variables(0u8..8).try_into().unwrap();
 
         let a = x0 + x1 + x3.clone() + x4;
-        let b = x2 + x3 + x5 + x6 + x7 + 42;
+        let b = x2 + x3 - x5 + x6 + x7 - 42;
 
         // Test commutativity:
         let c = a.clone() + b.clone();
         let d = b.clone() + a.clone();
 
-        println!("c = {:#?}", c);
+        println!("c = {}", c);
 
         assert_eq!(c, d);
 
@@ -377,34 +475,106 @@ mod tests {
             assert_eq!(var.power, 1);
             assert_eq!(var.id, 7 - i as u8);
 
-            let expected_coef = if var.id == 3 { 2 } else { 1 };
+            let expected_coef = match var.id {
+                3 => 2,
+                5 => -1,
+                _ => 1,
+            };
             assert_eq!(t.coefficient, expected_coef);
         }
+
+        // Check the last term:
+        assert_eq!(c.terms[8].coefficient, -42);
+        assert!(c.terms[8].monomial.product.is_empty());
 
         // Test that we get the original polynomials by subtracting:
         let a_restored = c - b.clone();
         let b_restored = d - a.clone();
 
-        println!("a_restored = {:#?}", a_restored);
-        println!("b_restored = {:#?}", b_restored);
+        println!("a_restored = {}", a_restored);
+        println!("b_restored = {}", b_restored);
 
         assert_eq!(a, a_restored);
         assert_eq!(b, b_restored);
     }
 
-    #[test]
-    fn assemble_factors() {
+    fn factorable_polynomial() -> SmallPoly {
         let [y, x]: [SmallPoly; 2] = SmallPoly::new_variables([0u8, 1u8]).try_into().unwrap();
 
-        let p = (x.clone() - 1)
-            * (x.clone() - 5)
-            * (x.clone() + 12)
-            * (y.clone() - 42)
-            * (y.clone() + 42);
+        (x.clone() - 1) * (x.clone() - 5) * (x.clone() + 12) * (y.clone() - 42) * (y.clone() + 42)
+    }
 
-        println!("{:#?}", p);
+    #[test]
+    fn assemble_factors() {
+        let p = factorable_polynomial();
 
-        // According to symbolab, answer should be:
+        println!("{}", p);
+
+        let t = SmallPoly::new_monomial_term;
+
+        // According to symbolab.com, answer should be:
         // -1764x^3 + x^3y^2 + 60y^2 - 10584x^2 + 6x^2y^2 - 67xy^2 + 118188x - 105840
+        let expected = t(-1764, 1, 3)
+            + t(1, 1, 3) * t(1, 0, 2)
+            + t(60, 0, 2)
+            + t(-10584, 1, 2)
+            + t(6, 1, 2) * t(1, 0, 2)
+            + t(-67, 1, 1) * t(1, 0, 2)
+            + t(118188, 1, 1)
+            - 105840;
+
+        assert_eq!(p, expected);
+    }
+
+    #[test]
+    fn multiply_by_zero() {
+        let p = factorable_polynomial();
+
+        let zero = Polynomial::new_constant(0);
+
+        let a = p.clone() * zero.clone();
+        let b = zero.clone() * p.clone();
+        let c = p * 0;
+
+        assert_eq!(a, b);
+        assert_eq!(a, c);
+        assert_eq!(a, zero);
+
+        assert_eq!(a, Polynomial { terms: Vec::new() });
+    }
+
+    #[test]
+    fn multiply_by_constant() {
+        let p = factorable_polynomial();
+
+        let a = p.clone() * -42;
+
+        for (a, p) in a.terms.into_iter().zip(p.terms) {
+            assert_eq!(a.monomial, p.monomial);
+            assert_eq!(a.coefficient, -42 * p.coefficient);
+        }
+    }
+
+    #[test]
+    fn multiply_by_minus_one() {
+        let p = factorable_polynomial();
+        let a = p.clone() * -1;
+
+        assert_eq!(a, -p);
+    }
+
+    #[test]
+    fn inverse_division() {
+        let [y, x]: [SmallPoly; 2] = SmallPoly::new_variables([0u8, 1u8]).try_into().unwrap();
+        let a = x.clone() - y.clone();
+        let b = x.clone() * x.clone() + x.clone() * y.clone() + y.clone() * y.clone();
+
+        let c = a * b;
+        println!("{}", c);
+
+        assert_eq!(
+            c,
+            x.clone() * x.clone() * x.clone() - y.clone() * y.clone() * y.clone()
+        );
     }
 }
