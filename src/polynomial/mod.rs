@@ -1,3 +1,5 @@
+pub mod grobner_basis;
+
 use super::ordered_sum;
 use std::{cmp::Ordering as CmpOrd, fmt::Write};
 
@@ -13,8 +15,8 @@ pub trait Power:
     + Ord
     + Clone
     + std::ops::AddAssign
-    + std::ops::SubAssign
     + for<'a> std::ops::AddAssign<&'a Self>
+    + for<'a> std::ops::SubAssign<&'a Self>
     + num_traits::Unsigned
     + num_traits::Zero
     + num_traits::One
@@ -58,7 +60,7 @@ where
     P: Power,
 {
     pub fn whole_division(mut self: Self, divisor: &Self) -> Option<Self> {
-        let mut iter = self.product.iter();
+        let mut iter = self.product.iter_mut();
 
         for var in divisor.product.iter() {
             let found = iter.find(|e| e.id == var.id)?;
@@ -66,8 +68,8 @@ where
                 return None;
             }
 
-            found.power -= var.power;
-            self.total_power -= var.power;
+            found.power -= &var.power;
+            self.total_power -= &var.power;
         }
 
         self.product.retain(|e| !e.power.is_zero());
@@ -113,7 +115,7 @@ where
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Term<I, C, P> {
+pub struct Term<I, C, P> {
     coefficient: C,
     monomial: Monomial<I, P>,
 }
@@ -124,10 +126,6 @@ where
     P: Power,
 {
     fn new(coefficient: C, id: I, power: P) -> Self {
-        assert!(
-            !coefficient.is_zero(),
-            "zero coefficient term is non-normalized, thus it is not valid"
-        );
         if power.is_zero() {
             // No product is implictly one
             Self::new_constant(coefficient)
@@ -146,10 +144,6 @@ where
     }
 
     fn new_constant(value: C) -> Self {
-        assert!(
-            !value.is_zero(),
-            "zero coefficient term is non-normalized, thus it is not valid"
-        );
         Term {
             coefficient: value,
             monomial: Monomial {
@@ -158,9 +152,34 @@ where
             },
         }
     }
+}
 
-    pub fn get_monomial(&self) -> &Monomial<I, P> {
-        &self.monomial
+impl<I, C, P> std::ops::Mul for Term<I, C, P>
+where
+    I: Id,
+    C: Coefficient,
+    P: Power,
+{
+    type Output = Self;
+
+    fn mul(self, rhs: Self) -> Self {
+        let coefficient = self.coefficient * rhs.coefficient.clone();
+
+        let product = ordered_sum::ordered_sum(self.monomial.product, rhs.monomial.product);
+        let mut total_power = P::zero();
+        for e in product.iter() {
+            total_power += &e.power;
+        }
+
+        let monomial = Monomial {
+            product,
+            total_power,
+        };
+
+        Self {
+            coefficient,
+            monomial,
+        }
     }
 }
 
@@ -313,7 +332,7 @@ where
     }
 }
 
-impl<I, C, P> std::ops::Mul for Polynomial<I, C, P>
+impl<I, C, P> std::ops::Mul for &Polynomial<I, C, P>
 where
     I: Id,
     C: Coefficient,
@@ -321,42 +340,28 @@ where
 {
     type Output = Polynomial<I, C, P>;
 
-    fn mul(self, rhs: Polynomial<I, C, P>) -> Self::Output {
+    fn mul(self, rhs: &Polynomial<I, C, P>) -> Self::Output {
         let mut new_terms = std::collections::BTreeMap::new();
 
         let (outer, inner) = if self.terms.len() > rhs.terms.len() {
-            (rhs.terms, self.terms)
+            (&rhs.terms, &self.terms)
         } else {
-            (self.terms, rhs.terms)
+            (&self.terms, &rhs.terms)
         };
 
         for a in outer {
-            for b in inner.iter() {
-                let new_coef = a.coefficient.clone() * b.coefficient.clone();
+            for b in inner {
+                let new_term = a.clone() * b.clone();
 
-                let product = ordered_sum::ordered_sum(
-                    a.monomial.product.iter().cloned(),
-                    b.monomial.product.iter().cloned(),
-                );
-                let mut total_power = P::zero();
-                for e in product.iter() {
-                    total_power += &e.power;
-                }
-
-                let new_monomial = Monomial {
-                    product,
-                    total_power,
-                };
-
-                let entry = new_terms.entry(new_monomial);
+                let entry = new_terms.entry(new_term.monomial);
                 match entry {
                     std::collections::btree_map::Entry::Vacant(e) => {
-                        if !new_coef.is_zero() {
-                            e.insert(new_coef);
+                        if !new_term.coefficient.is_zero() {
+                            e.insert(new_term.coefficient);
                         }
                     }
                     std::collections::btree_map::Entry::Occupied(mut e) => {
-                        *e.get_mut() += new_coef;
+                        *e.get_mut() += new_term.coefficient;
                         if e.get().is_zero() {
                             e.remove();
                         }
@@ -373,11 +378,23 @@ where
                 monomial,
             })
             .collect();
-        Self { terms }
+        Self::Output { terms }
     }
 }
 
-impl<I, C, P> std::ops::Mul<C> for Polynomial<I, C, P>
+impl<I, C, P> std::ops::Mul for Polynomial<I, C, P>
+where
+    I: Id,
+    C: Coefficient,
+    P: Power,
+{
+    type Output = Polynomial<I, C, P>;
+    fn mul(self, rhs: Polynomial<I, C, P>) -> Self::Output {
+        &self * &rhs
+    }
+}
+
+impl<I, C, P> std::ops::Mul<C> for &Polynomial<I, C, P>
 where
     I: Id,
     C: Coefficient,
@@ -385,8 +402,39 @@ where
 {
     type Output = Polynomial<I, C, P>;
 
-    fn mul(self, rhs: C) -> Self {
-        self * Polynomial::new_constant(rhs)
+    fn mul(self, rhs: C) -> Self::Output {
+        self * &Polynomial::new_constant(rhs)
+    }
+}
+
+impl<I, C, P, T> num_traits::pow::Pow<T> for Polynomial<I, C, P>
+where
+    I: Id,
+    C: Coefficient,
+    P: Power,
+    T: Clone + num_traits::Zero + std::ops::Rem + std::ops::DivAssign + std::convert::From<u8>,
+    <T as std::ops::Rem>::Output: num_traits::One + PartialEq,
+{
+    type Output = Polynomial<I, C, P>;
+    fn pow(mut self, mut rhs: T) -> Self {
+        let mut ret = Polynomial::new_constant(C::one());
+
+        if !rhs.is_zero() {
+            loop {
+                let rem = rhs.clone() % T::from(2u8);
+                rhs /= T::from(2u8);
+                if num_traits::One::is_one(&rem) {
+                    ret = ret * self.clone();
+                }
+
+                if rhs.is_zero() {
+                    break;
+                }
+                self = self.clone() * self;
+            }
+        }
+
+        ret
     }
 }
 
@@ -438,13 +486,15 @@ where
 
 #[cfg(test)]
 mod tests {
+    use num_traits::Pow;
+
     use super::*;
 
     impl Id for u8 {}
     impl Coefficient for i32 {}
     impl Power for u32 {}
 
-    type SmallPoly = Polynomial<u8, i32, u32>;
+    pub type SmallPoly = Polynomial<u8, i32, u32>;
 
     #[test]
     fn addition_and_subtraction_ordering() {
@@ -567,7 +617,7 @@ mod tests {
 
         let a = p.clone() * zero.clone();
         let b = zero.clone() * p.clone();
-        let c = p * 0;
+        let c = &p * 0;
 
         assert_eq!(a, b);
         assert_eq!(a, c);
@@ -580,7 +630,7 @@ mod tests {
     fn multiply_by_constant() {
         let p = factorable_polynomial();
 
-        let a = p.clone() * -42;
+        let a = &p * -42;
 
         for (a, p) in a.terms.into_iter().zip(p.terms) {
             assert_eq!(a.monomial, p.monomial);
@@ -591,7 +641,7 @@ mod tests {
     #[test]
     fn multiply_by_minus_one() {
         let p = factorable_polynomial();
-        let a = p.clone() * -1;
+        let a = &p * -1;
 
         assert_eq!(a, -p);
     }
@@ -609,5 +659,20 @@ mod tests {
             c,
             x.clone() * x.clone() * x.clone() - y.clone() * y.clone() * y.clone()
         );
+    }
+
+    #[test]
+    fn high_power() {
+        let x = SmallPoly::new_monomial_term(1, 0, 1);
+
+        assert_eq!(x.pow(47).terms[0].monomial.product[0].power, 47);
+    }
+
+    #[test]
+    fn factor_power() {
+        let [y, x]: [SmallPoly; 2] = SmallPoly::new_variables([0u8, 1u8]).try_into().unwrap();
+
+        let p = (x.clone() * y.clone() - 1).pow(5);
+        println!("{}", p);
     }
 }
