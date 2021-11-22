@@ -1,10 +1,57 @@
 use crate::{
     ordered_sum,
-    polynomial::{Coefficient, Id, Polynomial, Power, Term},
+    polynomial::{Coefficient, Id, Monomial, Polynomial, Power, Term},
 };
+use num_traits::Zero;
 use std::collections::{BinaryHeap, VecDeque};
 
 trait InvertibleCoefficient: Coefficient + num_traits::ops::inv::Inv<Output = Self> {}
+
+struct IniSortedPolynomial<I, C, P> {
+    /// If p has no terms (is zero), this may panic.
+    p: Polynomial<I, C, P>,
+}
+
+impl<I, C, P> PartialEq for IniSortedPolynomial<I, C, P>
+where
+    I: PartialEq,
+    P: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.p.terms[0].monomial == other.p.terms[0].monomial
+    }
+}
+
+impl<I, C, P> Eq for IniSortedPolynomial<I, C, P>
+where
+    I: Eq,
+    P: Eq,
+{
+}
+
+impl<I, C, P> PartialOrd for IniSortedPolynomial<I, C, P>
+where
+    I: Ord,
+    P: Power,
+{
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.p
+            .terms
+            .get(0)?
+            .monomial
+            .partial_cmp(&other.p.terms.get(0)?.monomial)
+    }
+}
+
+impl<I, C, P> Ord for IniSortedPolynomial<I, C, P>
+where
+    I: Ord,
+    P: Power,
+{
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.partial_cmp(other).unwrap()
+    }
+}
 
 /// Reduce one polynomial with respect to another.
 /// This is kind of a multi-variable division, and the return is the remainder.
@@ -53,30 +100,30 @@ where
 
 /// g must be sorted in increasing order;
 /// all polynomials in g must be != 0
-fn reduce<I, C, P>(p: &mut Polynomial<I, C, P>, g: Vec<Polynomial<I, C, P>>) -> bool
+fn reduce<I, C, P>(p: &mut Polynomial<I, C, P>, g: &Vec<IniSortedPolynomial<I, C, P>>) -> bool
 where
     I: Id,
     C: InvertibleCoefficient,
     P: Power,
 {
     let mut was_reduced = false;
-    let ret = 'outer: loop {
+    'outer: loop {
         // Find the last element in the g whose ini(g) <= ini(p):
         let pos = {
             let p_ini = if let Some(t) = p.terms.get(0) {
                 &t.monomial
             } else {
                 // p is zero, so it can't be reduced
-                break p;
+                break;
             };
 
-            g.binary_search_by(|gp| gp.terms[0].monomial.cmp(p_ini))
+            g.binary_search_by(|gp| gp.p.terms[0].monomial.cmp(p_ini))
         };
 
         let pos = match pos {
             Err(0) => {
                 // ini(p) is smaller than all ini(g), so can't be reduced
-                break p;
+                break;
             }
             Err(n) => n - 1,
             Ok(n) => n,
@@ -84,28 +131,53 @@ where
 
         // Try to reduce using every polynomial in g in decreasing order:
         for gp in g[..=pos].iter().rev() {
-            if reduction_step(p, gp) {
+            if reduction_step(p, &gp.p) {
                 was_reduced = true;
                 continue 'outer;
             }
         }
 
         // Could not reduced with any polynomial in g, so stop:
-        break p;
-    };
+        break;
+    }
 
     was_reduced
 }
 
-/// outer doesn't need to be sorted, inner does.
-fn autoreduce_step<I, C, P>(mut outer: Vec<Polynomial<I, C, P>>, inner: Vec<Polynomial<I, C, P>>)
+fn autoreduce_step<I, C, P>(
+    mut outer: Vec<Polynomial<I, C, P>>,
+    mut inner: Vec<IniSortedPolynomial<I, C, P>>,
+) -> (Vec<Polynomial<I, C, P>>, Vec<IniSortedPolynomial<I, C, P>>)
 where
     I: Id,
     C: InvertibleCoefficient,
     P: Power,
 {
-    // TODO: to be continued...
-    //let new_inner: BinaryHeap<_> = outer.drain_filter(|p| reduce(p, inner)).collect();
+    // here is a better version of this algorithm where the inner side is reduced before
+    // the outer side, so there is less outer by inner reductions.
+    // TODO: Implement it.
+
+    // Reduce every outer relative to everey inner:
+    let mut next_inner: BinaryHeap<_> = outer
+        .drain_filter(|p| reduce(p, &inner))
+        .map(|p| IniSortedPolynomial { p })
+        .collect();
+
+    // Reduce every inner relative to smaller inners.
+    // If reduced to zero, it is discarded,
+    // if reduced to non-zero it goes to next_inner,
+    // if not reduced, it goes to outer:
+    while let Some(IniSortedPolynomial { mut p }) = inner.pop() {
+        if reduce(&mut p, &inner) {
+            if !p.is_zero() {
+                next_inner.push(IniSortedPolynomial { p });
+            }
+        } else {
+            outer.push(p);
+        }
+    }
+
+    (outer, next_inner.into_sorted_vec())
 }
 
 #[cfg(test)]

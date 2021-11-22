@@ -47,7 +47,7 @@ impl<I, P> ordered_sum::Term for VariablePower<I, P> {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, Clone, Eq)]
 pub struct Monomial<I, P> {
     // Product is sorted in decreasing order of id:
     product: Vec<VariablePower<I, P>>,
@@ -78,10 +78,22 @@ where
     }
 }
 
+// I did't use derive(PartialEq) because total_power
+// need not to be part of the comparision.
+impl<I, P> PartialEq for Monomial<I, P>
+where
+    I: PartialEq,
+    P: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.product == other.product
+    }
+}
+
 impl<I, P> std::cmp::PartialOrd for Monomial<I, P>
 where
-    I: Id,
-    P: Power,
+    I: Ord,
+    P: Ord,
 {
     // For now, just use lexicographical ordering, that is needed to solve the system.
     // For performance reasons, degree reversed lexicographical ordering can be implemented
@@ -104,7 +116,7 @@ where
     }
 }
 
-impl<I, P> std::cmp::Ord for Monomial<I, P>
+impl<I, P> Ord for Monomial<I, P>
 where
     I: Id,
     P: Power,
@@ -239,6 +251,28 @@ where
 
     pub fn get_terms(&self) -> &[Term<I, C, P>] {
         &self.terms[..]
+    }
+}
+
+impl<I, C, P> num_traits::Zero for Polynomial<I, C, P>
+where
+    I: Id,
+    C: Coefficient,
+    P: Power,
+{
+    fn zero() -> Self {
+        Polynomial { terms: Vec::new() }
+    }
+
+    fn is_zero(&self) -> bool {
+        // For safety, test the non-normalized case:
+        for e in self.terms.iter() {
+            if !e.coefficient.is_zero() {
+                return false;
+            }
+        }
+
+        true
     }
 }
 
