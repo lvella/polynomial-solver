@@ -1,5 +1,6 @@
 #![feature(drain_filter)]
 #![feature(binary_heap_into_iter_sorted)]
+#![feature(map_first_last)]
 
-mod ordered_sum;
+mod ordered_ops;
 mod polynomial;

@@ -1,6 +1,6 @@
 pub mod grobner_basis;
 
-use super::ordered_sum;
+use super::ordered_ops;
 use std::{cmp::Ordering as CmpOrd, fmt::Write};
 
 pub trait Id: Eq + Ord + Clone {}
@@ -17,6 +17,7 @@ pub trait Power:
     + std::ops::AddAssign
     + for<'a> std::ops::AddAssign<&'a Self>
     + for<'a> std::ops::SubAssign<&'a Self>
+    + num_traits::ops::saturating::SaturatingSub
     + num_traits::Unsigned
     + num_traits::Zero
     + num_traits::One
@@ -27,24 +28,6 @@ pub trait Power:
 pub struct VariablePower<I, P> {
     id: I,
     power: P,
-}
-
-impl<I, P> ordered_sum::Term for VariablePower<I, P> {
-    type Key = I;
-    type Value = P;
-
-    fn key(&self) -> &Self::Key {
-        &self.id
-    }
-    fn value(self) -> Self::Value {
-        self.power
-    }
-    fn value_ref(&self) -> &Self::Value {
-        &self.power
-    }
-    fn value_ref_mut(&mut self) -> &mut Self::Value {
-        &mut self.power
-    }
 }
 
 #[derive(Debug, Clone, Eq)]
@@ -177,7 +160,19 @@ where
     fn mul(self, rhs: Self) -> Self {
         let coefficient = self.coefficient * rhs.coefficient.clone();
 
-        let product = ordered_sum::ordered_sum(self.monomial.product, rhs.monomial.product);
+        let product = ordered_ops::sum(
+            self.monomial.product.into_iter(),
+            rhs.monomial.product.into_iter(),
+            |x, y| y.id.cmp(&x.id),
+            |mut x, y| {
+                x.power += y.power;
+                if x.power.is_zero() {
+                    None
+                } else {
+                    Some(x)
+                }
+            },
+        );
         let mut total_power = P::zero();
         for e in product.iter() {
             total_power += &e.power;
@@ -192,24 +187,6 @@ where
             coefficient,
             monomial,
         }
-    }
-}
-
-impl<I, C, P> ordered_sum::Term for Term<I, C, P> {
-    type Key = Monomial<I, P>;
-    type Value = C;
-
-    fn key(&self) -> &Self::Key {
-        &self.monomial
-    }
-    fn value(self) -> Self::Value {
-        self.coefficient
-    }
-    fn value_ref(&self) -> &Self::Value {
-        &self.coefficient
-    }
-    fn value_ref_mut(&mut self) -> &mut Self::Value {
-        &mut self.coefficient
     }
 }
 
@@ -301,6 +278,25 @@ where
 
         return eq;
     }
+
+    fn sum_terms(
+        a: impl Iterator<Item = Term<I, C, P>>,
+        b: impl Iterator<Item = Term<I, C, P>>,
+    ) -> Vec<Term<I, C, P>> {
+        ordered_ops::sum(
+            a,
+            b,
+            |x, y| y.monomial.cmp(&x.monomial),
+            |mut x, y| {
+                x.coefficient += y.coefficient;
+                if x.coefficient.is_zero() {
+                    None
+                } else {
+                    Some(x)
+                }
+            },
+        )
+    }
 }
 
 impl<I, C, P> Ord for Polynomial<I, C, P>
@@ -357,7 +353,7 @@ where
 
     fn add(self, rhs: Polynomial<I, C, P>) -> Self::Output {
         Self {
-            terms: ordered_sum::ordered_sum(self.terms, rhs.terms),
+            terms: Self::sum_terms(self.terms.into_iter(), rhs.terms.into_iter()),
         }
     }
 }
@@ -408,10 +404,7 @@ where
     type Output = Polynomial<I, C, P>;
 
     fn sub(self, rhs: Polynomial<I, C, P>) -> Self::Output {
-        let rhs = -rhs;
-        Self {
-            terms: ordered_sum::ordered_sum(self.terms, rhs.terms),
-        }
+        self + (-rhs)
     }
 }
 

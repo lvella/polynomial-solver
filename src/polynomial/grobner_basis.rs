@@ -1,52 +1,30 @@
 use crate::{
-    ordered_sum,
+    ordered_ops,
     polynomial::{Coefficient, Id, Polynomial, Power, Term},
 };
 
-use std::collections::BinaryHeap;
+use itertools::Itertools;
+use num_traits::Zero;
+use std::{
+    borrow::{Borrow, BorrowMut},
+    collections::{BTreeSet, BinaryHeap, VecDeque},
+    iter::Once,
+    rc::Rc,
+};
 
-trait InvertibleCoefficient: Coefficient + Ord + num_traits::ops::inv::Inv<Output = Self> {}
+use super::Monomial;
 
-/// Merges two sorted iterators into a sorted Vec
-fn sorted_merge<Ia, Ib, T>(mut a: Ia, mut b: Ib) -> Vec<T>
+trait InvertibleCoefficient
 where
-    Ia: Iterator<Item = T>,
-    Ib: Iterator<Item = T>,
-    T: Ord,
+    Self: Coefficient + Ord + num_traits::ops::inv::Inv<Output = Self>,
+    for<'a> &'a Self: std::ops::Mul<Output = Self>,
 {
-    let mut ret = Vec::new();
-
-    let mut a_item = a.next();
-    let mut b_item = b.next();
-
-    loop {
-        match (a_item, b_item) {
-            (Some(a_val), Some(b_val)) => {
-                if a_val < b_val {
-                    ret.push(a_val);
-                    a_item = a.next();
-                    b_item = Some(b_val);
-                } else {
-                    ret.push(b_val);
-                    a_item = Some(a_val);
-                    b_item = b.next();
-                }
-            }
-            (Some(a_val), None) => {
-                ret.push(a_val);
-                ret.extend(a);
-                break;
-            }
-            (None, Some(b_val)) => {
-                ret.push(b_val);
-                ret.extend(b);
-                break;
-            }
-            _ => break,
-        }
+    /// Calculate elimination factor, so that self + factor*rhs = 0:
+    fn elimination_factor(&self, rhs: &Self) -> Self {
+        let mut factor = Self::zero();
+        factor -= self * &rhs.clone().inv();
+        factor
     }
-
-    ret
 }
 
 /// Reduce one polynomial with respect to another.
@@ -55,6 +33,7 @@ fn reduction_step<I, C, P>(p: &mut Polynomial<I, C, P>, reference: &Polynomial<I
 where
     I: Id,
     C: InvertibleCoefficient,
+    for<'a> &'a C: std::ops::Mul<Output = C>,
     P: Power,
 {
     let ini_p = p.terms.get(0);
@@ -76,10 +55,8 @@ where
         let ini_p = p_iter.next().unwrap();
 
         // Calculate elimination factor, so that p + factor*ref eliminates the first term in p:
-        let mut coefficient = C::zero();
-        coefficient -= ini_p.coefficient * ini_ref.coefficient.clone().inv();
         let factor = Term {
-            coefficient,
+            coefficient: ini_p.coefficient.elimination_factor(&ini_ref.coefficient),
             monomial: quot,
         };
 
@@ -87,46 +64,30 @@ where
         let difference: Vec<_> = ref_iter.map(|t| factor.clone() * t.clone()).collect();
 
         // Sum the remaining terms into a new polinomial:
-        p.terms = ordered_sum::ordered_sum(p_iter, difference.into_iter());
+        p.terms = Polynomial::sum_terms(p_iter, difference.into_iter());
         true
     } else {
         false
     }
 }
 
-/// g must be sorted in increasing order;
 /// all polynomials in g must be != 0
-fn reduce<I, C, P>(p: &mut Polynomial<I, C, P>, g: &Vec<Polynomial<I, C, P>>) -> bool
+fn reduce<I, C, P>(
+    p: &mut Polynomial<I, C, P>,
+    g: &BTreeSet<Rc<Polynomial<I, C, P>>>,
+    is_p_gt_g: bool,
+) -> bool
 where
     I: Id,
     C: InvertibleCoefficient,
+    for<'a> &'a C: std::ops::Mul<Output = C>,
     P: Power,
 {
     let mut was_reduced = false;
+
     'outer: loop {
-        // Find the last element in the g whose ini(g) <= ini(p):
-        let pos = {
-            let p_ini = if let Some(t) = p.terms.get(0) {
-                &t.monomial
-            } else {
-                // p is zero, so it can't be reduced
-                break;
-            };
-
-            g.binary_search_by(|gp| gp.terms[0].monomial.cmp(p_ini))
-        };
-
-        let pos = match pos {
-            Err(0) => {
-                // ini(p) is smaller than all ini(g), so can't be reduced
-                break;
-            }
-            Err(n) => n - 1,
-            Ok(n) => n,
-        };
-
-        // Try to reduce using every polynomial in g in decreasing order:
-        for gp in g[..=pos].iter().rev() {
+        // Try to reduce using every polynomial <= p in g, in decreasing order:
+        for gp in g.range::<Polynomial<I, C, P>, _>(..=&*p).rev() {
             if reduction_step(p, &gp) {
                 was_reduced = true;
                 continue 'outer;
@@ -140,89 +101,139 @@ where
     was_reduced
 }
 
-fn autoreduce_step<I, C, P>(
-    mut outer: Vec<Polynomial<I, C, P>>,
-    mut inner: Vec<Polynomial<I, C, P>>,
-) -> (Vec<Polynomial<I, C, P>>, Vec<Polynomial<I, C, P>>)
+/// g must be the sole owner of the polynomials, otherwise this will panic
+fn autoreduce<I, C, P>(
+    mut g: BTreeSet<Rc<Polynomial<I, C, P>>>,
+) -> BTreeSet<Rc<Polynomial<I, C, P>>>
 where
     I: Id,
     C: InvertibleCoefficient,
+    for<'a> &'a C: std::ops::Mul<Output = C>,
     P: Power,
 {
-    // Creates a sequence of reduced sets, where the next set is reduced w.r.t. all previous sets:
-    let mut reduced_seq = Vec::new();
-    while !inner.is_empty() {
-        let mut next_inner = BinaryHeap::new();
-        let mut new_outer = BinaryHeap::new();
-
-        // Reduce every inner element relative to the smaller elements.
-        // If reduced to zero, it is discarded,
-        // if reduced to non-zero, it goes to next_inner, to be reduced again on next iteration,
-        // if not reduced, it goes to the reduced set of this iteration:
-        while let Some(mut e) = inner.pop() {
-            if reduce(&mut e.p, &inner) {
-                if !e.p.is_zero() {
-                    next_inner.push(e);
+    loop {
+        let mut next_g = BTreeSet::new();
+        let mut modified = false;
+        while let Some(mut p) = g.pop_last() {
+            if reduce(Rc::get_mut(&mut p).unwrap(), &g, true) {
+                if p.is_zero() {
+                    continue;
                 }
-            } else {
-                new_outer.push(e);
+                modified = true;
             }
+            next_g.insert(p);
         }
 
-        inner = next_inner.into_sorted_vec();
-        if !new_outer.is_empty() {
-            reduced_seq.push(new_outer);
+        if !modified {
+            return next_g;
         }
+        g = next_g;
     }
-    drop(inner);
-
-    // TODO: Some random guy on Discord said it would be better to use a brodal queue here
-    // instead of a sorted vector. Maybe try if you have nothing else to do.
-    let mut new_outer = if let Some(innermost) = reduced_seq.pop() {
-        innermost.into_sorted_vec()
-    } else {
-        // Inner is empty, there is nothing to do:
-        return (outer, Vec::new());
-    };
-
-    let mut next_inner = BinaryHeap::new();
-
-    // Coallesce the reduced sequence into the new outer.
-    // This is O(N²) on the worst case, which is no worse than the previous step.
-    while let Some(curr) = reduced_seq.pop() {
-        let mut non_reduced = Vec::new();
-        for mut e in curr.into_iter_sorted() {
-            if reduce(&mut e.p, &new_outer) {
-                if !e.p.is_zero() {
-                    next_inner.push(e);
-                }
-            } else {
-                non_reduced.push(e);
-            }
-        }
-
-        new_outer = sorted_merge(new_outer.into_iter(), non_reduced.into_iter());
-    }
-
-    (new_outer, next_inner.into_sorted_vec())
 }
 
-fn full_autoreduce<I, C, P>(
-    mut outer: Vec<IniSortedPolynomial<I, C, P>>,
-    mut inner: Vec<IniSortedPolynomial<I, C, P>>,
-) -> Vec<IniSortedPolynomial<I, C, P>>
+fn spar_reduce<I, C, P>(
+    p: &Polynomial<I, C, P>,
+    q: &Polynomial<I, C, P>,
+    current_set: &BTreeSet<Rc<Polynomial<I, C, P>>>,
+) -> Option<Polynomial<I, C, P>>
 where
     I: Id,
     C: InvertibleCoefficient,
+    for<'a> &'a C: std::ops::Mul<Output = C>,
     P: Power,
 {
-    while !inner.is_empty() {
-        let (new_outer, new_inner) = autoreduce_step(outer, inner);
-        outer = new_outer;
-        inner = new_inner;
-    }
+    let ini_q = q.terms.get(0)?;
+    let ini_p = p.terms.get(0)?;
 
-    outer
+    let sat_diff = |a: &Term<I, C, P>, b: &Term<I, C, P>| {
+        let product = ordered_ops::saturating_sub(
+            a.monomial.product.iter().cloned(),
+            b.monomial.product.iter(),
+            |x, y| y.id.cmp(&x.id),
+            |mut x, y| {
+                x.power = x.power.saturating_sub(&y.power);
+                if x.power.is_zero() {
+                    None
+                } else {
+                    Some(x)
+                }
+            },
+        );
+
+        let total_power = product.iter().fold(P::zero(), |mut acc, v| {
+            acc += &v.power;
+            acc
+        });
+
+        let monomial = Monomial {
+            product,
+            total_power,
+        };
+
+        monomial
+    };
+
+    let p_complement = sat_diff(ini_q, ini_p);
+    let q_complement = sat_diff(ini_p, ini_q);
+
+    // TODO: to be continued...
+    // calculate the coefficient using the lcm(p.coef, q.coef)
+
+    // q_complement must be negative, so the sum would eliminate the first term:
+    q_complement.coefficient = {
+        let mut neg = C::zero();
+        neg -= q_complement.coefficient;
+        neg
+    };
+
+    let spar = Polynomial::sum_terms(
+        p.terms[1..]
+            .iter()
+            .cloned()
+            .map(|x| x * p_complement.clone()),
+        q.terms[1..]
+            .iter()
+            .cloned()
+            .map(|x| x * q_complement.clone()),
+    );
+
+    // TODO: reduce spar and test if null
+
+    None
+}
+
+fn grobner_basis<I, C, P>(
+    input: impl Iterator<Item = Polynomial<I, C, P>>,
+) -> BTreeSet<Rc<Polynomial<I, C, P>>>
+where
+    I: Id,
+    C: InvertibleCoefficient,
+    for<'a, 'b> &'a C: std::ops::Mul<&'b C, Output = C>,
+    P: Power,
+{
+    let mut current_set = autoreduce(input.map(|p| Rc::new(p)).collect());
+    let mut current_vec: Vec<_> = current_set.iter().rev().cloned().collect();
+
+    let mut work_queue: VecDeque<Box<dyn Iterator<Item = (usize, usize)>>> = VecDeque::new();
+    work_queue.push_back(Box::new((0..current_vec.len()).tuple_combinations()));
+
+    while let Some(work) = work_queue.pop_front() {
+        for (i, j) in work {
+            if let Some(new_p) = spar_reduce(&current_vec[i], &current_vec[j], &current_set) {
+                let curr_len = current_vec.len();
+                work_queue.push_back(Box::new(
+                    std::iter::once(curr_len).cartesian_product(0..curr_len),
+                ));
+
+                let new_p = Rc::new(new_p);
+                current_vec.push(new_p.clone());
+                current_set.insert(new_p);
+            }
+        }
+    }
+    drop(work_queue);
+
+    autoreduce(current_set)
 }
 
 #[cfg(test)]
