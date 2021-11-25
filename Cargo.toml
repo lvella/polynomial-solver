@@ -3,6 +3,9 @@ name = "polynomial-solver"
 version = "0.1.0"
 edition = "2021"
 
+[dev-dependencies]
+num = "0.4.0"
+
 [dependencies]
 num-traits = "0.2"
 
