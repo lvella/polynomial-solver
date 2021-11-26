@@ -1,3 +1,8 @@
+// TODO: possible optimizations for this grubner basis calculator:
+// - Implement Faugère's F4 and F5 algorithms
+//    - https://en.wikipedia.org/wiki/Faug%C3%A8re%27s_F4_and_F5_algorithms
+// - Use degrevlex ordering, and then transform to lex, which is cheaper than calculating in lex directly
+
 use crate::{
     ordered_ops,
     polynomial::{Coefficient, Id, Polynomial, Power, Term},
@@ -6,9 +11,7 @@ use crate::{
 use itertools::Itertools;
 use num_traits::Zero;
 use std::{
-    borrow::{Borrow, BorrowMut},
-    collections::{BTreeSet, BinaryHeap, VecDeque},
-    iter::Once,
+    collections::{BTreeSet, VecDeque},
     rc::Rc,
 };
 
@@ -65,18 +68,14 @@ where
 
         // Sum the remaining terms into a new polinomial:
         p.terms = Polynomial::sum_terms(p_iter, difference.into_iter());
+
         true
     } else {
         false
     }
 }
 
-/// all polynomials in g must be != 0
-fn reduce<I, C, P>(
-    p: &mut Polynomial<I, C, P>,
-    g: &BTreeSet<Rc<Polynomial<I, C, P>>>,
-    is_p_gt_g: bool,
-) -> bool
+fn reduce<I, C, P>(p: &mut Polynomial<I, C, P>, g: &BTreeSet<Rc<Polynomial<I, C, P>>>) -> bool
 where
     I: Id,
     C: InvertibleCoefficient,
@@ -90,6 +89,11 @@ where
         for gp in g.range::<Polynomial<I, C, P>, _>(..=&*p).rev() {
             if reduction_step(p, &gp) {
                 was_reduced = true;
+
+                if p.is_constant() {
+                    // Can't be further reduced
+                    break 'outer;
+                }
                 continue 'outer;
             }
         }
@@ -115,13 +119,16 @@ where
         let mut next_g = BTreeSet::new();
         let mut modified = false;
         while let Some(mut p) = g.pop_last() {
-            if reduce(Rc::get_mut(&mut p).unwrap(), &g, true) {
-                if p.is_zero() {
-                    continue;
-                }
+            if reduce(Rc::get_mut(&mut p).unwrap(), &g) {
                 modified = true;
             }
-            next_g.insert(p);
+            if !p.is_zero() {
+                if p.is_constant() {
+                    // Cut short the calculation in case of constant
+                    return BTreeSet::from([p]);
+                }
+                next_g.insert(p);
+            }
         }
 
         if !modified {
@@ -142,8 +149,8 @@ where
     for<'a> &'a C: std::ops::Mul<Output = C>,
     P: Power,
 {
-    let ini_q = q.terms.get(0)?;
     let ini_p = p.terms.get(0)?;
+    let ini_q = q.terms.get(0)?;
 
     let sat_diff = |a: &Term<I, C, P>, b: &Term<I, C, P>| {
         let product = ordered_ops::saturating_sub(
@@ -170,14 +177,14 @@ where
             total_power,
         };
 
-        monomial
+        Term {
+            monomial,
+            coefficient: a.coefficient.clone(),
+        }
     };
 
     let p_complement = sat_diff(ini_q, ini_p);
-    let q_complement = sat_diff(ini_p, ini_q);
-
-    // TODO: to be continued...
-    // calculate the coefficient using the lcm(p.coef, q.coef)
+    let mut q_complement = sat_diff(ini_p, ini_q);
 
     // q_complement must be negative, so the sum would eliminate the first term:
     q_complement.coefficient = {
@@ -186,23 +193,29 @@ where
         neg
     };
 
-    let spar = Polynomial::sum_terms(
-        p.terms[1..]
-            .iter()
-            .cloned()
-            .map(|x| x * p_complement.clone()),
-        q.terms[1..]
-            .iter()
-            .cloned()
-            .map(|x| x * q_complement.clone()),
-    );
+    let mut spar = Polynomial {
+        terms: Polynomial::sum_terms(
+            p.terms[1..]
+                .iter()
+                .cloned()
+                .map(|x| x * p_complement.clone()),
+            q.terms[1..]
+                .iter()
+                .cloned()
+                .map(|x| x * q_complement.clone()),
+        ),
+    };
 
-    // TODO: reduce spar and test if null
+    reduce(&mut spar, current_set);
 
-    None
+    if spar.is_zero() {
+        None
+    } else {
+        Some(spar)
+    }
 }
 
-fn grobner_basis<I, C, P>(
+fn minimal_grobner_basis<I, C, P>(
     input: impl Iterator<Item = Polynomial<I, C, P>>,
 ) -> BTreeSet<Rc<Polynomial<I, C, P>>>
 where
@@ -220,18 +233,23 @@ where
     while let Some(work) = work_queue.pop_front() {
         for (i, j) in work {
             if let Some(new_p) = spar_reduce(&current_vec[i], &current_vec[j], &current_set) {
+                // Cut short the calculation in case of constant:
+                let new_p = Rc::new(new_p);
+                if new_p.is_constant() {
+                    return BTreeSet::from([new_p]);
+                }
+
                 let curr_len = current_vec.len();
                 work_queue.push_back(Box::new(
                     std::iter::once(curr_len).cartesian_product(0..curr_len),
                 ));
 
-                let new_p = Rc::new(new_p);
                 current_vec.push(new_p.clone());
                 current_set.insert(new_p);
             }
         }
     }
-    drop(work_queue);
+    drop(current_vec);
 
     autoreduce(current_set)
 }
@@ -239,7 +257,7 @@ where
 #[cfg(test)]
 mod tests {
     use num::Rational32;
-    use num_traits::Pow;
+    use num_traits::{Inv, Pow};
 
     use super::*;
 
@@ -247,23 +265,90 @@ mod tests {
     impl InvertibleCoefficient for Rational32 {}
     type FloatPoly = Polynomial<u8, Rational32, u32>;
 
+    fn R<T>(v: T) -> Rational32
+    where
+        Rational32: From<T>,
+    {
+        Rational32::from(v)
+    }
+
     #[test]
     fn reduction_step_test() {
         // Can't use SmallPoly because i32 is not invertible
         let [x, y]: [FloatPoly; 2] = FloatPoly::new_variables([1u8, 0u8]).try_into().unwrap();
 
-        let p = &(x.clone().pow(5u8) * y.clone().pow(3u8)) * Rational32::from(4);
+        let p = &(x.clone().pow(5u8) * y.clone().pow(3u8)) * R(4);
 
-        let r = &x.clone().pow(3u8) * Rational32::from(2) - y.clone() * x.clone()
-            + &y.clone() * Rational32::from(2)
-            - Rational32::from(3);
+        let r = &x.clone().pow(3u8) * R(2) - y.clone() * x.clone() + &y.clone() * R(2) - R(3);
 
         let mut reduced = p.clone();
         reduction_step(&mut reduced, &r);
         println!("{}", reduced);
 
-        let reconstructed_p = reduced + &(x.pow(2u8) * y.pow(3u8)) * Rational32::from(2) * r;
+        let reconstructed_p = reduced + &(x.pow(2u8) * y.pow(3u8)) * R(2) * r;
 
         assert_eq!(reconstructed_p, p);
+    }
+
+    #[test]
+    fn grobner_basis_test() {
+        let [x, y, z]: [FloatPoly; 3] = FloatPoly::new_variables([2, 1, 0u8]).try_into().unwrap();
+        let eqs = [
+            x.clone() * x.clone() + y.clone() * y.clone() + z.clone() * z.clone() - R(1),
+            x.clone() * x.clone() - y.clone() + z.clone() * z.clone(),
+            x.clone() - z.clone(),
+        ];
+
+        let grobner_basis = minimal_grobner_basis(eqs.into_iter());
+        println!("Gröbner Basis:");
+        for p in grobner_basis.iter() {
+            println!("{}", p);
+        }
+
+        let expected_solution = [
+            &z.clone().pow(4u8) * R(4) + &z.clone().pow(2u8) * R(2) - R(1),
+            y.clone() - &z.clone().pow(2u8) * R(2),
+            x - z,
+        ];
+
+        for (result, expected) in grobner_basis.iter().zip(expected_solution) {
+            assert_eq!(
+                result.as_ref() * result.terms[0].coefficient.inv(),
+                &expected * expected.terms[0].coefficient.inv()
+            );
+        }
+    }
+
+    #[test]
+    fn test_grobner_basis_equal_1() {
+        let [x, y]: [FloatPoly; 2] = FloatPoly::new_variables([1, 0u8]).try_into().unwrap();
+        let unsolvable = [
+            x.clone().pow(2u8) + x.clone() * y.clone() - R(10),
+            x.clone().pow(3u8) + x.clone() * y.clone().pow(2u8) - R(25),
+            x.clone().pow(4u8) + x.clone() * y.clone().pow(3u8) - R(70),
+        ];
+
+        let grobner_basis = minimal_grobner_basis(unsolvable.into_iter());
+
+        assert_eq!(grobner_basis.len(), 1);
+        let p = grobner_basis.first().unwrap();
+        assert!(p.is_constant() && !p.is_zero());
+
+        println!("{}", grobner_basis.first().unwrap());
+    }
+
+    #[test]
+    fn test_resilience_to_weird_input() {
+        // Assert only the non-zero element remains:
+        let zero_in_the_set =
+            minimal_grobner_basis([FloatPoly::new_constant(R(42)), FloatPoly::zero()].into_iter());
+
+        assert_eq!(zero_in_the_set.len(), 1);
+        let p = zero_in_the_set.first().unwrap();
+        assert!(p.is_constant() && !p.is_zero());
+
+        // Assert set is empty:
+        let empty: BTreeSet<Rc<FloatPoly>> = minimal_grobner_basis([].into_iter());
+        assert!(empty.is_empty());
     }
 }

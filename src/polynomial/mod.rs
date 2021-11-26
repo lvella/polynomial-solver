@@ -249,6 +249,13 @@ where
         return CmpOrd::Equal;
     }
 
+    pub fn is_constant(&self) -> bool {
+        match self.terms.get(0) {
+            None => true,
+            Some(t) => t.monomial.product.is_empty(),
+        }
+    }
+
     /// First compare by monomials, then by size, in last case compare by coefficient value:
     fn cmp_with_coef<FCmp, FCons, Ret>(
         &self,
@@ -584,6 +591,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use num::integer::lcm;
     use num_traits::Pow;
 
     use super::*;
