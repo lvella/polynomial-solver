@@ -147,6 +147,10 @@ where
             },
         }
     }
+
+    pub fn get_coefficient(&self) -> &C {
+        &self.coefficient
+    }
 }
 
 impl<I, C, P> std::ops::Mul for Term<I, C, P>
@@ -550,13 +554,29 @@ where
     P: Power + std::fmt::Display,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if !self.coefficient.is_one() || self.monomial.product.is_empty() {
+        let has_coef = if !self.coefficient.is_one() || self.monomial.product.is_empty() {
             self.coefficient.fmt(f)?;
-        }
-        for v in self.monomial.product.iter() {
-            write!(f, "x{}", v.id)?;
-            if !v.power.is_one() {
-                write!(f, "^{}", v.power)?;
+            true
+        } else {
+            false
+        };
+
+        let mut i = self.monomial.product.iter();
+        if let Some(mut v) = i.next() {
+            if has_coef {
+                f.write_char('*')?;
+            }
+            loop {
+                write!(f, "x{}", v.id)?;
+                if !v.power.is_one() {
+                    write!(f, "^{}", v.power)?;
+                }
+                v = if let Some(v) = i.next() {
+                    v
+                } else {
+                    break;
+                };
+                f.write_char('*')?;
             }
         }
         Ok(())

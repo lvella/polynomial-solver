@@ -12,20 +12,23 @@ use itertools::Itertools;
 use num_traits::Zero;
 use std::{
     collections::{BTreeSet, VecDeque},
+    fmt::Display,
     rc::Rc,
 };
 
 use super::Monomial;
 
-trait InvertibleCoefficient
+pub trait InvertibleCoefficient
 where
-    Self: Coefficient + Ord + num_traits::ops::inv::Inv<Output = Self>,
-    for<'a> &'a Self: std::ops::Mul<Output = Self>,
+    Self: Coefficient
+        + Ord
+        + for<'a> std::ops::Mul<&'a Self, Output = Self>
+        + num_traits::ops::inv::Inv<Output = Self>,
 {
     /// Calculate elimination factor, so that self + factor*rhs = 0:
     fn elimination_factor(&self, rhs: &Self) -> Self {
         let mut factor = Self::zero();
-        factor -= self * &rhs.clone().inv();
+        factor -= rhs.clone().inv() * self;
         factor
     }
 }
@@ -36,7 +39,6 @@ fn reduction_step<I, C, P>(p: &mut Polynomial<I, C, P>, reference: &Polynomial<I
 where
     I: Id,
     C: InvertibleCoefficient,
-    for<'a> &'a C: std::ops::Mul<Output = C>,
     P: Power,
 {
     let ini_p = p.terms.get(0);
@@ -79,7 +81,6 @@ fn reduce<I, C, P>(p: &mut Polynomial<I, C, P>, g: &BTreeSet<Rc<Polynomial<I, C,
 where
     I: Id,
     C: InvertibleCoefficient,
-    for<'a> &'a C: std::ops::Mul<Output = C>,
     P: Power,
 {
     let mut was_reduced = false;
@@ -112,7 +113,6 @@ fn autoreduce<I, C, P>(
 where
     I: Id,
     C: InvertibleCoefficient,
-    for<'a> &'a C: std::ops::Mul<Output = C>,
     P: Power,
 {
     loop {
@@ -146,7 +146,6 @@ fn spar_reduce<I, C, P>(
 where
     I: Id,
     C: InvertibleCoefficient,
-    for<'a> &'a C: std::ops::Mul<Output = C>,
     P: Power,
 {
     let ini_p = p.terms.get(0)?;
@@ -215,13 +214,12 @@ where
     }
 }
 
-fn minimal_grobner_basis<I, C, P>(
+pub fn minimal_grobner_basis<I, C, P>(
     input: impl Iterator<Item = Polynomial<I, C, P>>,
 ) -> BTreeSet<Rc<Polynomial<I, C, P>>>
 where
     I: Id,
     C: InvertibleCoefficient,
-    for<'a, 'b> &'a C: std::ops::Mul<&'b C, Output = C>,
     P: Power,
 {
     let mut current_set = autoreduce(input.map(|p| Rc::new(p)).collect());
@@ -263,7 +261,7 @@ mod tests {
 
     impl Coefficient for Rational32 {}
     impl InvertibleCoefficient for Rational32 {}
-    type FloatPoly = Polynomial<u8, Rational32, u32>;
+    type QPoly = Polynomial<u8, Rational32, u32>;
 
     fn R<T>(v: T) -> Rational32
     where
@@ -275,7 +273,7 @@ mod tests {
     #[test]
     fn reduction_step_test() {
         // Can't use SmallPoly because i32 is not invertible
-        let [x, y]: [FloatPoly; 2] = FloatPoly::new_variables([1u8, 0u8]).try_into().unwrap();
+        let [x, y]: [QPoly; 2] = QPoly::new_variables([1u8, 0u8]).try_into().unwrap();
 
         let p = &(x.clone().pow(5u8) * y.clone().pow(3u8)) * R(4);
 
@@ -292,7 +290,7 @@ mod tests {
 
     #[test]
     fn grobner_basis_test() {
-        let [x, y, z]: [FloatPoly; 3] = FloatPoly::new_variables([2, 1, 0u8]).try_into().unwrap();
+        let [x, y, z]: [QPoly; 3] = QPoly::new_variables([2, 1, 0u8]).try_into().unwrap();
         let eqs = [
             x.clone() * x.clone() + y.clone() * y.clone() + z.clone() * z.clone() - R(1),
             x.clone() * x.clone() - y.clone() + z.clone() * z.clone(),
@@ -313,15 +311,15 @@ mod tests {
 
         for (result, expected) in grobner_basis.iter().zip(expected_solution) {
             assert_eq!(
-                result.as_ref() * result.terms[0].coefficient.inv(),
-                &expected * expected.terms[0].coefficient.inv()
+                result.as_ref() * result.terms[0].coefficient.clone().inv(),
+                &expected * expected.terms[0].coefficient.clone().inv()
             );
         }
     }
 
     #[test]
     fn test_grobner_basis_equal_1() {
-        let [x, y]: [FloatPoly; 2] = FloatPoly::new_variables([1, 0u8]).try_into().unwrap();
+        let [x, y]: [QPoly; 2] = QPoly::new_variables([1, 0u8]).try_into().unwrap();
         let unsolvable = [
             x.clone().pow(2u8) + x.clone() * y.clone() - R(10),
             x.clone().pow(3u8) + x.clone() * y.clone().pow(2u8) - R(25),
@@ -341,14 +339,14 @@ mod tests {
     fn test_resilience_to_weird_input() {
         // Assert only the non-zero element remains:
         let zero_in_the_set =
-            minimal_grobner_basis([FloatPoly::new_constant(R(42)), FloatPoly::zero()].into_iter());
+            minimal_grobner_basis([QPoly::new_constant(R(42)), QPoly::zero()].into_iter());
 
         assert_eq!(zero_in_the_set.len(), 1);
         let p = zero_in_the_set.first().unwrap();
         assert!(p.is_constant() && !p.is_zero());
 
         // Assert set is empty:
-        let empty: BTreeSet<Rc<FloatPoly>> = minimal_grobner_basis([].into_iter());
+        let empty: BTreeSet<Rc<QPoly>> = minimal_grobner_basis([].into_iter());
         assert!(empty.is_empty());
     }
 }
