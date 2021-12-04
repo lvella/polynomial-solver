@@ -43,7 +43,7 @@ algorithms, and they have exponential complexity on the worst case.
 
 As mentioned, the Gröbner basis is defined for a total order among the monomials (i.e. the variable
 product power parts like $x^3y^2$), which implies a total order among the variables themselves.
-If we define $x < y < z < 1$ (one must always be the smallest), then the first variable that can be
+If we define $x > y > z > 1$ (one must always be the smallest), then the first variable that can be
 solved is $z$, then $y$, then $x$, assuming the system is fully determined. If the system is not fully
 determined, and there are free variables, then the lowest variables are the ones to be assigned. As
 you can see in the Gröbner basis of the example above, it has one free variable $z$, and $y$ and $z$
