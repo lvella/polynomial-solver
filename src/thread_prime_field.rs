@@ -149,11 +149,11 @@ impl gb::InvertibleCoefficient for ThreadPrimeField {}
 mod tests {
     use num_traits::{Inv, Pow};
 
-    use crate::polynomial::Polynomial;
+    use crate::polynomial::{self, Polynomial};
 
     use super::*;
 
-    type GFPoly = Polynomial<u8, ThreadPrimeField, u32>;
+    type GFPoly = Polynomial<polynomial::monomial_ordering::Grevlex, u8, ThreadPrimeField, u32>;
 
     fn F<T>(v: T) -> ThreadPrimeField
     where
@@ -166,7 +166,7 @@ mod tests {
     fn big_grobner_basis() {
         ThreadPrimeField::set_prime(13u8);
 
-        let [z, y, x]: [GFPoly; 3] = GFPoly::new_variables([2, 1, 0]).try_into().unwrap();
+        let [z, y, x]: [GFPoly; 3] = GFPoly::new_variables([0, 1, 2]).try_into().unwrap();
         let input = [
             &x.clone().pow(3u8) * F(4u8)
                 + x.clone().pow(2u8) * (&y.clone().pow(2u8) * F(2u8))

@@ -1,7 +1,9 @@
 pub mod grobner_basis;
+pub mod monomial_ordering;
 
 use super::ordered_ops;
-use std::{cmp::Ordering as CmpOrd, fmt::Write};
+use monomial_ordering::Ordering;
+use std::{cmp::Ordering as CmpOrd, fmt::Write, marker::PhantomData};
 
 pub trait Id: Eq + Ord + Clone {}
 
@@ -30,15 +32,17 @@ pub struct VariablePower<I, P> {
     power: P,
 }
 
-#[derive(Debug, Clone, Eq)]
-pub struct Monomial<I, P> {
+#[derive(Debug)]
+pub struct Monomial<O: ?Sized, I, P> {
     // Product is sorted in decreasing order of id:
     product: Vec<VariablePower<I, P>>,
     total_power: P,
+    _phantom_ordering: PhantomData<O>,
 }
 
-impl<I, P> Monomial<I, P>
+impl<O, I, P> Monomial<O, I, P>
 where
+    O: Ordering,
     I: Id,
     P: Power,
 {
@@ -61,9 +65,19 @@ where
     }
 }
 
+impl<O, I: Clone, P: Clone> Clone for Monomial<O, I, P> {
+    fn clone(&self) -> Self {
+        Self {
+            product: self.product.clone(),
+            total_power: self.total_power.clone(),
+            _phantom_ordering: PhantomData,
+        }
+    }
+}
+
 // I did't use derive(PartialEq) because total_power
 // need not to be part of the comparision.
-impl<I, P> PartialEq for Monomial<I, P>
+impl<O, I, P> PartialEq for Monomial<O, I, P>
 where
     I: PartialEq,
     P: PartialEq,
@@ -73,49 +87,42 @@ where
     }
 }
 
-impl<I, P> Ord for Monomial<I, P>
+impl<O, I, P> Eq for Monomial<O, I, P>
+where
+    I: Eq,
+    P: Eq,
+{
+}
+
+impl<O, I, P> Ord for Monomial<O, I, P>
 where
     I: Ord,
     P: Ord,
+    O: Ordering,
 {
-    // For now, just use lexicographical ordering, that is needed to solve the system.
-    // For performance reasons, degree reversed lexicographical ordering can be implemented
-    // in the future for the computation of the Gröbner Basis, and then converted to an lex ordering.
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        for (a, b) in self.product.iter().zip(other.product.iter()) {
-            let id_cmp = a.id.cmp(&b.id);
-            if id_cmp != CmpOrd::Equal {
-                return id_cmp;
-            }
-
-            let power_cmp = a.power.cmp(&b.power);
-            if power_cmp != CmpOrd::Equal {
-                return power_cmp;
-            }
-        }
-
-        // If all the leading powers are equal, the one with most powers is bigger
-        self.product.len().cmp(&other.product.len())
+    fn cmp(&self, other: &Self) -> CmpOrd {
+        Ordering::ord(self, other)
     }
 }
 
-impl<I, P> PartialOrd for Monomial<I, P>
+impl<O, I, P> PartialOrd for Monomial<O, I, P>
 where
     I: Ord,
     P: Ord,
+    O: Ordering,
 {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
+        Some(Ordering::ord(self, other))
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Term<I, C, P> {
+#[derive(Debug)]
+pub struct Term<O, I, C, P> {
     coefficient: C,
-    monomial: Monomial<I, P>,
+    monomial: Monomial<O, I, P>,
 }
 
-impl<I, C, P> Term<I, C, P>
+impl<O, I, C, P> Term<O, I, C, P>
 where
     C: Coefficient,
     P: Power,
@@ -133,6 +140,7 @@ where
                         power: power.clone(),
                     }],
                     total_power: power,
+                    _phantom_ordering: PhantomData,
                 },
             }
         }
@@ -144,6 +152,7 @@ where
             monomial: Monomial {
                 product: Vec::new(),
                 total_power: P::zero(),
+                _phantom_ordering: PhantomData,
             },
         }
     }
@@ -153,7 +162,35 @@ where
     }
 }
 
-impl<I, C, P> std::ops::Mul for Term<I, C, P>
+impl<O, I: Clone, C: Clone, P: Clone> Clone for Term<O, I, C, P> {
+    fn clone(&self) -> Self {
+        Self {
+            coefficient: self.coefficient.clone(),
+            monomial: self.monomial.clone(),
+        }
+    }
+}
+
+impl<O, I, C, P> PartialEq for Term<O, I, C, P>
+where
+    I: PartialEq,
+    C: PartialEq,
+    P: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.coefficient == other.coefficient && self.monomial == other.monomial
+    }
+}
+
+impl<O, I, C, P> Eq for Term<O, I, C, P>
+where
+    I: Eq,
+    C: Eq,
+    P: Eq,
+{
+}
+
+impl<O, I, C, P> std::ops::Mul for Term<O, I, C, P>
 where
     I: Id,
     C: Coefficient,
@@ -185,6 +222,7 @@ where
         let monomial = Monomial {
             product,
             total_power,
+            _phantom_ordering: PhantomData,
         };
 
         Self {
@@ -194,15 +232,16 @@ where
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Polynomial<I, C, P> {
+#[derive(Debug)]
+pub struct Polynomial<O, I, C, P> {
     // Terms are sorted in decreasing order of monomials
-    terms: Vec<Term<I, C, P>>,
+    terms: Vec<Term<O, I, C, P>>,
 }
 
 // TODO optimization: implement term * polynomial multiplication
-impl<I, C, P> Polynomial<I, C, P>
+impl<O, I, C, P> Polynomial<O, I, C, P>
 where
+    O: Ordering,
     I: Id,
     C: Coefficient,
     P: Power,
@@ -231,7 +270,7 @@ where
         }
     }
 
-    pub fn get_terms(&self) -> &[Term<I, C, P>] {
+    pub fn get_terms(&self) -> &[Term<O, I, C, P>] {
         &self.terms[..]
     }
 
@@ -291,9 +330,9 @@ where
     }
 
     fn sum_terms(
-        a: impl Iterator<Item = Term<I, C, P>>,
-        b: impl Iterator<Item = Term<I, C, P>>,
-    ) -> Vec<Term<I, C, P>> {
+        a: impl Iterator<Item = Term<O, I, C, P>>,
+        b: impl Iterator<Item = Term<O, I, C, P>>,
+    ) -> Vec<Term<O, I, C, P>> {
         ordered_ops::sum(
             a,
             b,
@@ -310,8 +349,36 @@ where
     }
 }
 
-impl<I, C, P> Ord for Polynomial<I, C, P>
+impl<O, I: Clone, C: Clone, P: Clone> Clone for Polynomial<O, I, C, P> {
+    fn clone(&self) -> Self {
+        Self {
+            terms: self.terms.clone(),
+        }
+    }
+}
+
+impl<O, I, C, P> Eq for Polynomial<O, I, C, P>
 where
+    I: Id,
+    C: Coefficient,
+    P: Power,
+{
+}
+
+impl<O, I, C, P> PartialEq for Polynomial<O, I, C, P>
+where
+    I: Id,
+    C: Coefficient,
+    P: Power,
+{
+    fn eq(&self, rhs: &Self) -> bool {
+        self.terms == rhs.terms
+    }
+}
+
+impl<O, I, C, P> Ord for Polynomial<O, I, C, P>
+where
+    O: Ordering,
     I: Id,
     C: Coefficient + Ord,
     P: Power,
@@ -321,8 +388,9 @@ where
     }
 }
 
-impl<I, C, P> PartialOrd for Polynomial<I, C, P>
+impl<O, I, C, P> PartialOrd for Polynomial<O, I, C, P>
 where
+    O: Ordering,
     I: Id,
     C: Coefficient + PartialOrd,
     P: Power,
@@ -332,8 +400,9 @@ where
     }
 }
 
-impl<I, C, P> num_traits::Zero for Polynomial<I, C, P>
+impl<O, I, C, P> num_traits::Zero for Polynomial<O, I, C, P>
 where
+    O: Ordering,
     I: Id,
     C: Coefficient,
     P: Power,
@@ -354,27 +423,28 @@ where
     }
 }
 
-impl<I, C, P> std::ops::Add for Polynomial<I, C, P>
+impl<O, I, C, P> std::ops::Add for Polynomial<O, I, C, P>
 where
+    O: Ordering,
     I: Id,
     C: Coefficient,
     P: Power,
 {
-    type Output = Polynomial<I, C, P>;
+    type Output = Polynomial<O, I, C, P>;
 
-    fn add(self, rhs: Polynomial<I, C, P>) -> Self::Output {
+    fn add(self, rhs: Polynomial<O, I, C, P>) -> Self::Output {
         Self {
             terms: Self::sum_terms(self.terms.into_iter(), rhs.terms.into_iter()),
         }
     }
 }
 
-impl<I, C, P> std::ops::Add<C> for Polynomial<I, C, P>
+impl<O, I, C, P> std::ops::Add<C> for Polynomial<O, I, C, P>
 where
     C: Coefficient,
     P: Power,
 {
-    type Output = Polynomial<I, C, P>;
+    type Output = Polynomial<O, I, C, P>;
 
     fn add(mut self, rhs: C) -> Self::Output {
         let size = self.terms.len();
@@ -389,7 +459,7 @@ where
     }
 }
 
-impl<I, C, P> std::ops::Neg for Polynomial<I, C, P>
+impl<O, I, C, P> std::ops::Neg for Polynomial<O, I, C, P>
 where
     I: Id,
     C: Coefficient,
@@ -406,25 +476,26 @@ where
     }
 }
 
-impl<I, C, P> std::ops::Sub for Polynomial<I, C, P>
+impl<O, I, C, P> std::ops::Sub for Polynomial<O, I, C, P>
 where
+    O: Ordering,
     I: Id,
     C: Coefficient,
     P: Power,
 {
-    type Output = Polynomial<I, C, P>;
+    type Output = Polynomial<O, I, C, P>;
 
-    fn sub(self, rhs: Polynomial<I, C, P>) -> Self::Output {
+    fn sub(self, rhs: Polynomial<O, I, C, P>) -> Self::Output {
         self + (-rhs)
     }
 }
 
-impl<I, C, P> std::ops::Sub<C> for Polynomial<I, C, P>
+impl<O, I, C, P> std::ops::Sub<C> for Polynomial<O, I, C, P>
 where
     C: Coefficient,
     P: Power,
 {
-    type Output = Polynomial<I, C, P>;
+    type Output = Polynomial<O, I, C, P>;
 
     fn sub(mut self, rhs: C) -> Self::Output {
         let size = self.terms.len();
@@ -441,15 +512,16 @@ where
     }
 }
 
-impl<I, C, P> std::ops::Mul for &Polynomial<I, C, P>
+impl<O, I, C, P> std::ops::Mul for &Polynomial<O, I, C, P>
 where
+    O: Ordering,
     I: Id,
     C: Coefficient,
     P: Power,
 {
-    type Output = Polynomial<I, C, P>;
+    type Output = Polynomial<O, I, C, P>;
 
-    fn mul(self, rhs: &Polynomial<I, C, P>) -> Self::Output {
+    fn mul(self, rhs: &Polynomial<O, I, C, P>) -> Self::Output {
         let mut new_terms = std::collections::BTreeMap::new();
 
         let (outer, inner) = if self.terms.len() > rhs.terms.len() {
@@ -491,40 +563,43 @@ where
     }
 }
 
-impl<I, C, P> std::ops::Mul for Polynomial<I, C, P>
+impl<O, I, C, P> std::ops::Mul for Polynomial<O, I, C, P>
 where
+    O: Ordering,
     I: Id,
     C: Coefficient,
     P: Power,
 {
-    type Output = Polynomial<I, C, P>;
-    fn mul(self, rhs: Polynomial<I, C, P>) -> Self::Output {
+    type Output = Polynomial<O, I, C, P>;
+    fn mul(self, rhs: Polynomial<O, I, C, P>) -> Self::Output {
         &self * &rhs
     }
 }
 
-impl<I, C, P> std::ops::Mul<C> for &Polynomial<I, C, P>
+impl<O, I, C, P> std::ops::Mul<C> for &Polynomial<O, I, C, P>
 where
+    O: Ordering,
     I: Id,
     C: Coefficient,
     P: Power,
 {
-    type Output = Polynomial<I, C, P>;
+    type Output = Polynomial<O, I, C, P>;
 
     fn mul(self, rhs: C) -> Self::Output {
         self * &Polynomial::new_constant(rhs)
     }
 }
 
-impl<I, C, P, T> num_traits::pow::Pow<T> for Polynomial<I, C, P>
+impl<O, I, C, P, T> num_traits::pow::Pow<T> for Polynomial<O, I, C, P>
 where
+    O: Ordering,
     I: Id,
     C: Coefficient,
     P: Power,
     T: Clone + num_traits::Zero + std::ops::Rem + std::ops::DivAssign + std::convert::From<u8>,
     <T as std::ops::Rem>::Output: num_traits::One + PartialEq,
 {
-    type Output = Polynomial<I, C, P>;
+    type Output = Polynomial<O, I, C, P>;
     fn pow(mut self, mut rhs: T) -> Self {
         let mut ret = Polynomial::new_constant(C::one());
 
@@ -547,7 +622,7 @@ where
     }
 }
 
-impl<I, C, P> std::fmt::Display for Term<I, C, P>
+impl<O, I, C, P> std::fmt::Display for Term<O, I, C, P>
 where
     I: Id + std::fmt::Display,
     C: Coefficient + std::fmt::Display,
@@ -583,7 +658,7 @@ where
     }
 }
 
-impl<I, C, P> std::fmt::Display for Polynomial<I, C, P>
+impl<O, I, C, P> std::fmt::Display for Polynomial<O, I, C, P>
 where
     I: Id + std::fmt::Display,
     C: Coefficient + std::fmt::Display,
@@ -611,7 +686,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use num::integer::lcm;
     use num_traits::Pow;
 
     use super::*;
@@ -620,7 +694,7 @@ mod tests {
     impl Coefficient for i32 {}
     impl Power for u32 {}
 
-    pub type SmallPoly = Polynomial<u8, i32, u32>;
+    pub type SmallPoly = Polynomial<monomial_ordering::Lex, u8, i32, u32>;
 
     #[test]
     fn addition_and_subtraction_ordering() {

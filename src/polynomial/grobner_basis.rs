@@ -12,11 +12,10 @@ use itertools::Itertools;
 use num_traits::Zero;
 use std::{
     collections::{BTreeSet, VecDeque},
-    fmt::Display,
     rc::Rc,
 };
 
-use super::Monomial;
+use super::{monomial_ordering::Ordering, Monomial};
 
 pub trait InvertibleCoefficient
 where
@@ -35,8 +34,12 @@ where
 
 /// Reduce one polynomial with respect to another.
 /// This is kind of a multi-variable division, and the return is the remainder.
-fn reduction_step<I, C, P>(p: &mut Polynomial<I, C, P>, reference: &Polynomial<I, C, P>) -> bool
+fn reduction_step<O, I, C, P>(
+    p: &mut Polynomial<O, I, C, P>,
+    reference: &Polynomial<O, I, C, P>,
+) -> bool
 where
+    O: Ordering,
     I: Id,
     C: InvertibleCoefficient,
     P: Power,
@@ -77,8 +80,12 @@ where
     }
 }
 
-fn reduce<I, C, P>(p: &mut Polynomial<I, C, P>, g: &BTreeSet<Rc<Polynomial<I, C, P>>>) -> bool
+fn reduce<O, I, C, P>(
+    p: &mut Polynomial<O, I, C, P>,
+    g: &BTreeSet<Rc<Polynomial<O, I, C, P>>>,
+) -> bool
 where
+    O: Ordering,
     I: Id,
     C: InvertibleCoefficient,
     P: Power,
@@ -87,7 +94,7 @@ where
 
     'outer: loop {
         // Try to reduce using every polynomial <= p in g, in decreasing order:
-        for gp in g.range::<Polynomial<I, C, P>, _>(..=&*p).rev() {
+        for gp in g.range::<Polynomial<O, I, C, P>, _>(..=&*p).rev() {
             if reduction_step(p, &gp) {
                 was_reduced = true;
 
@@ -107,10 +114,11 @@ where
 }
 
 /// g must be the sole owner of the polynomials, otherwise this will panic
-fn autoreduce<I, C, P>(
-    mut g: BTreeSet<Rc<Polynomial<I, C, P>>>,
-) -> BTreeSet<Rc<Polynomial<I, C, P>>>
+fn autoreduce<O, I, C, P>(
+    mut g: BTreeSet<Rc<Polynomial<O, I, C, P>>>,
+) -> BTreeSet<Rc<Polynomial<O, I, C, P>>>
 where
+    O: Ordering,
     I: Id,
     C: InvertibleCoefficient,
     P: Power,
@@ -138,12 +146,13 @@ where
     }
 }
 
-fn spar_reduce<I, C, P>(
-    p: &Polynomial<I, C, P>,
-    q: &Polynomial<I, C, P>,
-    current_set: &BTreeSet<Rc<Polynomial<I, C, P>>>,
-) -> Option<Polynomial<I, C, P>>
+fn spar_reduce<O, I, C, P>(
+    p: &Polynomial<O, I, C, P>,
+    q: &Polynomial<O, I, C, P>,
+    current_set: &BTreeSet<Rc<Polynomial<O, I, C, P>>>,
+) -> Option<Polynomial<O, I, C, P>>
 where
+    O: Ordering,
     I: Id,
     C: InvertibleCoefficient,
     P: Power,
@@ -151,7 +160,7 @@ where
     let ini_p = p.terms.get(0)?;
     let ini_q = q.terms.get(0)?;
 
-    let sat_diff = |a: &Term<I, C, P>, b: &Term<I, C, P>| {
+    let sat_diff = |a: &Term<O, I, C, P>, b: &Term<O, I, C, P>| {
         let product = ordered_ops::saturating_sub(
             a.monomial.product.iter().cloned(),
             b.monomial.product.iter(),
@@ -174,6 +183,7 @@ where
         let monomial = Monomial {
             product,
             total_power,
+            _phantom_ordering: std::marker::PhantomData,
         };
 
         Term {
@@ -214,10 +224,11 @@ where
     }
 }
 
-pub fn minimal_grobner_basis<I, C, P>(
-    input: impl Iterator<Item = Polynomial<I, C, P>>,
-) -> BTreeSet<Rc<Polynomial<I, C, P>>>
+pub fn minimal_grobner_basis<O, I, C, P>(
+    input: impl Iterator<Item = Polynomial<O, I, C, P>>,
+) -> BTreeSet<Rc<Polynomial<O, I, C, P>>>
 where
+    O: Ordering,
     I: Id,
     C: InvertibleCoefficient,
     P: Power,
@@ -261,7 +272,7 @@ mod tests {
 
     impl Coefficient for Rational32 {}
     impl InvertibleCoefficient for Rational32 {}
-    type QPoly = Polynomial<u8, Rational32, u32>;
+    type QPoly = Polynomial<crate::polynomial::monomial_ordering::Lex, u8, Rational32, u32>;
 
     fn R<T>(v: T) -> Rational32
     where
