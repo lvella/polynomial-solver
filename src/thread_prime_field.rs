@@ -179,7 +179,7 @@ mod tests {
                 - z,
         ];
 
-        let gb = gb::minimal_grobner_basis(input.into_iter());
+        let gb = gb::grobner_basis(input.into_iter());
         for e in gb {
             let inv = e.get_terms()[0].get_coefficient().clone().inv();
             println!("{}", &*e * inv);

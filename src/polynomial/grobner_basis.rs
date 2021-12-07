@@ -224,14 +224,14 @@ where
     }
 }
 
-pub fn minimal_grobner_basis<O, I, C, P>(
+pub fn grobner_basis<O, I, C, P>(
     input: impl Iterator<Item = Polynomial<O, I, C, P>>,
 ) -> BTreeSet<Rc<Polynomial<O, I, C, P>>>
 where
     O: Ordering,
-    I: Id,
-    C: InvertibleCoefficient,
-    P: Power,
+    I: Id + std::fmt::Display,
+    C: InvertibleCoefficient + std::fmt::Display,
+    P: Power + std::fmt::Display,
 {
     let mut current_set = autoreduce(input.map(|p| Rc::new(p)).collect());
     let mut current_vec: Vec<_> = current_set.iter().rev().cloned().collect();
@@ -252,6 +252,8 @@ where
                 work_queue.push_back(Box::new(
                     std::iter::once(curr_len).cartesian_product(0..curr_len),
                 ));
+
+                println!("{}", new_p);
 
                 current_vec.push(new_p.clone());
                 current_set.insert(new_p);
@@ -308,7 +310,7 @@ mod tests {
             x.clone() - z.clone(),
         ];
 
-        let grobner_basis = minimal_grobner_basis(eqs.into_iter());
+        let grobner_basis = grobner_basis(eqs.into_iter());
         println!("Gröbner Basis:");
         for p in grobner_basis.iter() {
             println!("{}", p);
@@ -337,7 +339,7 @@ mod tests {
             x.clone().pow(4u8) + x.clone() * y.clone().pow(3u8) - R(70),
         ];
 
-        let grobner_basis = minimal_grobner_basis(unsolvable.into_iter());
+        let grobner_basis = grobner_basis(unsolvable.into_iter());
 
         assert_eq!(grobner_basis.len(), 1);
         let p = grobner_basis.first().unwrap();
@@ -350,14 +352,14 @@ mod tests {
     fn test_resilience_to_weird_input() {
         // Assert only the non-zero element remains:
         let zero_in_the_set =
-            minimal_grobner_basis([QPoly::new_constant(R(42)), QPoly::zero()].into_iter());
+            grobner_basis([QPoly::new_constant(R(42)), QPoly::zero()].into_iter());
 
         assert_eq!(zero_in_the_set.len(), 1);
         let p = zero_in_the_set.first().unwrap();
         assert!(p.is_constant() && !p.is_zero());
 
         // Assert set is empty:
-        let empty: BTreeSet<Rc<QPoly>> = minimal_grobner_basis([].into_iter());
+        let empty: BTreeSet<Rc<QPoly>> = grobner_basis([].into_iter());
         assert!(empty.is_empty());
     }
 }

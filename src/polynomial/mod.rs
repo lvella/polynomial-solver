@@ -3,7 +3,6 @@ pub mod monomial_ordering;
 
 use super::ordered_ops;
 use monomial_ordering::Ordering;
-use num_traits::Pow;
 use std::{cmp::Ordering as CmpOrd, fmt::Write, marker::PhantomData};
 
 pub trait Id: core::fmt::Debug + Eq + Ord + Clone {}

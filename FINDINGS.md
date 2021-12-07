@@ -102,7 +102,7 @@ but I find it unlikely, as SIMPLEX works by iteratively restricting the convex s
 by straight lines/hyperplanes, but the curves designated by non-linear polynomials are not planes, so
 the limited space will not be convex.
 
-## Alternative method for the case where there are no inequalities restrictions
+## Theoretical method for the case where there are no inequalities restrictions
 
 If there are no inequalities in the system, the satisfiability problem can be solved by finding
 the Gröbner basis of the system extended with the equations
@@ -124,8 +124,10 @@ z^p - z = 0
 $$
 where $p$ is the prime of the field.
 
-The Gröbner basis of the extended set will contain a constant iff the system is unsatisfiable. Such Gröbner basis can be calculated using any monomial ordering, like degree reverse lexicographical order, which is cheaper to calculate than the lexicographical order.
+The Gröbner basis of the extended set will contain a constant iff the system is unsatisfiable. Such Gröbner
+basis can be calculated using any monomial ordering, like degree reverse lexicographical order, which is
+cheaper to calculate than the lexicographical order.
 
-That said, if $p \gg 0$, the procedure to calculate such Gröbner basis might be prohibitively
-expensive due to the worst case complexity being a function of $d^2$, where $d$ is the highest power
-in the system, and the method of solving each root individually might be cheaper.
+I don't know how to turn this into a practical algorithm for the case where $p \gg 0$, as the procedure to
+calculate the Gröbner basis is prohibitively expensive due to the time complexity being $O(p^2)$ on the reduction
+step of $x^p - x = 0$.
