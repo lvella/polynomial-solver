@@ -153,7 +153,7 @@ mod tests {
 
     use super::*;
 
-    type GFPoly = Polynomial<polynomial::monomial_ordering::Grevlex, u8, ThreadPrimeField, u32>;
+    type GFPoly = Polynomial<polynomial::monomial_ordering::Lex, u8, ThreadPrimeField, u32>;
 
     fn F<T>(v: T) -> ThreadPrimeField
     where

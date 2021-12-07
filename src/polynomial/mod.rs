@@ -3,17 +3,25 @@ pub mod monomial_ordering;
 
 use super::ordered_ops;
 use monomial_ordering::Ordering;
+use num_traits::Pow;
 use std::{cmp::Ordering as CmpOrd, fmt::Write, marker::PhantomData};
 
-pub trait Id: Eq + Ord + Clone {}
+pub trait Id: core::fmt::Debug + Eq + Ord + Clone {}
 
 pub trait Coefficient:
-    PartialEq + Clone + std::ops::AddAssign + std::ops::SubAssign + num_traits::Zero + num_traits::One
+    core::fmt::Debug
+    + PartialEq
+    + Clone
+    + std::ops::AddAssign
+    + std::ops::SubAssign
+    + num_traits::Zero
+    + num_traits::One
 {
 }
 
 pub trait Power:
-    Eq
+    core::fmt::Debug
+    + Eq
     + Ord
     + Clone
     + std::ops::AddAssign
@@ -96,8 +104,8 @@ where
 
 impl<O, I, P> Ord for Monomial<O, I, P>
 where
-    I: Ord,
-    P: Ord,
+    I: Id,
+    P: Power,
     O: Ordering,
 {
     fn cmp(&self, other: &Self) -> CmpOrd {
@@ -107,8 +115,8 @@ where
 
 impl<O, I, P> PartialOrd for Monomial<O, I, P>
 where
-    I: Ord,
-    P: Ord,
+    I: Id,
+    P: Power,
     O: Ordering,
 {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
@@ -630,7 +638,7 @@ where
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let has_coef = if !self.coefficient.is_one() || self.monomial.product.is_empty() {
-            self.coefficient.fmt(f)?;
+            std::fmt::Display::fmt(&self.coefficient, f)?;
             true
         } else {
             false
