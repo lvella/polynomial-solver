@@ -5,7 +5,7 @@
 
 use crate::{
     ordered_ops,
-    polynomial::{Coefficient, Id, Polynomial, Power, Term},
+    polynomial::{Id, Polynomial, Power, Term},
 };
 
 use itertools::Itertools;
@@ -15,22 +15,7 @@ use std::{
     rc::Rc,
 };
 
-use super::{monomial_ordering::Ordering, Monomial};
-
-pub trait InvertibleCoefficient
-where
-    Self: Coefficient
-        + Ord
-        + for<'a> std::ops::Mul<&'a Self, Output = Self>
-        + num_traits::ops::inv::Inv<Output = Self>,
-{
-    /// Calculate elimination factor, so that self + factor*rhs = 0:
-    fn elimination_factor(&self, rhs: &Self) -> Self {
-        let mut factor = Self::zero();
-        factor -= rhs.clone().inv() * self;
-        factor
-    }
-}
+use super::{division::InvertibleCoefficient, monomial_ordering::Ordering, Monomial};
 
 /// Reduce one polynomial with respect to another.
 /// This is kind of a multi-variable division, and the return is the remainder.
@@ -64,7 +49,9 @@ where
 
         // Calculate elimination factor, so that p + factor*ref eliminates the first term in p:
         let factor = Term {
-            coefficient: ini_p.coefficient.elimination_factor(&ini_ref.coefficient),
+            coefficient: ini_p
+                .coefficient
+                .elimination_factor(&ini_ref.coefficient.clone().inv()),
             monomial: quot,
         };
 
@@ -269,6 +256,8 @@ where
 mod tests {
     use num::Rational32;
     use num_traits::{Inv, Pow};
+
+    use crate::polynomial::Coefficient;
 
     use super::*;
 

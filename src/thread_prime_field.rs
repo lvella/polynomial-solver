@@ -1,4 +1,4 @@
-use crate::polynomial::grobner_basis as gb;
+use crate::polynomial::{division::InvertibleCoefficient, grobner_basis as gb};
 
 use rug;
 use std::{cell::RefCell, fmt::Display};
@@ -143,7 +143,7 @@ impl num_traits::ops::inv::Inv for ThreadPrimeField {
 
 impl Coefficient for ThreadPrimeField {}
 
-impl gb::InvertibleCoefficient for ThreadPrimeField {}
+impl InvertibleCoefficient for ThreadPrimeField {}
 
 #[cfg(test)]
 mod tests {
