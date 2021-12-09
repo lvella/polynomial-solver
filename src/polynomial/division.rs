@@ -27,14 +27,12 @@ where
         let lt = divisor.terms.get(0)?;
         let lt_inv = lt.coefficient.clone().inv();
 
-        let mut neg_quot_terms = Vec::new();
+        let mut neg_quot = Polynomial { terms: Vec::new() };
+        let mut rem = Polynomial { terms: Vec::new() };
 
         'outer: loop {
-            let rem_terms = Vec::with_capacity(self.terms.len());
-            let mut iter = self.terms.into_iter();
-            self.terms = rem_terms;
-
             // Search for a term in self to be eliminated by divisor leading term:
+            let mut iter = self.terms.into_iter();
             while let Some(t) = iter.next() {
                 if let Some(monomial) = t.monomial.clone().whole_division(&lt.monomial) {
                     // Term can be eliminated, calculate the eliminating coefficient:
@@ -46,24 +44,20 @@ where
                     let difference = divisor.terms[1..]
                         .iter()
                         .map(|t| t.clone() * factor.clone());
-                    self.terms.extend(Polynomial::sum_terms(iter, difference));
+                    self.terms = Polynomial::sum_terms(iter, difference);
 
-                    neg_quot_terms.push(factor);
+                    neg_quot.terms.push(factor);
 
                     continue 'outer;
                 } else {
-                    self.terms.push(t);
+                    rem.terms.push(t);
                 }
             }
 
             break;
         }
 
-        let neg_quot = Polynomial {
-            terms: neg_quot_terms,
-        };
-
-        Some((-neg_quot, self))
+        Some((-neg_quot, rem))
     }
 }
 

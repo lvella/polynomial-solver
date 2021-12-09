@@ -385,11 +385,12 @@ where
     C: Coefficient + From<P>,
     P: Power,
 {
+    /*
     pub fn derivative(mut self, variable: &I) {
         self.terms.retain_mut(|term| {
             // TODO: to be continued...
         });
-    }
+    }*/
 }
 
 impl<O, I: Clone, C: Clone, P: Clone> Clone for Polynomial<O, I, C, P> {
