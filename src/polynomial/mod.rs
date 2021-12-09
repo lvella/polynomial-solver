@@ -4,7 +4,12 @@ pub mod monomial_ordering;
 
 use super::ordered_ops;
 use monomial_ordering::Ordering;
-use std::{cmp::Ordering as CmpOrd, fmt::Write, marker::PhantomData};
+use std::{
+    cmp::{Ordering as CmpOrd, Reverse},
+    fmt::Write,
+    marker::PhantomData,
+    ops::MulAssign,
+};
 
 pub trait Id: core::fmt::Debug + Eq + Ord + Clone {}
 
@@ -378,19 +383,41 @@ where
     }
 }
 
+pub trait MulAssignPower<P> {
+    fn mul_assign_power(&mut self, power: &P);
+}
+
 impl<O, I, C, P> Polynomial<O, I, C, P>
 where
     O: Ordering,
     I: Id,
-    C: Coefficient + From<P>,
+    C: Coefficient + MulAssignPower<P>,
     P: Power,
 {
-    /*
-    pub fn derivative(mut self, variable: &I) {
+    pub fn derivative(mut self, variable: &I) -> Self {
         self.terms.retain_mut(|term| {
-            // TODO: to be continued...
+            let idx = match term.monomial.product[..]
+                .binary_search_by_key(&Reverse(variable), |v| Reverse(&v.id))
+            {
+                Err(_) => {
+                    // This term is constant, obliterate it:
+                    return false;
+                }
+                Ok(idx) => idx,
+            };
+
+            let var = &mut term.monomial.product[idx];
+            term.coefficient.mul_assign_power(&var.power);
+            var.power -= &P::one();
+            if var.power.is_zero() {
+                term.monomial.product.remove(idx);
+            }
+
+            true
         });
-    }*/
+
+        self
+    }
 }
 
 impl<O, I: Clone, C: Clone, P: Clone> Clone for Polynomial<O, I, C, P> {
@@ -736,9 +763,15 @@ mod tests {
 
     impl Id for u8 {}
     impl Coefficient for i32 {}
-    impl Power for u32 {}
+    impl Power for u16 {}
 
-    pub type SmallPoly = Polynomial<monomial_ordering::Lex, u8, i32, u32>;
+    pub type SmallPoly = Polynomial<monomial_ordering::Lex, u8, i32, u16>;
+
+    impl MulAssignPower<u16> for i32 {
+        fn mul_assign_power(&mut self, power: &u16) {
+            self.mul_assign(*power as i32);
+        }
+    }
 
     #[test]
     fn addition_and_subtraction_ordering() {
@@ -918,5 +951,22 @@ mod tests {
 
         let p = (x.clone() * y.clone() - 1).pow(5);
         println!("{}", p);
+    }
+
+    #[test]
+    fn derivative() {
+        let [y, x]: [SmallPoly; 2] = SmallPoly::new_variables([0u8, 1u8]).try_into().unwrap();
+        let p = x.clone() * x.clone() + x.clone() * y.clone() + y.clone() * y.clone();
+        println!("p: {}", p);
+
+        let dp_dy = p.clone().derivative(&0);
+        let dp_dx = p.derivative(&1);
+        println!("dp/dy: {}\ndp/dx: {}", dp_dy, dp_dx);
+
+        let expected_dp_dy = x.clone() + &y.clone() * 2i32;
+        assert_eq!(dp_dy, expected_dp_dy);
+
+        let expected_dp_dx = &x.clone() * 2i32 + y.clone();
+        assert_eq!(dp_dx, expected_dp_dx);
     }
 }

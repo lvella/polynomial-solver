@@ -81,7 +81,7 @@ mod tests {
 
     use super::*;
 
-    pub type GrevlexPoly = Polynomial<Grevlex, u8, i32, u32>;
+    pub type GrevlexPoly = Polynomial<Grevlex, u8, i32, u16>;
 
     #[test]
     fn test_grevlex_ordering() {

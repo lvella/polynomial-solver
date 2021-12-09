@@ -71,7 +71,7 @@ pub mod tests {
 
     impl Coefficient for Rational32 {}
     impl InvertibleCoefficient for Rational32 {}
-    pub type QPoly = Polynomial<crate::polynomial::monomial_ordering::Lex, u8, Rational32, u32>;
+    pub type QPoly = Polynomial<crate::polynomial::monomial_ordering::Lex, u8, Rational32, u16>;
 
     pub fn r<T>(v: T) -> Rational32
     where
