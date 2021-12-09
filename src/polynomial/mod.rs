@@ -307,6 +307,27 @@ where
         }
     }
 
+    /// If the polynomial uses exactly one variable, returns the variable id.
+    pub fn try_get_univariate_id(&self) -> Option<I> {
+        let mut ret = None;
+        for term in self.terms.iter() {
+            for var in term.monomial.product.iter() {
+                match &ret {
+                    None => {
+                        ret = Some(var.id.clone());
+                    }
+                    Some(id) => {
+                        if *id != var.id {
+                            return None;
+                        }
+                    }
+                }
+            }
+        }
+
+        ret
+    }
+
     /// First compare by monomials, then by size, in last case compare by coefficient value:
     fn cmp_with_coef<FCmp, FCons, Ret>(
         &self,
@@ -354,6 +375,20 @@ where
                 }
             },
         )
+    }
+}
+
+impl<O, I, C, P> Polynomial<O, I, C, P>
+where
+    O: Ordering,
+    I: Id,
+    C: Coefficient + From<P>,
+    P: Power,
+{
+    pub fn derivative(mut self, variable: &I) {
+        self.terms.retain_mut(|term| {
+            // TODO: to be continued...
+        });
     }
 }
 
