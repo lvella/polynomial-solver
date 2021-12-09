@@ -1,5 +1,3 @@
-use std::collections::BinaryHeap;
-
 use super::{monomial_ordering::Ordering, Coefficient, Id, Polynomial, Power, Term};
 
 pub trait InvertibleCoefficient
@@ -17,53 +15,6 @@ where
     }
 }
 
-struct OrdByMonomial<O, I, C, P>(Term<O, I, C, P>);
-
-impl<O, I, C, P> PartialEq for OrdByMonomial<O, I, C, P>
-where
-    O: Ordering,
-    I: Id,
-    C: InvertibleCoefficient,
-    P: Power,
-{
-    fn eq(&self, other: &Self) -> bool {
-        self.0.monomial == other.0.monomial
-    }
-}
-
-impl<O, I, C, P> Eq for OrdByMonomial<O, I, C, P>
-where
-    O: Ordering,
-    I: Id,
-    C: InvertibleCoefficient,
-    P: Power,
-{
-}
-
-impl<O, I, C, P> PartialOrd for OrdByMonomial<O, I, C, P>
-where
-    O: Ordering,
-    I: Id,
-    C: InvertibleCoefficient,
-    P: Power,
-{
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.0.monomial.partial_cmp(&other.0.monomial)
-    }
-}
-
-impl<O, I, C, P> Ord for OrdByMonomial<O, I, C, P>
-where
-    O: Ordering,
-    I: Id,
-    C: InvertibleCoefficient,
-    P: Power,
-{
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.0.monomial.cmp(&other.0.monomial)
-    }
-}
-
 impl<O, I, C, P> Polynomial<O, I, C, P>
 where
     O: Ordering,
@@ -76,7 +27,7 @@ where
         let lt = divisor.terms.get(0)?;
         let lt_inv = lt.coefficient.clone().inv();
 
-        let mut neg_quot_terms = BinaryHeap::new();
+        let mut neg_quot_terms = Vec::new();
 
         'outer: loop {
             let rem_terms = Vec::with_capacity(self.terms.len());
@@ -97,7 +48,7 @@ where
                         .map(|t| t.clone() * factor.clone());
                     self.terms.extend(Polynomial::sum_terms(iter, difference));
 
-                    neg_quot_terms.push(OrdByMonomial(factor));
+                    neg_quot_terms.push(factor);
 
                     continue 'outer;
                 } else {
@@ -108,31 +59,96 @@ where
             break;
         }
 
-        // Coalesce the quotient.
-        // I am assuming that in a multivariate division, it may be that the quotient
-        // terms do not end up neatly ordered and unique by monomial, so I must manually
-        // sum the terms of same monomial and insert them in descending order.
-        let mut neg_quot = Polynomial {
-            terms: Vec::with_capacity(neg_quot_terms.len()),
+        let neg_quot = Polynomial {
+            terms: neg_quot_terms,
         };
 
-        if let Some(OrdByMonomial(mut prev)) = neg_quot_terms.pop() {
-            while let Some(OrdByMonomial(next)) = neg_quot_terms.pop() {
-                if next.monomial == prev.monomial {
-                    prev.coefficient += next.coefficient;
-                } else {
-                    if !prev.coefficient.is_zero() {
-                        neg_quot.terms.push(prev);
-                    }
-                    prev = next;
-                }
-            }
-
-            if !prev.coefficient.is_zero() {
-                neg_quot.terms.push(prev);
-            }
-        }
-
         Some((-neg_quot, self))
+    }
+}
+
+#[cfg(test)]
+pub mod tests {
+
+    use super::*;
+    use crate::polynomial::Polynomial;
+    use num::Rational32;
+    use num_traits::{One, Pow, Zero};
+
+    impl Coefficient for Rational32 {}
+    impl InvertibleCoefficient for Rational32 {}
+    pub type QPoly = Polynomial<crate::polynomial::monomial_ordering::Lex, u8, Rational32, u32>;
+
+    pub fn r<T>(v: T) -> Rational32
+    where
+        Rational32: From<T>,
+    {
+        Rational32::from(v)
+    }
+
+    #[test]
+    fn simple_multivariate_divisions() {
+        let [x, y]: [QPoly; 2] = QPoly::new_variables([1u8, 0u8]).try_into().unwrap();
+
+        let f = x.clone().pow(2u8) + x.clone() * y.clone() + r(1);
+        let g = x.clone() * y.clone() - x.clone();
+
+        println!("f: {}\ng: {}", &f, &g);
+
+        let (q, rem) = f.div_rem(&g).unwrap();
+
+        println!("f/g: {}\nf%g: {}\n", &q, &rem);
+
+        assert!(q.is_constant());
+        assert!(q.terms[0].coefficient.is_one());
+
+        let expected_rem = x.clone().pow(2u8) + x.clone() + r(1);
+        assert_eq!(rem, expected_rem);
+
+        let f = x.clone().pow(3u8) - y.clone().pow(3u8);
+        let g = x.clone() - y.clone();
+
+        println!("f: {}\ng: {}", &f, &g);
+
+        let (q, rem) = f.div_rem(&g).unwrap();
+
+        println!("f/g: {}\nf%g: {}\n", &q, &rem);
+
+        let expected_q = x.clone().pow(2u8) + x.clone() * y.clone() + y.clone().pow(2u8);
+        assert_eq!(q, expected_q);
+        assert!(rem.is_zero());
+    }
+
+    #[test]
+    fn simple_univariate_divisions() {
+        let x = QPoly::new_monomial_term(r(1), 0, 1);
+
+        let f = &x.clone().pow(3u8) * r(2) - &x.clone().pow(2u8) * r(3) + &x.clone() * r(4) + r(5);
+        let g = x.clone() + r(2);
+        println!("f: {}\ng: {}", &f, &g);
+
+        let (q, rem) = f.div_rem(&g).unwrap();
+
+        println!("f/g: {}\nf%g: {}\n", &q, &rem);
+
+        let expected_q = &x.clone().pow(2u8) * r(2) - &x.clone() * r(7) + r(18);
+        assert_eq!(q, expected_q);
+
+        assert!(rem.is_constant());
+        assert_eq!(rem.terms[0].coefficient, r(-31));
+
+        let f = &x.clone().pow(4u8) * r(4) + &x.clone().pow(3u8) * r(3) + &x.clone() * r(2) + r(1);
+        let g = x.clone().pow(2u8) + x.clone() + r(2);
+        println!("f: {}\ng: {}", &f, &g);
+
+        let (q, rem) = f.div_rem(&g).unwrap();
+
+        println!("f/g: {}\nf%g: {}\n", &q, &rem);
+
+        let expected_q = &x.clone().pow(2u8) * r(4) - x.clone() - r(7);
+        assert_eq!(q, expected_q);
+
+        let expected_rem = &x.clone() * r(11) + r(15);
+        assert_eq!(rem, expected_rem);
     }
 }

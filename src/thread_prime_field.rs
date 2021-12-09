@@ -155,7 +155,7 @@ mod tests {
 
     type GFPoly = Polynomial<polynomial::monomial_ordering::Lex, u8, ThreadPrimeField, u32>;
 
-    fn F<T>(v: T) -> ThreadPrimeField
+    fn gf<T>(v: T) -> ThreadPrimeField
     where
         ThreadPrimeField: From<T>,
     {
@@ -168,14 +168,14 @@ mod tests {
 
         let [z, y, x]: [GFPoly; 3] = GFPoly::new_variables([0, 1, 2]).try_into().unwrap();
         let input = [
-            &x.clone().pow(3u8) * F(4u8)
-                + x.clone().pow(2u8) * (&y.clone().pow(2u8) * F(2u8))
-                + &x.clone() * F(12u8)
+            &x.clone().pow(3u8) * gf(4u8)
+                + x.clone().pow(2u8) * (&y.clone().pow(2u8) * gf(2u8))
+                + &x.clone() * gf(12u8)
                 - y.clone()
-                - F(5u8),
+                - gf(5u8),
             y.clone().pow(3u8)
-                - &x.clone().pow(2u8) * F(3u8)
-                - x.clone() * (&y.clone().pow(3u8) * F(7u8))
+                - &x.clone().pow(2u8) * gf(3u8)
+                - x.clone() * (&y.clone().pow(3u8) * gf(7u8))
                 - z,
         ];
 

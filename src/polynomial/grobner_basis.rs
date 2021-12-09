@@ -254,38 +254,24 @@ where
 
 #[cfg(test)]
 mod tests {
-    use num::Rational32;
-    use num_traits::{Inv, Pow};
-
-    use crate::polynomial::Coefficient;
-
     use super::*;
-
-    impl Coefficient for Rational32 {}
-    impl InvertibleCoefficient for Rational32 {}
-    type QPoly = Polynomial<crate::polynomial::monomial_ordering::Lex, u8, Rational32, u32>;
-
-    fn R<T>(v: T) -> Rational32
-    where
-        Rational32: From<T>,
-    {
-        Rational32::from(v)
-    }
+    use crate::polynomial::division::tests::*;
+    use num_traits::{Inv, Pow};
 
     #[test]
     fn reduction_step_test() {
         // Can't use SmallPoly because i32 is not invertible
         let [x, y]: [QPoly; 2] = QPoly::new_variables([1u8, 0u8]).try_into().unwrap();
 
-        let p = &(x.clone().pow(5u8) * y.clone().pow(3u8)) * R(4);
+        let p = &(x.clone().pow(5u8) * y.clone().pow(3u8)) * r(4);
 
-        let r = &x.clone().pow(3u8) * R(2) - y.clone() * x.clone() + &y.clone() * R(2) - R(3);
+        let q = &x.clone().pow(3u8) * r(2) - y.clone() * x.clone() + &y.clone() * r(2) - r(3);
 
         let mut reduced = p.clone();
-        reduction_step(&mut reduced, &r);
+        reduction_step(&mut reduced, &q);
         println!("{}", reduced);
 
-        let reconstructed_p = reduced + &(x.pow(2u8) * y.pow(3u8)) * R(2) * r;
+        let reconstructed_p = reduced + &(x.pow(2u8) * y.pow(3u8)) * r(2) * q;
 
         assert_eq!(reconstructed_p, p);
     }
@@ -294,7 +280,7 @@ mod tests {
     fn grobner_basis_test() {
         let [x, y, z]: [QPoly; 3] = QPoly::new_variables([2, 1, 0u8]).try_into().unwrap();
         let eqs = [
-            x.clone() * x.clone() + y.clone() * y.clone() + z.clone() * z.clone() - R(1),
+            x.clone() * x.clone() + y.clone() * y.clone() + z.clone() * z.clone() - r(1),
             x.clone() * x.clone() - y.clone() + z.clone() * z.clone(),
             x.clone() - z.clone(),
         ];
@@ -306,8 +292,8 @@ mod tests {
         }
 
         let expected_solution = [
-            &z.clone().pow(4u8) * R(4) + &z.clone().pow(2u8) * R(2) - R(1),
-            y.clone() - &z.clone().pow(2u8) * R(2),
+            &z.clone().pow(4u8) * r(4) + &z.clone().pow(2u8) * r(2) - r(1),
+            y.clone() - &z.clone().pow(2u8) * r(2),
             x - z,
         ];
 
@@ -323,9 +309,9 @@ mod tests {
     fn test_grobner_basis_equal_1() {
         let [x, y]: [QPoly; 2] = QPoly::new_variables([1, 0u8]).try_into().unwrap();
         let unsolvable = [
-            x.clone().pow(2u8) + x.clone() * y.clone() - R(10),
-            x.clone().pow(3u8) + x.clone() * y.clone().pow(2u8) - R(25),
-            x.clone().pow(4u8) + x.clone() * y.clone().pow(3u8) - R(70),
+            x.clone().pow(2u8) + x.clone() * y.clone() - r(10),
+            x.clone().pow(3u8) + x.clone() * y.clone().pow(2u8) - r(25),
+            x.clone().pow(4u8) + x.clone() * y.clone().pow(3u8) - r(70),
         ];
 
         let grobner_basis = grobner_basis(unsolvable.into_iter());
@@ -341,7 +327,7 @@ mod tests {
     fn test_resilience_to_weird_input() {
         // Assert only the non-zero element remains:
         let zero_in_the_set =
-            grobner_basis([QPoly::new_constant(R(42)), QPoly::zero()].into_iter());
+            grobner_basis([QPoly::new_constant(r(42)), QPoly::zero()].into_iter());
 
         assert_eq!(zero_in_the_set.len(), 1);
         let p = zero_in_the_set.first().unwrap();
