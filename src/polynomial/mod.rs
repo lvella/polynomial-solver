@@ -1,6 +1,7 @@
 pub mod division;
 pub mod grobner_basis;
 pub mod monomial_ordering;
+pub mod square_free;
 
 use super::ordered_ops;
 use monomial_ordering::Ordering;
@@ -19,6 +20,7 @@ pub trait Coefficient:
     + Clone
     + std::ops::AddAssign
     + std::ops::SubAssign
+    + for<'a> std::ops::MulAssign<&'a Self>
     + num_traits::Zero
     + num_traits::One
 {
@@ -212,7 +214,8 @@ where
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self {
-        let coefficient = self.coefficient * rhs.coefficient.clone();
+        let mut coefficient = self.coefficient;
+        coefficient *= &rhs.coefficient;
 
         let product = ordered_ops::sum(
             self.monomial.product.into_iter(),

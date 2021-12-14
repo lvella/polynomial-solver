@@ -111,6 +111,13 @@ impl std::ops::SubAssign for ThreadPrimeField {
     }
 }
 
+impl std::ops::MulAssign<&Self> for ThreadPrimeField {
+    fn mul_assign(&mut self, rhs: &Self) {
+        self.value *= &rhs.value;
+        self.normalize();
+    }
+}
+
 impl num_traits::Zero for ThreadPrimeField {
     fn zero() -> Self {
         ThreadPrimeField {

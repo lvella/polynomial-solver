@@ -59,6 +59,48 @@ where
 
         Some((-neg_quot, rem))
     }
+
+    // Divide all coefficients by the leading coefficients.
+    pub fn normalized_by_coefs(mut self) -> Self {
+        let mut iter = self.terms.iter_mut();
+        if let Some(lt) = iter.next() {
+            let inv_coef = std::mem::replace(&mut lt.coefficient, C::one()).inv();
+
+            for t in iter {
+                t.coefficient *= &inv_coef;
+            }
+        }
+
+        self
+    }
+}
+
+impl<'a, O, I, C, P> std::ops::Div<&'a Self> for Polynomial<O, I, C, P>
+where
+    O: Ordering,
+    I: Id,
+    C: InvertibleCoefficient,
+    P: Power,
+{
+    type Output = Self;
+
+    fn div(self, rhs: &Self) -> Self {
+        self.div_rem(rhs).unwrap().0
+    }
+}
+
+impl<'a, O, I, C, P> std::ops::Rem<&'a Self> for Polynomial<O, I, C, P>
+where
+    O: Ordering,
+    I: Id,
+    C: InvertibleCoefficient,
+    P: Power,
+{
+    type Output = Self;
+
+    fn rem(self, rhs: &Self) -> Self {
+        self.div_rem(rhs).unwrap().1
+    }
 }
 
 #[cfg(test)]
