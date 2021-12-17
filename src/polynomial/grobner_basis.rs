@@ -11,11 +11,61 @@ use crate::{
 use itertools::Itertools;
 use num_traits::Zero;
 use std::{
-    collections::{BTreeSet, VecDeque},
+    cmp::Reverse,
+    collections::{BTreeSet, HashMap, VecDeque},
     rc::Rc,
 };
 
-use super::{division::InvertibleCoefficient, monomial_ordering::Ordering, Monomial};
+use super::{division::InvertibleCoefficient, monomial_ordering::Ordering, Coefficient, Monomial};
+
+/// Replace polynomial variables so that they have an order that is
+/// more suitable to calculate the Gröbner Basis, according to this:
+/// https://gitlab.trnsz.com/reduce-algebra/reduce-algebra/-/blob/master/packages/groebner/groebopt.red
+///
+/// Returns a map from the old variables to the new ones.
+pub fn reorder_vars_for_easier_gb<O, C, P>(
+    polynomials: &mut Vec<Polynomial<O, usize, C, P>>,
+) -> HashMap<usize, usize>
+where
+    O: Ordering,
+    C: Coefficient,
+    P: Power,
+{
+    let mut var_map = HashMap::new();
+
+    for p in polynomials.iter() {
+        for t in p.terms.iter() {
+            for var in t.monomial.product.iter() {
+                let entry = var_map.entry(var.id).or_insert((P::zero(), 0usize));
+                if entry.0 < t.monomial.total_power {
+                    *entry = (t.monomial.total_power.clone(), 1);
+                } else {
+                    entry.1 += 1;
+                }
+            }
+        }
+    }
+
+    let mut reordered: Vec<_> = var_map.keys().copied().collect();
+    reordered.sort_unstable_by_key(|id| var_map.get(id).unwrap());
+
+    let var_map: HashMap<usize, usize> = reordered.into_iter().zip(0..).collect();
+
+    for p in polynomials.iter_mut() {
+        for t in p.terms.iter_mut() {
+            for var in t.monomial.product.iter_mut() {
+                let new_id = var_map.get(&var.id).unwrap();
+                var.id = *new_id;
+            }
+
+            t.monomial.product.sort_unstable_by_key(|w| Reverse(w.id));
+        }
+
+        p.terms.sort_unstable_by(|a, b| b.monomial.cmp(&a.monomial));
+    }
+
+    var_map
+}
 
 /// Reduce one polynomial with respect to another.
 /// This is kind of a multi-variable division, and the return is the remainder.
@@ -216,36 +266,56 @@ pub fn grobner_basis<O, I, C, P>(
 ) -> BTreeSet<Rc<Polynomial<O, I, C, P>>>
 where
     O: Ordering,
-    I: Id + std::fmt::Display,
-    C: InvertibleCoefficient + std::fmt::Display,
-    P: Power + std::fmt::Display,
+    I: Id,
+    C: InvertibleCoefficient,
+    P: Power,
 {
-    let mut current_set = autoreduce(input);
-    let mut current_vec: Vec<_> = current_set.iter().rev().cloned().collect();
+    let mut current_set = input;
 
-    let mut work_queue: VecDeque<Box<dyn Iterator<Item = (usize, usize)>>> = VecDeque::new();
-    work_queue.push_back(Box::new((0..current_vec.len()).tuple_combinations()));
+    'restart: loop {
+        print!("autoreducing ...");
+        current_set = autoreduce(current_set);
+        println!(" done!");
 
-    while let Some(work) = work_queue.pop_front() {
-        for (i, j) in work {
-            if let Some(new_p) = spar_reduce(&current_vec[i], &current_vec[j], &current_set) {
-                // Cut short the calculation in case of constant:
-                let new_p = Rc::new(new_p);
-                if new_p.is_constant() {
-                    return BTreeSet::from([new_p]);
+        let mut current_vec: Vec<_> = current_set.iter().rev().cloned().collect();
+
+        let mut work_queue: VecDeque<Box<dyn Iterator<Item = (usize, usize)>>> = VecDeque::new();
+        work_queue.push_back(Box::new((0..current_vec.len()).tuple_combinations()));
+
+        let mut new_count = 0u16;
+        while let Some(work) = work_queue.pop_front() {
+            for (i, j) in work {
+                if let Some(new_p) = spar_reduce(&current_vec[i], &current_vec[j], &current_set) {
+                    // Cut short the calculation in case of constant:
+                    let new_p = Rc::new(new_p);
+                    if new_p.is_constant() {
+                        return BTreeSet::from([new_p]);
+                    }
+
+                    let curr_len = current_vec.len();
+                    work_queue.push_back(Box::new(
+                        std::iter::once(curr_len).cartesian_product(0..curr_len),
+                    ));
+
+                    println!(
+                        "#### {},  deg: {:?}",
+                        current_vec.len(),
+                        new_p.terms[0].monomial.total_power
+                    );
+
+                    current_vec.push(new_p.clone());
+                    current_set.insert(new_p);
+
+                    new_count += 1;
+                    if new_count == 1 {
+                        continue 'restart;
+                    }
                 }
-
-                let curr_len = current_vec.len();
-                work_queue.push_back(Box::new(
-                    std::iter::once(curr_len).cartesian_product(0..curr_len),
-                ));
-
-                current_vec.push(new_p.clone());
-                current_set.insert(new_p);
             }
         }
+
+        break;
     }
-    drop(current_vec);
 
     autoreduce(current_set)
 }
@@ -255,9 +325,9 @@ pub fn grobner_basis_from_iter<O, I, C, P>(
 ) -> BTreeSet<Rc<Polynomial<O, I, C, P>>>
 where
     O: Ordering,
-    I: Id + std::fmt::Display,
-    C: InvertibleCoefficient + std::fmt::Display,
-    P: Power + std::fmt::Display,
+    I: Id,
+    C: InvertibleCoefficient,
+    P: Power,
 {
     grobner_basis(input.map(|p| Rc::new(p)).collect())
 }

@@ -1,8 +1,7 @@
+use polynomial_solver::polynomial::grobner_basis::reorder_vars_for_easier_gb;
 use polynomial_solver::polynomial::monomial_ordering::Grevlex;
 use polynomial_solver::polynomial::Term;
 use polynomial_solver::thread_prime_field::ThreadPrimeField;
-use std::collections::BTreeSet;
-use std::rc::Rc;
 use std::{env, fs::File, io::BufReader};
 use zokrates_core::flat_absy::FlatVariable;
 use zokrates_core::ir::Statement::Constraint;
@@ -58,7 +57,7 @@ fn solve<T: Field, I: Iterator<Item = ir::Statement<T>>>(ir_prog: ir::ProgIterat
     ThreadPrimeField::set_prime(prime).unwrap();
 
     println!("Set of polynomials constrained to 0:");
-    let mut poly_set = BTreeSet::new();
+    let mut poly_set = Vec::new();
 
     for s in ir_prog.statements.into_iter() {
         if let Constraint(quad, lin, _) = s {
@@ -66,18 +65,23 @@ fn solve<T: Field, I: Iterator<Item = ir::Statement<T>>>(ir_prog: ir::ProgIterat
             let qr = to_poly(quad.right);
             let rhs = to_poly(lin);
 
-            //println!("   ({}) * ({}) = {}", ql, qr, rhs);
-
             let p = ql * qr - rhs;
             println!("  {}", p);
 
-            poly_set.insert(Rc::new(p));
+            poly_set.push(p);
         }
+    }
+
+    println!("\nVariables reordered to:");
+    let var_map = reorder_vars_for_easier_gb(&mut poly_set);
+    for (from, to) in var_map {
+        println!("{} → {}", from, to);
     }
 
     println!("\nGröbner Basis:");
 
-    let gb = polynomial_solver::polynomial::grobner_basis::grobner_basis(poly_set);
+    let gb =
+        polynomial_solver::polynomial::grobner_basis::grobner_basis_from_iter(poly_set.into_iter());
     for p in gb {
         println!("  {}", p);
     }
