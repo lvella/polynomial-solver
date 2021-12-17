@@ -10,8 +10,13 @@ rand = "0.8.4"
 [dependencies]
 num-traits = "0.2"
 itertools = "0.10.1"
+zokrates_core = { git = "https://github.com/Zokrates/ZoKrates.git" }
+zokrates_field = { git = "https://github.com/Zokrates/ZoKrates.git" }
 
 [dependencies.rug]
 version = "1.13"
 default-features = false
 features = ["integer"]
+
+[profile.release]
+lto = "thin"
