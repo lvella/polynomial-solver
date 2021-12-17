@@ -9,7 +9,6 @@ use std::{
     cmp::{Ordering as CmpOrd, Reverse},
     fmt::Write,
     marker::PhantomData,
-    ops::MulAssign,
 };
 
 pub trait Id: core::fmt::Debug + Eq + Ord + Clone {}
@@ -142,7 +141,7 @@ where
     C: Coefficient,
     P: Power,
 {
-    fn new(coefficient: C, id: I, power: P) -> Self {
+    pub fn new(coefficient: C, id: I, power: P) -> Self {
         if power.is_zero() {
             // No product is implictly one
             Self::new_constant(coefficient)
@@ -161,7 +160,7 @@ where
         }
     }
 
-    fn new_constant(value: C) -> Self {
+    pub fn new_constant(value: C) -> Self {
         Term {
             coefficient: value,
             monomial: Monomial {
@@ -284,6 +283,20 @@ where
                 vec![Term::new_constant(value)]
             },
         }
+    }
+
+    pub fn from_terms(mut terms: Vec<Term<O, I, C, P>>) -> Self {
+        terms.sort_unstable_by(|a, b| b.monomial.cmp(&a.monomial));
+        terms.dedup_by(|from, to| {
+            if from.monomial != to.monomial {
+                return false;
+            }
+
+            to.coefficient += std::mem::replace(&mut from.coefficient, C::zero());
+            true
+        });
+        terms.retain(|e| !e.coefficient.is_zero());
+        Self { terms }
     }
 
     pub fn get_terms(&self) -> &[Term<O, I, C, P>] {
@@ -758,8 +771,13 @@ where
     }
 }
 
+impl Id for usize {}
+impl Power for u32 {}
+
 #[cfg(test)]
 mod tests {
+    use std::ops::MulAssign;
+
     use num_traits::Pow;
 
     use super::*;

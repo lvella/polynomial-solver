@@ -209,7 +209,7 @@ mod tests {
 
         let input = [sat_p, fermat(0), fermat(1), fermat(2)];
 
-        let result = grobner_basis::grobner_basis(input.into_iter());
+        let result = grobner_basis::grobner_basis_from_iter(input.into_iter());
 
         for p in result {
             println!("{}", &*p);

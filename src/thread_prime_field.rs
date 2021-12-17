@@ -1,4 +1,4 @@
-use crate::polynomial::{division::InvertibleCoefficient, grobner_basis as gb};
+use crate::polynomial::division::InvertibleCoefficient;
 
 use rug;
 use std::{cell::RefCell, fmt::Display};
@@ -186,7 +186,7 @@ mod tests {
                 - z,
         ];
 
-        let gb = gb::grobner_basis(input.into_iter());
+        let gb = polynomial::grobner_basis::grobner_basis_from_iter(input.into_iter());
         for e in gb {
             let inv = e.get_terms()[0].get_coefficient().clone().inv();
             println!("{}", &*e * inv);

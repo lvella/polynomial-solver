@@ -20,7 +20,7 @@ roots in the field).
 3. for every polynomial p ≠ 0, do:
     3.1. r ← reduction of r by GB
     3.2. if r = 0, then declare UNSAT, because every solution that satisfy every f = 0 will
-        also make p = 0
+         also make p = 0
     3.3. for every polynomial q in GB:
         3.3.1. while gdc(q, r) ≠ 1: 
             (if q is squarefree (and I don't know if the radical calculation algorithm

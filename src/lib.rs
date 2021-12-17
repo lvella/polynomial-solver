@@ -3,8 +3,8 @@
 #![feature(map_first_last)]
 #![feature(vec_retain_mut)]
 
-mod big_unsigned;
-mod gcd;
+pub mod big_unsigned;
+pub mod gcd;
 mod ordered_ops;
-mod polynomial;
-mod thread_prime_field;
+pub mod polynomial;
+pub mod thread_prime_field;

@@ -27,7 +27,7 @@ pub fn sum<T>(
 
     loop {
         match (a, b) {
-            (Some(mut va), Some(mut vb)) => match cmp(&va, &vb) {
+            (Some(va), Some(vb)) => match cmp(&va, &vb) {
                 std::cmp::Ordering::Equal => {
                     // Do the operation
                     if let Some(r) = op(va, vb) {
@@ -81,7 +81,7 @@ pub fn saturating_sub<T, U>(
 
     loop {
         match (a, b) {
-            (Some(mut va), Some(mut vb)) => match cmp(&va, &vb) {
+            (Some(va), Some(vb)) => match cmp(&va, &vb) {
                 std::cmp::Ordering::Equal => {
                     // Do the operation
                     if let Some(r) = op(va, vb) {
