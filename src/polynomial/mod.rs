@@ -77,6 +77,31 @@ where
 
         Some(self)
     }
+
+    pub fn has_shared_variables(&self, other: &Self) -> bool {
+        let mut iter_a = self.product.iter();
+        let mut iter_b = other.product.iter();
+
+        let mut next_a = iter_a.next();
+        let mut next_b = iter_b.next();
+        while let (Some(a), Some(b)) = (next_a, next_b) {
+            match a.id.cmp(&b.id) {
+                CmpOrd::Equal => {
+                    return true;
+                }
+                CmpOrd::Less => {
+                    next_a = iter_a.next();
+                    next_b = Some(b);
+                }
+                CmpOrd::Greater => {
+                    next_a = Some(a);
+                    next_b = iter_b.next();
+                }
+            }
+        }
+
+        false
+    }
 }
 
 impl<O, I: Clone, P: Clone> Clone for Monomial<O, I, P> {
@@ -499,14 +524,8 @@ where
     }
 
     fn is_zero(&self) -> bool {
-        // For safety, test the non-normalized case:
-        for e in self.terms.iter() {
-            if !e.coefficient.is_zero() {
-                return false;
-            }
-        }
-
-        true
+        // Assumes the polynomial is normalized:
+        self.terms.is_empty()
     }
 }
 
@@ -989,5 +1008,24 @@ mod tests {
 
         let expected_dp_dx = &x.clone() * 2i32 + y.clone();
         assert_eq!(dp_dx, expected_dp_dx);
+    }
+
+    #[test]
+    fn monomial_test_for_shared_variable() {
+        let [x0, x1, x2, x3, x4, x5, x6, x7]: [SmallPoly; 8] =
+            SmallPoly::new_variables(0u8..8).try_into().unwrap();
+
+        let p = x0.clone() * x2.clone() * x4.clone() * x6.clone();
+        let q = x7.clone() * x5.clone() * x3.clone() * x1.clone();
+
+        assert!(!p.terms[0]
+            .monomial
+            .has_shared_variables(&q.terms[0].monomial));
+
+        let p = p * x7;
+
+        assert!(p.terms[0]
+            .monomial
+            .has_shared_variables(&q.terms[0].monomial));
     }
 }

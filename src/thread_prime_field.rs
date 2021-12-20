@@ -171,7 +171,7 @@ mod tests {
 
     #[test]
     fn big_grobner_basis() {
-        ThreadPrimeField::set_prime(13u8);
+        ThreadPrimeField::set_prime(13u8).unwrap();
 
         let [z, y, x]: [GFPoly; 3] = GFPoly::new_variables([0, 1, 2]).try_into().unwrap();
         let input = [

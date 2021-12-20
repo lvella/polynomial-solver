@@ -50,7 +50,18 @@ where
 
                     continue 'outer;
                 } else {
+                    // Since we could not divide, see if we can stop testing.
+                    // If leading monomial is bigger than the term's monomial, all
+                    // other terms will also be smaller, so there is no point in
+                    // continuing.
+                    let can_stop = lt.monomial > t.monomial;
+
                     rem.terms.push(t);
+
+                    if can_stop {
+                        rem.terms.extend(iter);
+                        break;
+                    }
                 }
             }
 
