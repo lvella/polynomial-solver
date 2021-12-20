@@ -275,7 +275,24 @@ where
     'restart: loop {
         print!("autoreducing ...");
         current_set = autoreduce(current_set);
-        println!(" done!");
+
+        {
+            let mut total_term_count = 0;
+            let mut total_var_count = 0;
+            for p in current_set.iter() {
+                total_term_count += p.terms.len();
+                for t in p.terms.iter() {
+                    total_var_count += t.monomial.product.len();
+                }
+            }
+
+            println!(
+                " poly count: {}, total term count: {}, total var count: {}",
+                current_set.len(),
+                total_term_count,
+                total_var_count
+            );
+        }
 
         let mut current_vec: Vec<_> = current_set.iter().rev().cloned().collect();
 
@@ -307,7 +324,7 @@ where
                     current_set.insert(new_p);
 
                     new_count += 1;
-                    if new_count == 1 {
+                    if new_count >= 4 {
                         continue 'restart;
                     }
                 }
