@@ -81,8 +81,56 @@ impl<O, I, C, P> TermAccumulator<O, I, C, P> for CallDetector {
     }
 }
 
+/// Reduce just the leading term of one polynomial with respect to another.
+fn fast_reduction_step<O, I, C, P>(
+    p: &mut Polynomial<O, I, C, P>,
+    reference: &Polynomial<O, I, C, P>,
+) -> bool
+where
+    O: Ordering,
+    I: Id,
+    C: InvertibleCoefficient,
+    P: Power,
+{
+    let ini_p = p.terms.get(0);
+
+    let mut ref_iter = reference.terms.iter();
+    let ini_ref = ref_iter.next();
+
+    if let (Some(ini_p), Some(ini_ref)) = (ini_p, ini_ref) {
+        // Find the quotient between the monomial ini(p) and ini(ref),
+        // so that p - c*quot*ref eliminates the first term in p:
+        let quot = match ini_p.monomial.clone().whole_division(&ini_ref.monomial) {
+            Some(quot) => quot,
+            None => {
+                return false;
+            }
+        };
+
+        let mut p_iter = std::mem::take(&mut p.terms).into_iter();
+        let ini_p = p_iter.next().unwrap();
+
+        // Calculate elimination factor, so that p + factor*ref eliminates the first term in p:
+        let factor = Term {
+            coefficient: ini_p
+                .coefficient
+                .elimination_factor(&ini_ref.coefficient.clone().inv()),
+            monomial: quot,
+        };
+
+        // Apply the coefficient to all the remaining terms of reference
+        let difference: Vec<_> = ref_iter.map(|t| factor.clone() * t.clone()).collect();
+
+        // Sum the remaining terms into a new polinomial:
+        p.terms = Polynomial::sum_terms(p_iter, difference.into_iter());
+
+        true
+    } else {
+        false
+    }
+}
+
 /// Reduce one polynomial with respect to another.
-/// This is kind of a multi-variable division, and the return is the remainder.
 fn reduction_step<O, I, C, P>(
     p: &mut Polynomial<O, I, C, P>,
     reference: &Polynomial<O, I, C, P>,
@@ -120,7 +168,11 @@ where
         }
     }
 
-    fn reduce(&self, p: Polynomial<O, I, C, P>) -> (bool, Polynomial<O, I, C, P>) {
+    fn reduction(
+        &self,
+        p: Polynomial<O, I, C, P>,
+        reduction_step: impl Fn(&mut Polynomial<O, I, C, P>, &Polynomial<O, I, C, P>) -> bool,
+    ) -> (bool, Polynomial<O, I, C, P>) {
         let mut was_reduced = false;
 
         let mut p_key = (p, self.next_id);
@@ -153,6 +205,14 @@ where
         }
 
         (was_reduced, p_key.0)
+    }
+
+    fn reduce(&self, p: Polynomial<O, I, C, P>) -> (bool, Polynomial<O, I, C, P>) {
+        self.reduction(p, reduction_step)
+    }
+
+    fn fast_reduce(&self, p: Polynomial<O, I, C, P>) -> (bool, Polynomial<O, I, C, P>) {
+        self.reduction(p, fast_reduction_step)
     }
 
     fn set_one(&mut self, p: Polynomial<O, I, C, P>) {
@@ -331,9 +391,11 @@ where
 
         if partner.1 < elem.1 {
             let new_p = spar(&elem.0, &partner.0);
-            println!("Sparred! Reducing ...");
+            println!("Sparred! Fast reducing ...");
+            let new_p = gb.fast_reduce(new_p).1;
+            println!("Fast reduced! Inserting:");
             gb.insert(new_p);
-            println!("Reduced! New set:");
+            println!("Inserted! New set:");
 
             for ((p, id), nts) in gb.ordered_set.iter() {
                 println!(
