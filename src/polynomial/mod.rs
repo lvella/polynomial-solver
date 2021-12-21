@@ -229,6 +229,25 @@ where
 {
 }
 
+impl<O, I, C, P> std::ops::Neg for Term<O, I, C, P>
+where
+    I: Id,
+    C: Coefficient,
+    P: Power,
+{
+    type Output = Self;
+
+    fn neg(self) -> Self {
+        let mut coefficient = C::zero();
+        coefficient -= self.coefficient;
+
+        Self {
+            coefficient,
+            ..self
+        }
+    }
+}
+
 impl<O, I, C, P> std::ops::Mul for Term<O, I, C, P>
 where
     I: Id,

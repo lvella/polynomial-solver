@@ -8,3 +8,8 @@ pub mod gcd;
 mod ordered_ops;
 pub mod polynomial;
 pub mod thread_prime_field;
+
+use mimalloc::MiMalloc;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;

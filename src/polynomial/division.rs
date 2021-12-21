@@ -14,6 +14,10 @@ where
     }
 }
 
+pub trait TermAccumulator<O, I, C, P>: Default {
+    fn push(&mut self, t: Term<O, I, C, P>);
+}
+
 impl<O, I, C, P> Polynomial<O, I, C, P>
 where
     O: Ordering,
@@ -22,12 +26,15 @@ where
     P: Power,
 {
     /// Calculates the quotient and remainder of the division of self by divisor.
-    pub fn div_rem(mut self, divisor: &Self) -> Option<(Self, Self)> {
+    pub fn long_division<Q: TermAccumulator<O, I, C, P>, R: TermAccumulator<O, I, C, P>>(
+        mut self,
+        divisor: &Self,
+    ) -> Option<(Q, R)> {
         let lt = divisor.terms.get(0)?;
         let lt_inv = lt.coefficient.clone().inv();
 
-        let mut neg_quot = Polynomial { terms: Vec::new() };
-        let mut rem = Polynomial { terms: Vec::new() };
+        let mut quot: Q = Default::default();
+        let mut rem: R = Default::default();
 
         'outer: loop {
             // Search for a term in self to be eliminated by divisor leading term:
@@ -45,7 +52,7 @@ where
                         .map(|t| t.clone() * factor.clone());
                     self.terms = Polynomial::sum_terms(iter, difference);
 
-                    neg_quot.terms.push(factor);
+                    quot.push(-factor);
 
                     continue 'outer;
                 } else {
@@ -55,10 +62,12 @@ where
                     // continuing.
                     let can_stop = lt.monomial > t.monomial;
 
-                    rem.terms.push(t);
+                    rem.push(t);
 
                     if can_stop {
-                        rem.terms.extend(iter);
+                        for e in iter {
+                            rem.push(e);
+                        }
                         break;
                     }
                 }
@@ -67,7 +76,12 @@ where
             break;
         }
 
-        Some((-neg_quot, rem))
+        Some((quot, rem))
+    }
+
+    pub fn div_rem(self, divisor: &Self) -> Option<(Self, Self)> {
+        self.long_division::<PolyBuilder<_, _, _, _>, PolyBuilder<_, _, _, _>>(divisor)
+            .map(|(quot, div)| (quot.polynomial, div.polynomial))
     }
 
     // Divide all coefficients by the leading coefficients.
@@ -85,6 +99,31 @@ where
     }
 }
 
+pub struct PolyBuilder<O, I, C, P> {
+    pub polynomial: Polynomial<O, I, C, P>,
+}
+
+impl<O, I, C, P> Default for PolyBuilder<O, I, C, P> {
+    fn default() -> Self {
+        Self {
+            polynomial: Polynomial { terms: Vec::new() },
+        }
+    }
+}
+
+impl<O, I, C, P> TermAccumulator<O, I, C, P> for PolyBuilder<O, I, C, P> {
+    fn push(&mut self, t: Term<O, I, C, P>) {
+        self.polynomial.terms.push(t);
+    }
+}
+
+#[derive(Default)]
+struct Discarder {}
+
+impl<O, I, C, P> TermAccumulator<O, I, C, P> for Discarder {
+    fn push(&mut self, _: Term<O, I, C, P>) {}
+}
+
 impl<'a, O, I, C, P> std::ops::Div<&'a Self> for Polynomial<O, I, C, P>
 where
     O: Ordering,
@@ -95,7 +134,10 @@ where
     type Output = Self;
 
     fn div(self, rhs: &Self) -> Self {
-        self.div_rem(rhs).unwrap().0
+        self.long_division::<PolyBuilder<O, I, C, P>, Discarder>(rhs)
+            .unwrap()
+            .0
+            .polynomial
     }
 }
 
@@ -109,7 +151,10 @@ where
     type Output = Self;
 
     fn rem(self, rhs: &Self) -> Self {
-        self.div_rem(rhs).unwrap().1
+        self.long_division::<Discarder, PolyBuilder<O, I, C, P>>(rhs)
+            .unwrap()
+            .1
+            .polynomial
     }
 }
 

@@ -8,6 +8,7 @@ num = "0.4.0"
 rand = "0.8.4"
 
 [dependencies]
+mimalloc = { version = "*", default-features = false }
 num-traits = "0.2"
 itertools = "0.10.1"
 zokrates_core = { git = "https://github.com/Zokrates/ZoKrates.git" }

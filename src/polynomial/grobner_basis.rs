@@ -15,7 +15,11 @@ use std::{
     collections::{BTreeMap, HashMap},
 };
 
-use super::{division::InvertibleCoefficient, monomial_ordering::Ordering, Coefficient, Monomial};
+use super::{
+    division::{InvertibleCoefficient, PolyBuilder, TermAccumulator},
+    monomial_ordering::Ordering,
+    Coefficient, Monomial,
+};
 
 /// Replace polynomial variables so that they have an order that is
 /// more suitable to calculate the Gröbner Basis, according to this:
@@ -66,6 +70,37 @@ where
     var_map
 }
 
+#[derive(Default)]
+struct CallDetector {
+    called: bool,
+}
+
+impl<O, I, C, P> TermAccumulator<O, I, C, P> for CallDetector {
+    fn push(&mut self, _: Term<O, I, C, P>) {
+        self.called = true;
+    }
+}
+
+/// Reduce one polynomial with respect to another.
+/// This is kind of a multi-variable division, and the return is the remainder.
+fn reduction_step<O, I, C, P>(
+    p: &mut Polynomial<O, I, C, P>,
+    reference: &Polynomial<O, I, C, P>,
+) -> bool
+where
+    O: Ordering,
+    I: Id,
+    C: InvertibleCoefficient,
+    P: Power,
+{
+    let (quot, rem) = std::mem::replace(p, Polynomial::zero())
+        .long_division::<CallDetector, PolyBuilder<O, I, C, P>>(reference)
+        .unwrap();
+    *p = rem.polynomial;
+
+    quot.called
+}
+
 struct ReducedSet<O, I, C, P> {
     next_id: usize,
     ordered_set: BTreeMap<(Polynomial<O, I, C, P>, usize), Cell<usize>>,
@@ -90,7 +125,6 @@ where
 
         let mut p_key = (p, self.next_id);
 
-        let mut iter_count = 0usize;
         'outer: loop {
             // Find first element to reduce. Must do this so that p is not borrowed
             // during the iteration, so it can be mutated.
@@ -103,10 +137,7 @@ where
 
             // Try to reduce using every polynomial <= p in g, in decreasing order:
             for gp in self.ordered_set.range(..=first).rev() {
-                iter_count += 1;
-                let (quot, rem) = p_key.0.div_rem(&gp.0 .0).unwrap();
-                p_key.0 = rem;
-                if !quot.is_zero() {
+                if reduction_step(&mut p_key.0, &gp.0 .0) {
                     was_reduced = true;
 
                     if p_key.0.is_constant() {
@@ -121,7 +152,6 @@ where
             break;
         }
 
-        println!("Reduction iter count: {}", iter_count);
         (was_reduced, p_key.0)
     }
 
@@ -150,22 +180,21 @@ where
             // Reduce all self w.r.t to p
             let key = (p, 0);
             let mut to_reduce = self.ordered_set.split_off(&key);
-            while let Some(((q, id), val)) = to_reduce.pop_first() {
-                let (quot, rem) = q.div_rem(&key.0).unwrap();
-                if quot.is_zero() {
+            while let Some(((mut q, id), val)) = to_reduce.pop_first() {
+                if !reduction_step(&mut q, &key.0) {
                     // Polynomial was not modified, insert back into self:
-                    self.ordered_set.insert((rem, id), val);
-                } else if rem.is_constant() {
-                    // If it is constant, we can finish, otherwise do nothing.
-                    if !rem.is_zero() {
-                        self.set_one(rem);
+                    self.ordered_set.insert((q, id), val);
+                } else if q.is_constant() {
+                    // If it is non-zero constant, we can finish. If zero, do nothing.
+                    if !q.is_zero() {
+                        self.set_one(q);
                         return;
                     }
                 } else {
                     // Polynomial was reduced to some non-constant, insert in the set to be
                     // inserted back. It can be inserted there because it is completely
                     // reduced w.r.t. self and p:
-                    to_insert.push(rem);
+                    to_insert.push(q);
                 }
             }
 
@@ -269,11 +298,23 @@ where
         println!("{}", p);
     }
 
-    while let Some((elem, next_to_spar)) = gb
-        .ordered_set
-        .iter()
-        .find(|((_, id), next_to_spar)| next_to_spar.get() < *id)
-    {
+    while let Some(((elem, next_to_spar), _)) = gb.ordered_set.iter().fold(None, |acc, e| {
+        if e.1.get() < e.0 .1 {
+            let nterms = e.0 .0.terms.len();
+            match acc {
+                None => Some((e, nterms)),
+                Some((c, c_nterms)) => {
+                    if c_nterms < nterms {
+                        Some((c, c_nterms))
+                    } else {
+                        Some((e, nterms))
+                    }
+                }
+            }
+        } else {
+            acc
+        }
+    }) {
         let mut partner = elem;
 
         for e in gb.ordered_set.keys() {
