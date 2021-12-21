@@ -70,19 +70,8 @@ where
     var_map
 }
 
-#[derive(Default)]
-struct CallDetector {
-    called: bool,
-}
-
-impl<O, I, C, P> TermAccumulator<O, I, C, P> for CallDetector {
-    fn push(&mut self, _: Term<O, I, C, P>) {
-        self.called = true;
-    }
-}
-
 /// Reduce just the leading term of one polynomial with respect to another.
-fn fast_reduction_step<O, I, C, P>(
+fn lt_reduction_step<O, I, C, P>(
     p: &mut Polynomial<O, I, C, P>,
     reference: &Polynomial<O, I, C, P>,
 ) -> bool
@@ -130,6 +119,17 @@ where
     }
 }
 
+#[derive(Default)]
+struct CallDetector {
+    called: bool,
+}
+
+impl<O, I, C, P> TermAccumulator<O, I, C, P> for CallDetector {
+    fn push(&mut self, _: Term<O, I, C, P>) {
+        self.called = true;
+    }
+}
+
 /// Reduce one polynomial with respect to another.
 fn reduction_step<O, I, C, P>(
     p: &mut Polynomial<O, I, C, P>,
@@ -168,51 +168,31 @@ where
         }
     }
 
-    fn reduction(
-        &self,
-        p: Polynomial<O, I, C, P>,
-        reduction_step: impl Fn(&mut Polynomial<O, I, C, P>, &Polynomial<O, I, C, P>) -> bool,
-    ) -> (bool, Polynomial<O, I, C, P>) {
+    fn reduce(&self, p: Polynomial<O, I, C, P>) -> (bool, Polynomial<O, I, C, P>) {
         let mut was_reduced = false;
 
+        let mut reduced = Vec::new();
         let mut p_key = (p, self.next_id);
 
-        'outer: loop {
+        'outer: while !p_key.0.terms.is_empty() {
             // Find first element to reduce. Must do this so that p is not borrowed
             // during the iteration, so it can be mutated.
             let first = self.ordered_set.range(..=&p_key).rev().next();
-            let first = if let Some((k, _)) = first {
-                k
-            } else {
-                break;
+            if let Some((first, _)) = first {
+                // Try to reduce using every polynomial <= p in g, in decreasing order:
+                for gp in self.ordered_set.range(..=first).rev() {
+                    if lt_reduction_step(&mut p_key.0, &gp.0 .0) {
+                        was_reduced = true;
+                        continue 'outer;
+                    }
+                }
             };
 
-            // Try to reduce using every polynomial <= p in g, in decreasing order:
-            for gp in self.ordered_set.range(..=first).rev() {
-                if reduction_step(&mut p_key.0, &gp.0 .0) {
-                    was_reduced = true;
-
-                    if p_key.0.is_constant() {
-                        // Can't be further reduced
-                        break 'outer;
-                    }
-                    continue 'outer;
-                }
-            }
-
-            // Could not be reduced with any polynomial in self, so stop:
-            break;
+            // Leading term could not be reduced by any polynomial in self, so remove it for further reducing:
+            reduced.push(p_key.0.terms.remove(0));
         }
 
-        (was_reduced, p_key.0)
-    }
-
-    fn reduce(&self, p: Polynomial<O, I, C, P>) -> (bool, Polynomial<O, I, C, P>) {
-        self.reduction(p, reduction_step)
-    }
-
-    fn fast_reduce(&self, p: Polynomial<O, I, C, P>) -> (bool, Polynomial<O, I, C, P>) {
-        self.reduction(p, fast_reduction_step)
+        (was_reduced, Polynomial { terms: reduced })
     }
 
     fn set_one(&mut self, p: Polynomial<O, I, C, P>) {
@@ -391,9 +371,7 @@ where
 
         if partner.1 < elem.1 {
             let new_p = spar(&elem.0, &partner.0);
-            println!("Sparred! Fast reducing ...");
-            let new_p = gb.fast_reduce(new_p).1;
-            println!("Fast reduced! Inserting:");
+            println!("Sparred! Inserting ...");
             gb.insert(new_p);
             println!("Inserted! New set:");
 
