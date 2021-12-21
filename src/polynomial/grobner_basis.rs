@@ -11,8 +11,9 @@ use crate::{
 use itertools::Itertools;
 use num_traits::Zero;
 use std::{
+    cell::Cell,
     cmp::Reverse,
-    collections::{BTreeSet, HashMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     rc::Rc,
 };
 
@@ -300,6 +301,212 @@ where
     P: Power,
 {
     grobner_basis(input.map(|p| Rc::new(p)).collect())
+}
+
+struct ReducedSet<O, I, C, P> {
+    next_id: usize,
+    ordered_set: BTreeMap<(Polynomial<O, I, C, P>, usize), Cell<usize>>,
+}
+
+impl<O, I, C, P> ReducedSet<O, I, C, P>
+where
+    O: Ordering,
+    I: Id,
+    C: InvertibleCoefficient,
+    P: Power,
+{
+    fn new() -> Self {
+        Self {
+            next_id: 0,
+            ordered_set: BTreeMap::new(),
+        }
+    }
+
+    fn reduce(&self, mut p: Polynomial<O, I, C, P>) -> (bool, Polynomial<O, I, C, P>) {
+        let mut was_reduced = false;
+
+        'outer: loop {
+            // Try to reduce using every polynomial <= p in g, in decreasing order:
+            for gp in self.ordered_set.range(..=&(p, self.next_id)).rev() {
+                let (quot, rem) = p.div_rem(&gp.0 .0).unwrap();
+                p = rem;
+                if !quot.is_zero() {
+                    was_reduced = true;
+
+                    if p.is_constant() {
+                        // Can't be further reduced
+                        break 'outer;
+                    }
+                    continue 'outer;
+                }
+            }
+
+            // Could not reduced with any polynomial in self, so stop:
+            break;
+        }
+
+        (was_reduced, p)
+    }
+
+    fn set_one(&mut self, p: Polynomial<O, I, C, P>) {
+        self.ordered_set = BTreeMap::new();
+        self.ordered_set.insert((p, self.next_id), Cell::new(0));
+        self.next_id += 1;
+    }
+
+    fn insert(&mut self, p: Polynomial<O, I, C, P>) {
+        let p = self.reduce(p).1;
+        if p.is_constant() {
+            // p is either reduced to zero, so we do nothing, or is constant, so we
+            // can set self to p and return (because p divides everything there).
+            if !p.is_zero() {
+                self.set_one(p);
+            }
+            return;
+        }
+
+        // All to_insert must reduced w.r.t. self:
+        let mut to_insert = Vec::new();
+        to_insert.push(p);
+
+        while let Some(p) = to_insert.pop() {
+            let key = (p, 0);
+            let mut to_reduce = self.ordered_set.split_off(&key);
+            while let Some(((q, id), val)) = to_reduce.pop_first() {
+                let (quot, rem) = q.div_rem(&key.0).unwrap();
+                if quot.is_zero() {
+                    // Polynomial was not modified, insert back into self:
+                    self.ordered_set.insert((rem, id), val);
+                } else if rem.is_constant() {
+                    // If it is constant, we can finish, otherwise do nothing.
+                    if !rem.is_zero() {
+                        self.set_one(rem);
+                        return;
+                    }
+                } else {
+                    // Polynomial was reduced to some non-constant, insert in the set to be
+                    // inserted back. It can be inserted there because it is completely
+                    // reduced w.r.t. self and p:
+                    to_insert.push(rem);
+                }
+            }
+
+            // p is reduced by and have reduced every remaining member of self,
+            // so it can be included in self.
+            self.ordered_set.insert((key.0, self.next_id), Cell::new(0));
+            self.next_id += 1;
+        }
+    }
+}
+
+fn spar<O, I, C, P>(
+    p: &Polynomial<O, I, C, P>,
+    q: &Polynomial<O, I, C, P>,
+) -> Polynomial<O, I, C, P>
+where
+    O: Ordering,
+    I: Id,
+    C: InvertibleCoefficient,
+    P: Power,
+{
+    let sat_diff = |a: &Term<O, I, C, P>, b: &Term<O, I, C, P>| {
+        let product = ordered_ops::saturating_sub(
+            a.monomial.product.iter().cloned(),
+            b.monomial.product.iter(),
+            |x, y| y.id.cmp(&x.id),
+            |mut x, y| {
+                x.power = x.power.saturating_sub(&y.power);
+                if x.power.is_zero() {
+                    None
+                } else {
+                    Some(x)
+                }
+            },
+        );
+
+        let total_power = product.iter().fold(P::zero(), |mut acc, v| {
+            acc += &v.power;
+            acc
+        });
+
+        let monomial = Monomial {
+            product,
+            total_power,
+            _phantom_ordering: std::marker::PhantomData,
+        };
+
+        Term {
+            monomial,
+            coefficient: a.coefficient.clone(),
+        }
+    };
+
+    let mut iter_p = p.terms.iter();
+    let mut iter_q = q.terms.iter();
+
+    if let (Some(ini_p), Some(ini_q)) = (iter_p.next(), iter_q.next()) {
+        if !ini_p.monomial.has_shared_variables(&ini_q.monomial) {
+            return Polynomial::zero();
+        }
+
+        let p_complement = sat_diff(ini_q, ini_p);
+        let mut q_complement = sat_diff(ini_p, ini_q);
+
+        // q_complement must be negative, so the sum would eliminate the first term:
+        q_complement.coefficient = {
+            let mut neg = C::zero();
+            neg -= q_complement.coefficient;
+            neg
+        };
+
+        Polynomial {
+            terms: Polynomial::sum_terms(
+                iter_p.cloned().map(|x| x * p_complement.clone()),
+                iter_q.cloned().map(|x| x * q_complement.clone()),
+            ),
+        }
+    } else {
+        Polynomial::zero()
+    }
+}
+
+pub fn grobner_basis2<O, I, C, P>(
+    input: &mut dyn Iterator<Item = Polynomial<O, I, C, P>>,
+) -> Vec<Polynomial<O, I, C, P>>
+where
+    O: Ordering,
+    I: Id,
+    C: InvertibleCoefficient,
+    P: Power,
+{
+    let mut gb = ReducedSet::new();
+
+    for p in input {
+        gb.insert(p);
+    }
+
+    while let Some((elem, next_to_spar)) = gb
+        .ordered_set
+        .iter()
+        .rev()
+        .find(|((_, id), next_to_spar)| next_to_spar.get() < *id)
+    {
+        let mut partner = elem;
+
+        for e in gb.ordered_set.keys() {
+            if e.1 >= next_to_spar.get() && e.1 < partner.1 {
+                partner = e;
+            }
+        }
+
+        if partner.1 < elem.1 {
+            next_to_spar.set(partner.1 + 1);
+            let new_p = spar(&elem.0, &partner.0);
+            gb.insert(new_p);
+        }
+    }
+
+    Vec::new()
 }
 
 #[cfg(test)]
