@@ -3,7 +3,6 @@ use super::{monomial_ordering::Ordering, Coefficient, Id, Polynomial, Power, Ter
 pub trait InvertibleCoefficient
 where
     Self: Coefficient
-        + Ord
         + for<'a> std::ops::Mul<&'a Self, Output = Self>
         + num_traits::ops::inv::Inv<Output = Self>,
 {

@@ -186,10 +186,10 @@ mod tests {
                 - z,
         ];
 
-        let gb = polynomial::grobner_basis::grobner_basis_from_iter(input.into_iter());
+        let gb = polynomial::grobner_basis::grobner_basis(&mut input.into_iter());
         for e in gb {
             let inv = e.get_terms()[0].get_coefficient().clone().inv();
-            println!("{}", &*e * inv);
+            println!("{}", &e * inv);
         }
     }
 }

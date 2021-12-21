@@ -328,24 +328,6 @@ where
         &self.terms[..]
     }
 
-    pub fn monomials_cmp(&self, rhs: &Self) -> std::cmp::Ordering {
-        // Compare monomials:
-        for (a, b) in self.terms.iter().zip(rhs.terms.iter()) {
-            let cmp = a.monomial.cmp(&b.monomial);
-            if cmp != CmpOrd::Equal {
-                return cmp;
-            }
-        }
-
-        // If all the leading monomials are equal, the one with most terms is bigger
-        let cmp = self.terms.len().cmp(&rhs.terms.len());
-        if cmp != CmpOrd::Equal {
-            return cmp;
-        }
-
-        return CmpOrd::Equal;
-    }
-
     pub fn is_constant(&self) -> bool {
         match self.terms.get(0) {
             None => true,
@@ -372,36 +354,6 @@ where
         }
 
         ret
-    }
-
-    /// First compare by monomials, then by size, in last case compare by coefficient value:
-    fn cmp_with_coef<FCmp, FCons, Ret>(
-        &self,
-        rhs: &Self,
-        eq: Ret,
-        coef_cmp: FCmp,
-        constructor: FCons,
-    ) -> Ret
-    where
-        FCmp: Fn(&C, &C) -> Ret,
-        FCons: Fn(std::cmp::Ordering) -> Ret,
-        Ret: PartialEq,
-    {
-        // Compare by monomials and size.
-        let cmp = self.monomials_cmp(rhs);
-        if cmp != CmpOrd::Equal {
-            return constructor(cmp);
-        }
-
-        // Last resort, compare coefficients.
-        for (a, b) in self.terms.iter().zip(rhs.terms.iter()) {
-            let cmp = coef_cmp(&a.coefficient, &b.coefficient);
-            if cmp != eq {
-                return cmp;
-            }
-        }
-
-        return eq;
     }
 
     fn sum_terms(
@@ -492,11 +444,17 @@ impl<O, I, C, P> Ord for Polynomial<O, I, C, P>
 where
     O: Ordering,
     I: Id,
-    C: Coefficient + Ord,
+    C: Coefficient,
     P: Power,
 {
-    fn cmp(&self, rhs: &Self) -> std::cmp::Ordering {
-        self.cmp_with_coef(rhs, CmpOrd::Equal, C::cmp, |x| x)
+    /// Compare by leading monomials. Non-constant > non-zero constant > zero.
+    fn cmp(&self, rhs: &Self) -> CmpOrd {
+        match (self.terms.get(0), rhs.terms.get(0)) {
+            (Some(a), Some(b)) => a.monomial.cmp(&b.monomial),
+            (None, Some(_)) => CmpOrd::Less,
+            (Some(_), None) => CmpOrd::Greater,
+            (None, None) => CmpOrd::Equal,
+        }
     }
 }
 
@@ -504,11 +462,11 @@ impl<O, I, C, P> PartialOrd for Polynomial<O, I, C, P>
 where
     O: Ordering,
     I: Id,
-    C: Coefficient + PartialOrd,
+    C: Coefficient,
     P: Power,
 {
-    fn partial_cmp(&self, rhs: &Self) -> Option<std::cmp::Ordering> {
-        self.cmp_with_coef(rhs, Some(CmpOrd::Equal), C::partial_cmp, |x| Some(x))
+    fn partial_cmp(&self, rhs: &Self) -> Option<CmpOrd> {
+        Some(self.cmp(rhs))
     }
 }
 

@@ -8,13 +8,11 @@ use crate::{
     polynomial::{Id, Polynomial, Power, Term},
 };
 
-use itertools::Itertools;
 use num_traits::Zero;
 use std::{
     cell::Cell,
     cmp::Reverse,
-    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
-    rc::Rc,
+    collections::{BTreeMap, HashMap},
 };
 
 use super::{division::InvertibleCoefficient, monomial_ordering::Ordering, Coefficient, Monomial};
@@ -68,241 +66,6 @@ where
     var_map
 }
 
-fn reduce<O, I, C, P>(
-    p: &mut Polynomial<O, I, C, P>,
-    g: &BTreeSet<Rc<Polynomial<O, I, C, P>>>,
-) -> bool
-where
-    O: Ordering,
-    I: Id,
-    C: InvertibleCoefficient,
-    P: Power,
-{
-    let mut was_reduced = false;
-
-    'outer: loop {
-        // Try to reduce using every polynomial <= p in g, in decreasing order:
-        for gp in g.range::<Polynomial<O, I, C, P>, _>(..=&*p).rev() {
-            let divisor = std::mem::replace(p, Polynomial::zero());
-            let (quot, rem) = divisor.div_rem(&gp).unwrap();
-            *p = rem;
-            if !quot.is_zero() {
-                was_reduced = true;
-
-                if p.is_constant() {
-                    // Can't be further reduced
-                    break 'outer;
-                }
-                continue 'outer;
-            }
-        }
-
-        // Could not reduced with any polynomial in g, so stop:
-        break;
-    }
-
-    was_reduced
-}
-
-/// g must be the sole owner of the polynomials, otherwise this will panic
-fn autoreduce<O, I, C, P>(
-    mut g: BTreeSet<Rc<Polynomial<O, I, C, P>>>,
-) -> BTreeSet<Rc<Polynomial<O, I, C, P>>>
-where
-    O: Ordering,
-    I: Id,
-    C: InvertibleCoefficient,
-    P: Power,
-{
-    loop {
-        let mut next_g = BTreeSet::new();
-        let mut modified = false;
-        while let Some(mut p) = g.pop_last() {
-            if reduce(Rc::get_mut(&mut p).unwrap(), &g) {
-                modified = true;
-            }
-            if !p.is_zero() {
-                if p.is_constant() {
-                    // Cut short the calculation in case of constant
-                    return BTreeSet::from([p]);
-                }
-                next_g.insert(p);
-            }
-        }
-
-        if !modified {
-            return next_g;
-        }
-        g = next_g;
-    }
-}
-
-fn spar_reduce<O, I, C, P>(
-    p: &Polynomial<O, I, C, P>,
-    q: &Polynomial<O, I, C, P>,
-    current_set: &BTreeSet<Rc<Polynomial<O, I, C, P>>>,
-) -> Option<Polynomial<O, I, C, P>>
-where
-    O: Ordering,
-    I: Id,
-    C: InvertibleCoefficient,
-    P: Power,
-{
-    let ini_p = p.terms.get(0)?;
-    let ini_q = q.terms.get(0)?;
-
-    let sat_diff = |a: &Term<O, I, C, P>, b: &Term<O, I, C, P>| {
-        let product = ordered_ops::saturating_sub(
-            a.monomial.product.iter().cloned(),
-            b.monomial.product.iter(),
-            |x, y| y.id.cmp(&x.id),
-            |mut x, y| {
-                x.power = x.power.saturating_sub(&y.power);
-                if x.power.is_zero() {
-                    None
-                } else {
-                    Some(x)
-                }
-            },
-        );
-
-        let total_power = product.iter().fold(P::zero(), |mut acc, v| {
-            acc += &v.power;
-            acc
-        });
-
-        let monomial = Monomial {
-            product,
-            total_power,
-            _phantom_ordering: std::marker::PhantomData,
-        };
-
-        Term {
-            monomial,
-            coefficient: a.coefficient.clone(),
-        }
-    };
-
-    let p_complement = sat_diff(ini_q, ini_p);
-    let mut q_complement = sat_diff(ini_p, ini_q);
-
-    // q_complement must be negative, so the sum would eliminate the first term:
-    q_complement.coefficient = {
-        let mut neg = C::zero();
-        neg -= q_complement.coefficient;
-        neg
-    };
-
-    let mut spar = Polynomial {
-        terms: Polynomial::sum_terms(
-            p.terms[1..]
-                .iter()
-                .cloned()
-                .map(|x| x * p_complement.clone()),
-            q.terms[1..]
-                .iter()
-                .cloned()
-                .map(|x| x * q_complement.clone()),
-        ),
-    };
-
-    reduce(&mut spar, current_set);
-
-    if spar.is_zero() {
-        None
-    } else {
-        Some(spar)
-    }
-}
-
-pub fn grobner_basis<O, I, C, P>(
-    input: BTreeSet<Rc<Polynomial<O, I, C, P>>>,
-) -> BTreeSet<Rc<Polynomial<O, I, C, P>>>
-where
-    O: Ordering,
-    I: Id,
-    C: InvertibleCoefficient,
-    P: Power,
-{
-    let mut current_set = input;
-
-    'restart: loop {
-        print!("autoreducing ...");
-        current_set = autoreduce(current_set);
-
-        {
-            let mut total_term_count = 0;
-            let mut total_var_count = 0;
-            for p in current_set.iter() {
-                total_term_count += p.terms.len();
-                for t in p.terms.iter() {
-                    total_var_count += t.monomial.product.len();
-                }
-            }
-
-            println!(
-                " poly count: {}, total term count: {}, total var count: {}",
-                current_set.len(),
-                total_term_count,
-                total_var_count
-            );
-        }
-
-        let mut current_vec: Vec<_> = current_set.iter().rev().cloned().collect();
-
-        let mut work_queue: VecDeque<Box<dyn Iterator<Item = (usize, usize)>>> = VecDeque::new();
-        work_queue.push_back(Box::new((0..current_vec.len()).tuple_combinations()));
-
-        let mut new_count = 0u16;
-        while let Some(work) = work_queue.pop_front() {
-            for (i, j) in work {
-                if let Some(new_p) = spar_reduce(&current_vec[i], &current_vec[j], &current_set) {
-                    // Cut short the calculation in case of constant:
-                    let new_p = Rc::new(new_p);
-                    if new_p.is_constant() {
-                        return BTreeSet::from([new_p]);
-                    }
-
-                    let curr_len = current_vec.len();
-                    work_queue.push_back(Box::new(
-                        std::iter::once(curr_len).cartesian_product(0..curr_len),
-                    ));
-
-                    println!(
-                        "#### {},  deg: {:?}",
-                        current_vec.len(),
-                        new_p.terms[0].monomial.total_power
-                    );
-
-                    current_vec.push(new_p.clone());
-                    current_set.insert(new_p);
-
-                    new_count += 1;
-                    if new_count >= 1 {
-                        continue 'restart;
-                    }
-                }
-            }
-        }
-
-        break;
-    }
-
-    autoreduce(current_set)
-}
-
-pub fn grobner_basis_from_iter<O, I, C, P>(
-    input: impl Iterator<Item = Polynomial<O, I, C, P>>,
-) -> BTreeSet<Rc<Polynomial<O, I, C, P>>>
-where
-    O: Ordering,
-    I: Id,
-    C: InvertibleCoefficient,
-    P: Power,
-{
-    grobner_basis(input.map(|p| Rc::new(p)).collect())
-}
-
 struct ReducedSet<O, I, C, P> {
     next_id: usize,
     ordered_set: BTreeMap<(Polynomial<O, I, C, P>, usize), Cell<usize>>,
@@ -322,18 +85,31 @@ where
         }
     }
 
-    fn reduce(&self, mut p: Polynomial<O, I, C, P>) -> (bool, Polynomial<O, I, C, P>) {
+    fn reduce(&self, p: Polynomial<O, I, C, P>) -> (bool, Polynomial<O, I, C, P>) {
         let mut was_reduced = false;
 
+        let mut p_key = (p, self.next_id);
+
+        let mut iter_count = 0usize;
         'outer: loop {
+            // Find first element to reduce. Must do this so that p is not borrowed
+            // during the iteration, so it can be mutated.
+            let first = self.ordered_set.range(..=&p_key).rev().next();
+            let first = if let Some((k, _)) = first {
+                k
+            } else {
+                break;
+            };
+
             // Try to reduce using every polynomial <= p in g, in decreasing order:
-            for gp in self.ordered_set.range(..=&(p, self.next_id)).rev() {
-                let (quot, rem) = p.div_rem(&gp.0 .0).unwrap();
-                p = rem;
+            for gp in self.ordered_set.range(..=first).rev() {
+                iter_count += 1;
+                let (quot, rem) = p_key.0.div_rem(&gp.0 .0).unwrap();
+                p_key.0 = rem;
                 if !quot.is_zero() {
                     was_reduced = true;
 
-                    if p.is_constant() {
+                    if p_key.0.is_constant() {
                         // Can't be further reduced
                         break 'outer;
                     }
@@ -341,11 +117,12 @@ where
                 }
             }
 
-            // Could not reduced with any polynomial in self, so stop:
+            // Could not be reduced with any polynomial in self, so stop:
             break;
         }
 
-        (was_reduced, p)
+        println!("Reduction iter count: {}", iter_count);
+        (was_reduced, p_key.0)
     }
 
     fn set_one(&mut self, p: Polynomial<O, I, C, P>) {
@@ -355,21 +132,22 @@ where
     }
 
     fn insert(&mut self, p: Polynomial<O, I, C, P>) {
-        let p = self.reduce(p).1;
-        if p.is_constant() {
-            // p is either reduced to zero, so we do nothing, or is constant, so we
-            // can set self to p and return (because p divides everything there).
-            if !p.is_zero() {
-                self.set_one(p);
-            }
-            return;
-        }
-
-        // All to_insert must reduced w.r.t. self:
-        let mut to_insert = Vec::new();
-        to_insert.push(p);
+        let mut to_insert = vec![p];
 
         while let Some(p) = to_insert.pop() {
+            let p = self.reduce(p).1;
+
+            if p.is_constant() {
+                // p is either reduced to zero, so we do nothing, or is constant, so we
+                // can set self to p and return (because p divides everything there).
+                if !p.is_zero() {
+                    self.set_one(p);
+                    return;
+                }
+                continue;
+            }
+
+            // Reduce all self w.r.t to p
             let key = (p, 0);
             let mut to_reduce = self.ordered_set.split_off(&key);
             while let Some(((q, id), val)) = to_reduce.pop_first() {
@@ -391,8 +169,8 @@ where
                 }
             }
 
-            // p is reduced by and have reduced every remaining member of self,
-            // so it can be included in self.
+            // p have reduced every remaining member of self and to_insert, and have
+            // been reduced by self, so it can be included in self.
             self.ordered_set.insert((key.0, self.next_id), Cell::new(0));
             self.next_id += 1;
         }
@@ -470,25 +248,30 @@ where
     }
 }
 
-pub fn grobner_basis2<O, I, C, P>(
+pub fn grobner_basis<O, I, C, P>(
     input: &mut dyn Iterator<Item = Polynomial<O, I, C, P>>,
 ) -> Vec<Polynomial<O, I, C, P>>
 where
     O: Ordering,
-    I: Id,
-    C: InvertibleCoefficient,
-    P: Power,
+    I: Id + std::fmt::Display,
+    C: InvertibleCoefficient + std::fmt::Display,
+    P: Power + std::fmt::Display,
 {
     let mut gb = ReducedSet::new();
 
     for p in input {
+        println!("{}", p);
         gb.insert(p);
+    }
+
+    println!("=======================");
+    for (p, _) in gb.ordered_set.keys() {
+        println!("{}", p);
     }
 
     while let Some((elem, next_to_spar)) = gb
         .ordered_set
         .iter()
-        .rev()
         .find(|((_, id), next_to_spar)| next_to_spar.get() < *id)
     {
         let mut partner = elem;
@@ -498,15 +281,34 @@ where
                 partner = e;
             }
         }
+        next_to_spar.set(partner.1 + 1);
+
+        println!(
+            "==================\n\nWorking on {} and {} ...",
+            elem.1, partner.1
+        );
 
         if partner.1 < elem.1 {
-            next_to_spar.set(partner.1 + 1);
             let new_p = spar(&elem.0, &partner.0);
+            println!("Sparred! Reducing ...");
             gb.insert(new_p);
+            println!("Reduced! New set:");
+
+            for ((p, id), nts) in gb.ordered_set.iter() {
+                println!(
+                    " {}: {} (LT deg: {}, term count: {})",
+                    id,
+                    nts.get(),
+                    p.terms[0].monomial.total_power,
+                    p.terms.len()
+                );
+            }
+        } else {
+            println!("Skipped");
         }
     }
 
-    Vec::new()
+    gb.ordered_set.into_iter().map(|((p, _), _)| p).collect()
 }
 
 #[cfg(test)]
@@ -541,7 +343,7 @@ mod tests {
             x.clone() - z.clone(),
         ];
 
-        let grobner_basis = grobner_basis_from_iter(eqs.into_iter());
+        let grobner_basis = grobner_basis(&mut eqs.into_iter());
         println!("Gröbner Basis:");
         for p in grobner_basis.iter() {
             println!("{}", p);
@@ -555,7 +357,7 @@ mod tests {
 
         for (result, expected) in grobner_basis.iter().zip(expected_solution) {
             assert_eq!(
-                result.as_ref() * result.terms[0].coefficient.clone().inv(),
+                result * result.terms[0].coefficient.clone().inv(),
                 &expected * expected.terms[0].coefficient.clone().inv()
             );
         }
@@ -570,7 +372,7 @@ mod tests {
             x.clone().pow(4u8) + x.clone() * y.clone().pow(3u8) - r(70),
         ];
 
-        let grobner_basis = grobner_basis_from_iter(unsolvable.into_iter());
+        let grobner_basis = grobner_basis(&mut unsolvable.into_iter());
 
         assert_eq!(grobner_basis.len(), 1);
         let p = grobner_basis.first().unwrap();
@@ -582,15 +384,15 @@ mod tests {
     #[test]
     fn test_resilience_to_weird_input() {
         // Assert only the non-zero element remains:
-        /*let zero_in_the_set =
-            grobner_basis_from_iter([QPoly::new_constant(r(42)), QPoly::zero()].into_iter());
+        let zero_in_the_set =
+            grobner_basis(&mut [QPoly::new_constant(r(42)), QPoly::zero()].into_iter());
 
         assert_eq!(zero_in_the_set.len(), 1);
         let p = zero_in_the_set.first().unwrap();
-        assert!(p.is_constant() && !p.is_zero());*/
+        assert!(p.is_constant() && !p.is_zero());
 
         // Assert set is empty:
-        let empty: BTreeSet<Rc<QPoly>> = grobner_basis_from_iter([].into_iter());
+        let empty: Vec<QPoly> = grobner_basis(&mut [].into_iter());
         assert!(empty.is_empty());
     }
 }
