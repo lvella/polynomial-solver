@@ -16,7 +16,7 @@ use std::{
 };
 
 use super::{
-    division::{InvertibleCoefficient, PolyBuilder, TermAccumulator},
+    division::{InvertibleCoefficient, TermAccumulator},
     monomial_ordering::Ordering,
     Coefficient, Monomial,
 };
@@ -26,6 +26,8 @@ use super::{
 /// https://gitlab.trnsz.com/reduce-algebra/reduce-algebra/-/blob/master/packages/groebner/groebopt.red
 ///
 /// Returns a map from the old variables to the new ones.
+///
+/// PS: this heuristic sucks for my zokrates example
 pub fn reorder_vars_for_easier_gb<O, C, P>(
     polynomials: &mut Vec<Polynomial<O, usize, C, P>>,
 ) -> HashMap<usize, usize>
@@ -40,6 +42,7 @@ where
         for t in p.terms.iter() {
             for var in t.monomial.product.iter() {
                 let entry = var_map.entry(var.id).or_insert((P::zero(), 0usize));
+                // TODO: maybe the correct is to use variable power, not monomial power?
                 if entry.0 < t.monomial.total_power {
                     *entry = (t.monomial.total_power.clone(), 1);
                 } else {
@@ -50,7 +53,9 @@ where
     }
 
     let mut reordered: Vec<_> = var_map.keys().copied().collect();
-    reordered.sort_unstable_by_key(|id| var_map.get(id).unwrap());
+    // The id must be included in the sorting key so the result is deterministic,
+    // as the hash map is probably randomized for security.
+    reordered.sort_unstable_by_key(|id| (var_map.get(id).unwrap(), *id));
 
     let var_map: HashMap<usize, usize> = reordered.into_iter().zip(0..).collect();
 
@@ -130,25 +135,6 @@ impl<O, I, C, P> TermAccumulator<O, I, C, P> for CallDetector {
     }
 }
 
-/// Reduce one polynomial with respect to another.
-fn reduction_step<O, I, C, P>(
-    p: &mut Polynomial<O, I, C, P>,
-    reference: &Polynomial<O, I, C, P>,
-) -> bool
-where
-    O: Ordering,
-    I: Id,
-    C: InvertibleCoefficient,
-    P: Power,
-{
-    let (quot, rem) = std::mem::replace(p, Polynomial::zero())
-        .long_division::<CallDetector, PolyBuilder<O, I, C, P>>(reference)
-        .unwrap();
-    *p = rem.polynomial;
-
-    quot.called
-}
-
 struct ReducedSet<O, I, C, P> {
     next_id: usize,
     ordered_set: BTreeMap<(Polynomial<O, I, C, P>, usize), Cell<usize>>,
@@ -217,31 +203,40 @@ where
                 continue;
             }
 
-            // Reduce all self w.r.t to p
+            // Split the subset that might be reduced by p
             let key = (p, 0);
-            let mut to_reduce = self.ordered_set.split_off(&key);
-            while let Some(((mut q, id), val)) = to_reduce.pop_first() {
-                if !reduction_step(&mut q, &key.0) {
-                    // Polynomial was not modified, insert back into self:
-                    self.ordered_set.insert((q, id), val);
-                } else if q.is_constant() {
-                    // If it is non-zero constant, we can finish. If zero, do nothing.
-                    if !q.is_zero() {
-                        self.set_one(q);
-                        return;
-                    }
+            let mut unchanged_lt = Vec::new();
+            for mut e in self.ordered_set.split_off(&key) {
+                if lt_reduction_step(&mut e.0 .0, &key.0) {
+                    // Polynomial leading term was changed, so insert in the list to be inserted back.
+                    to_insert.push(e.0 .0);
                 } else {
-                    // Polynomial was reduced to some non-constant, insert in the set to be
-                    // inserted back. It can be inserted there because it is completely
-                    // reduced w.r.t. self and p:
-                    to_insert.push(q);
+                    // Leading term is unchanged: the polynomial itself might still need
+                    // reducing, but all others in self are still reduced w.r.t. to it.
+                    unchanged_lt.push(e);
                 }
             }
 
-            // p have reduced every remaining member of self and to_insert, and have
-            // been reduced by self, so it can be included in self.
+            // Now p cannot reduce any remaining element of self, and have been reduced by self, so it
+            // can be included in the set:
             self.ordered_set.insert((key.0, self.next_id), Cell::new(0));
             self.next_id += 1;
+
+            // Polynomials with unchanged leading term must be reduced and inserted back into self.
+            // It is done in increasing order so that each newly inserted polynomial might reduce
+            // the following ones.
+            for mut q in unchanged_lt {
+                let (was_reduced, new_poly) = self.reduce(q.0 .0);
+                if was_reduced {
+                    self.ordered_set
+                        .insert((new_poly, self.next_id), Cell::new(0));
+                    self.next_id += 1;
+                } else {
+                    // Polynomial is unchanged, insert element back as is:
+                    q.0 .0 = new_poly;
+                    self.ordered_set.insert(q.0, q.1);
+                }
+            }
         }
     }
 }

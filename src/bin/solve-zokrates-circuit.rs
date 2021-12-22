@@ -1,5 +1,5 @@
 use polynomial_solver::polynomial::grobner_basis::reorder_vars_for_easier_gb;
-use polynomial_solver::polynomial::monomial_ordering::Grevlex;
+use polynomial_solver::polynomial::monomial_ordering::{Grevlex, Lex};
 use polynomial_solver::polynomial::Term;
 use polynomial_solver::thread_prime_field::ThreadPrimeField;
 use std::{env, fs::File, io::BufReader};
@@ -72,11 +72,11 @@ fn solve<T: Field, I: Iterator<Item = ir::Statement<T>>>(ir_prog: ir::ProgIterat
         }
     }
 
-    println!("\nVariables reordered to:");
+    /*println!("\nVariables reordered to:");
     let var_map = reorder_vars_for_easier_gb(&mut poly_set);
     for (from, to) in var_map {
         println!("{} → {}", from, to);
-    }
+    }*/
 
     println!("\nGröbner Basis:");
 
