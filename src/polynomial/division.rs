@@ -25,6 +25,48 @@ where
     C: InvertibleCoefficient,
     P: Power,
 {
+    /// Test if one polynomial is divisible by another
+    pub fn is_divisible_by(&self, divisor: &Self) -> bool {
+        let lm = if let Some(term) = divisor.terms.get(0) {
+            &term.monomial
+        } else {
+            return false;
+        };
+
+        'terms_loop: for t in self.terms.iter() {
+            if t.monomial > *lm {
+                // there is no chance lm will divide any other term,
+                // stop searching
+                break;
+            }
+
+            let mut vars = t.monomial.product.iter();
+            'lm_vars_loop: for div_var in lm.product.iter() {
+                while let Some(var) = vars.next() {
+                    if var.id == div_var.id {
+                        if var.power >= div_var.power {
+                            // At least this variable of the term is divisible by lm,
+                            // proceed to next lm variable:
+                            continue 'lm_vars_loop;
+                        } else {
+                            // lm can not divide this term because lm var has higher
+                            // power than curremt var, proceed to next term:
+                            continue 'terms_loop;
+                        }
+                    }
+                }
+                // lm can not divide this term because there are lm vars not in this term,
+                // proceed to next term:
+                continue 'terms_loop;
+            }
+            // lm divides this term, so we can stop:
+            return true;
+        }
+
+        // no term is divisible:
+        false
+    }
+
     /// Calculates the quotient and remainder of the division of self by divisor.
     pub fn long_division<Q: TermAccumulator<O, I, C, P>, R: TermAccumulator<O, I, C, P>>(
         mut self,
