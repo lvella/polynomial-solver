@@ -1,7 +1,6 @@
 pub mod division;
 pub mod grobner_basis;
 pub mod monomial_ordering;
-pub mod square_free;
 
 use super::ordered_ops;
 use monomial_ordering::Ordering;
