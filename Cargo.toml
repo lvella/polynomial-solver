@@ -17,7 +17,7 @@ zokrates_field = { git = "https://github.com/Zokrates/ZoKrates.git" }
 [dependencies.rug]
 version = "1.13"
 default-features = false
-features = ["integer"]
+features = ["integer","float"]
 
 [profile.release]
 lto = "thin"

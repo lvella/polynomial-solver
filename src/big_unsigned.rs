@@ -158,16 +158,36 @@ impl Display for BigUnsigned {
     }
 }
 
+/// Integer part of natural logarithm
+fn log_rounded_down(x: &BigUnsigned) -> Option<u32> {
+    if x.is_zero() {
+        return None;
+    }
+
+    // Number of bits in the input.
+    let precision = x.value.significant_bits();
+
+    // Number of bits in the output.
+    // Since log(x) < log2(x), the number of bits necessary to represent log2(x)
+    // is also sufficient to represent log(x)
+    let out_precision = 32 - precision.leading_zeros();
+
+    let val = rug::Float::with_val(precision, &x.value);
+    let result = rug::Float::with_val_round(out_precision, val.ln_ref(), rug::float::Round::Down).0;
+
+    result.trunc().to_u32_saturating()
+}
+
 #[cfg(test)]
 mod tests {
     use num_traits::Pow;
 
     use crate::{
+        finite_field::ThreadPrimeField as GF,
         polynomial::{grobner_basis, monomial_ordering::Grevlex, Polynomial},
-        thread_prime_field::ThreadPrimeField as GF,
     };
 
-    use super::BigUnsigned;
+    use super::*;
 
     type BigPowerPoly = Polynomial<Grevlex, u8, GF, BigUnsigned>;
 
@@ -214,5 +234,12 @@ mod tests {
         for p in result {
             println!("{}", p);
         }
+    }
+
+    #[test]
+    fn rounded_log() {
+        let val: BigUnsigned = "57494484019950297298714791779054430733145287476371451639234598273457265190236497281645710125670234569125671239578621983462158436502385615357071".parse::<rug::Integer>().unwrap().into();
+
+        assert_eq!(log_rounded_down(&val), Some(328));
     }
 }

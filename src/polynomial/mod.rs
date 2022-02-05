@@ -45,6 +45,16 @@ pub struct VariablePower<I, P> {
     power: P,
 }
 
+impl<I, P> VariablePower<I, P>
+where
+    I: Id,
+    P: Power,
+{
+    pub fn get_id(&self) -> &I {
+        &self.id
+    }
+}
+
 #[derive(Debug)]
 pub struct Monomial<O: ?Sized, I, P> {
     // Product is sorted in decreasing order of id:
@@ -100,6 +110,14 @@ where
         }
 
         false
+    }
+
+    pub fn get_product(&self) -> &[VariablePower<I, P>] {
+        &self.product[..]
+    }
+
+    pub fn get_total_power(&self) -> &P {
+        &self.total_power
     }
 }
 
@@ -197,6 +215,10 @@ where
 
     pub fn get_coefficient(&self) -> &C {
         &self.coefficient
+    }
+
+    pub fn get_monomial(&self) -> &Monomial<O, I, P> {
+        &self.monomial
     }
 }
 

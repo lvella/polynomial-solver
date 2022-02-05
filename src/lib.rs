@@ -4,10 +4,12 @@
 #![feature(vec_retain_mut)]
 
 pub mod big_unsigned;
+pub mod finite_field;
 pub mod gcd;
-mod ordered_ops;
 pub mod polynomial;
-pub mod thread_prime_field;
+pub mod solvability;
+
+mod ordered_ops;
 
 use mimalloc::MiMalloc;
 

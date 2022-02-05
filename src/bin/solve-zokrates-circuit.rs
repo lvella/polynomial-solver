@@ -1,7 +1,7 @@
+use polynomial_solver::finite_field::ThreadPrimeField;
 use polynomial_solver::polynomial::grobner_basis::reorder_vars_for_easier_gb;
 use polynomial_solver::polynomial::monomial_ordering::Grevlex;
 use polynomial_solver::polynomial::Term;
-use polynomial_solver::thread_prime_field::ThreadPrimeField;
 use std::{env, fs::File, io::BufReader};
 use zokrates_core::flat_absy::FlatVariable;
 use zokrates_core::ir::Statement::Constraint;
