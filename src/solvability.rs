@@ -1,66 +1,21 @@
 use std::collections::HashSet;
 
+use num_traits::{One, Zero};
 use rug::Complete;
 
 use crate::{
-    big_unsigned::BigUnsigned,
     finite_field,
     polynomial::{self, Polynomial},
 };
-
-/// Simple tests that may tell if a single polynomial is solvable or not.
-/// Returns Some(true) if solvable, Some(false) if not, None if unknown.
-pub fn simple_solvability_tests<
-    O: polynomial::monomial_ordering::Ordering,
-    I: polynomial::Id,
-    C: polynomial::Coefficient,
-    P: polynomial::Power,
->(
-    poly: Polynomial<O, I, C, P>,
-) -> Option<bool> {
-    let terms = poly.get_terms();
-
-    // Get term that might be constant:
-    let last_term = match terms.last() {
-        None => {
-            // If terms are empty, polynomial is zero, which is trivially solvable:
-            return Some(true);
-        }
-        Some(term) => term,
-    };
-
-    // Test if polynomial has constant:
-    if !last_term.get_monomial().get_total_power().is_zero() {
-        // Polynomial has no constants, so it has a trivial zero:
-        return Some(true);
-    }
-
-    // Test if polynomial has any terms other than the non-zero constant:
-    if terms.len() == 1 {
-        // Polynomial is a non-zero constant, thus it is trivially unsolvable:
-        return Some(false);
-    }
-
-    // Find if the polynomial is linear
-    for term in terms {
-        if *term.get_monomial().get_total_power() > P::one() {
-            // Polynomial is non-linear, we are not sure if it is solvable
-            return None;
-        }
-    }
-
-    // Polynomial is linear, so it is obviously solvable:
-    Some(true)
-}
 
 /// Schmidt test, from https://doi.org/10.1016/0022-314X(74)90043-2
 /// "A lower bound for the number of solutions of equations over finite fields."
 /// by Wolfgang M. Schmidt, 1974
 ///
-/// If the order of the finite field is big enough compared to the number of
-/// variables and the polynomial degree, there is a lower bound on the number
-/// of solutions that lies on F^n. If this lower bound is > 0, we can declare
-/// the polynomial as solvable.
+/// For an absolutely irreducible polynomial, if the order of the finite field
+/// is big enough compared to the number of variables and the polynomial degree,
+/// there is a lower bound on the number of solutions that lies on F^n. If this
+/// lower bound is > 0, we can declare the polynomial as solvable.
 ///
 /// Returns true if the polynomial has solutions, false if it is unknown.
 ///
@@ -71,11 +26,15 @@ pub fn simple_solvability_tests<
 pub fn schimidt_lower_bound<
     O: polynomial::monomial_ordering::Ordering,
     I: polynomial::Id + std::hash::Hash,
-    C: polynomial::Coefficient + finite_field::FiniteField,
+    C: finite_field::FiniteField,
     P: polynomial::Power + Into<f64>,
 >(
     poly: Polynomial<O, I, C, P>,
+    // TODO: maybe receive the number of variables as argument,
+    // so we don't have to recount every time
 ) -> bool {
+    // TODO: maybe test if it is absolutely irreducible here?
+
     // Get size of finite field:
     let q = C::get_order();
 
@@ -110,8 +69,8 @@ pub fn schimidt_lower_bound<
     let p_idx = (4.0 * d.ln()).trunc() as usize;
     // Given the limit of 9007199254740992, p_idx can be at most 146
 
-    // 2 plus the first 146 primes:
-    const primes: [u16; 147] = [
+    // 2 followed by the first 146 primes:
+    const PRIMES: [u16; 147] = [
         2, 2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83,
         89, 97, 101, 103, 107, 109, 113, 127, 131, 137, 139, 149, 151, 157, 163, 167, 173, 179,
         181, 191, 193, 197, 199, 211, 223, 227, 229, 233, 239, 241, 251, 257, 263, 269, 271, 277,
@@ -124,7 +83,7 @@ pub fn schimidt_lower_bound<
 
     let n = rug::Integer::from(n);
     let d = rug::Integer::from(d as u64);
-    let P = primes[p_idx] as u32;
+    let p = PRIMES[p_idx] as u32;
 
     let mut condition = rug::Integer::from(10000u32);
 
@@ -138,7 +97,7 @@ pub fn schimidt_lower_bound<
     condition *= &d;
     condition *= &d;
 
-    condition *= rug::Integer::from(P * P * P);
+    condition *= rug::Integer::from(p * p * p);
 
     if q <= condition {
         return false;
@@ -148,4 +107,93 @@ pub fn schimidt_lower_bound<
     // If this lower bound is >= 0, then we have at least one solution. To check if >= 0, we can divide by
     // q^(n - 2), and check if the positive term is greater than the sum of the negative terms.
     q >= (&d - 1u8).complete() * (&d - 2u8).complete() * q.sqrt_ref().complete() + d.square() * 6u8
+}
+
+/// The main algorithm: returns true if the polynomial system
+/// has solutions in the prime field.
+/// Empty set is considered solvable.
+pub fn prime_field_polynomial_system_solvability_test<
+    O: polynomial::monomial_ordering::Ordering,
+    I: polynomial::Id + std::hash::Hash,
+    C: finite_field::PrimeField,
+    P: polynomial::Power + Into<f64>,
+>(
+    mut polys: Vec<Polynomial<O, I, C, P>>,
+) -> Result<bool, &'static str> {
+    // We check the trivial cases first, use specialized techniques for them, and
+    // only if there is no other resource, use the main algorithm from:
+    // "Solving Systems of Polynomial Congruences Modulo a Large Prime" (1996)
+    // by Ming-Deh Huang and Yiu-Chung Wong
+    // https://doi.org/10.1109/SFCS.1996.548470
+
+    // Filter out all zero polynomials, as they don't add any restriction:
+    polys.retain(|poly| !poly.is_zero());
+    let polys = polys;
+
+    // Test if anything is a solution to the system:
+    if polys.is_empty() {
+        return Ok(true);
+    }
+
+    // Find number of variables and maximum degree:
+    let (n, d) = {
+        let mut var_set = HashSet::new();
+
+        let zero = P::zero();
+        let mut degree = &zero;
+
+        let mut has_constant_terms = false;
+
+        for poly in polys.iter() {
+            let terms = poly.get_terms();
+
+            // Test if the polynomial has a constant:
+            let last_term = terms.last().unwrap();
+            if last_term.get_monomial().get_total_power().is_zero() {
+                has_constant_terms = true;
+
+                // Test if this polynomial has other, non-constant terms,
+                // otherwise this system is trivially unsolvable:
+                if terms.len() == 1 {
+                    return Ok(false);
+                }
+            }
+
+            // Iterate through terms, counting variables and degree
+            for term in terms {
+                let mon = term.get_monomial();
+                if mon.get_total_power() > degree {
+                    degree = mon.get_total_power();
+                }
+
+                for var in mon.get_product() {
+                    var_set.insert(var.get_id().clone());
+                }
+            }
+        }
+
+        // Check if system is trivially solvable by setting all variables to zero:
+        if !has_constant_terms {
+            return Ok(true);
+        }
+
+        (var_set.len(), degree.clone())
+    };
+
+    // If the system is either linear or single variable,
+    // we can begin to decide the satisfiability by doing
+    // a full autoreduction among all polynomials.
+    if n.is_one() || d.is_one() {
+        // TODO: to be continued...
+        // TODO: grobner basis autoreduction
+        // Handle linear case
+        // Handle single variable case
+    }
+
+    // Test for the single polynomial case:
+    if polys.len() == 1 {
+        // TODO
+    }
+
+    Err("not implemented yet")
 }

@@ -1,13 +1,15 @@
-use crate::{big_unsigned::BigUnsigned, polynomial::division::InvertibleCoefficient};
+use crate::polynomial::{self, division::InvertibleCoefficient};
 
 use rug;
 use std::{cell::RefCell, fmt::Display};
 
 use crate::polynomial::Coefficient;
 
-pub trait FiniteField {
+pub trait FiniteField: polynomial::Coefficient {
     fn get_order() -> rug::Integer;
 }
+
+pub trait PrimeField: FiniteField {}
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub struct ThreadPrimeField {
@@ -51,6 +53,8 @@ impl FiniteField for ThreadPrimeField {
         Self::PRIME.with(|prime| prime.borrow().clone())
     }
 }
+
+impl PrimeField for ThreadPrimeField {}
 
 impl Display for ThreadPrimeField {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
