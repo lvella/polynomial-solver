@@ -5,7 +5,7 @@ use std::{cell::RefCell, fmt::Display};
 
 use crate::polynomial::Coefficient;
 
-pub trait FiniteField: polynomial::Coefficient {
+pub trait FiniteField: polynomial::division::InvertibleCoefficient {
     fn get_order() -> rug::Integer;
 }
 

@@ -312,6 +312,31 @@ where
     }
 }
 
+/// Just autoreduce a set of polynomials among themselves instead of doing
+/// a full Gröbner Basis calculation. This is equivalent to Gröbner Basis
+/// if you know the spar among elements is zero, like when there is only one
+/// variable per polynomial term, which happens in linear systems or single
+/// variable systems. The output is ordered in descending order.
+pub fn autoreduce<O, I, C, P>(input: Vec<Polynomial<O, I, C, P>>) -> Vec<Polynomial<O, I, C, P>>
+where
+    O: Ordering,
+    I: Id,
+    C: InvertibleCoefficient,
+    P: Power,
+{
+    let mut reduced_set = ReducedSet::new();
+
+    for p in input {
+        reduced_set.insert(p);
+    }
+
+    reduced_set
+        .ordered_set
+        .into_iter()
+        .map(|((p, _), _)| p)
+        .collect()
+}
+
 pub fn grobner_basis<O, I, C, P>(
     input: &mut dyn Iterator<Item = Polynomial<O, I, C, P>>,
 ) -> Vec<Polynomial<O, I, C, P>>

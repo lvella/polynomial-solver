@@ -59,7 +59,7 @@ pub fn schimidt_lower_bound<
         (var_set.len(), degree.clone())
     };
 
-    // Convert degree to float so we can log
+    // Convert degree to float so we can take logarithm
     let d: f64 = d.into();
     assert!(
         d < 9007199254740992.0f64,
@@ -183,17 +183,38 @@ pub fn prime_field_polynomial_system_solvability_test<
     // If the system is either linear or single variable,
     // we can begin to decide the satisfiability by doing
     // a full autoreduction among all polynomials.
-    if n.is_one() || d.is_one() {
-        // TODO: to be continued...
-        // TODO: grobner basis autoreduction
-        // Handle linear case
-        // Handle single variable case
+    if d.is_one() || n.is_one() {
+        let reduced = polynomial::grobner_basis::autoreduce(polys);
+
+        // If reduced set has a non-zero constant in it, this is UNSAT:
+        let poly = &reduced[0];
+        if poly.is_constant() {
+            // It can't be zero, because we have sanitized the input:
+            assert!(!poly.is_zero());
+            return Ok(false);
+        }
+
+        // If the system is linear and didn't reduced to
+        // a constant, then it is obvious solvable:
+        if d.is_one() {
+            return Ok(true);
+        }
+
+        // If not d.is_one(), then n.is_one(), so this is a single variable system,
+        // thus autoreduction must have left a single univariate polynomial.
+        assert!(reduced.len() == 1);
+
+        // TODO: We can check for absolute irreducibility and perform the Schmidt
+        // test, and if that fails, we can extract a root by using Cantor-Zassenhaus.
+        // Or we can go directly to Canton-Zassenhaus.
+
+        todo!("Handle single variable, single polynomial case.");
     }
 
     // Test for the single polynomial case:
     if polys.len() == 1 {
-        // TODO
+        todo!("Handle single polynomial case.");
+    } else {
+        todo!("Handle multiple polynomial case.");
     }
-
-    Err("not implemented yet")
 }
