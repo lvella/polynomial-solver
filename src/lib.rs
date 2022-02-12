@@ -4,6 +4,7 @@
 #![feature(vec_retain_mut)]
 
 pub mod big_unsigned;
+pub mod factorization;
 pub mod finite_field;
 pub mod gcd;
 pub mod polynomial;

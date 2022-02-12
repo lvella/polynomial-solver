@@ -4,6 +4,7 @@ use num_traits::{One, Zero};
 use rug::Complete;
 
 use crate::{
+    factorization::finite_field_factorize,
     finite_field,
     polynomial::{self, Polynomial},
 };
@@ -126,9 +127,12 @@ pub fn prime_field_polynomial_system_solvability_test<
     // by Ming-Deh Huang and Yiu-Chung Wong
     // https://doi.org/10.1109/SFCS.1996.548470
 
-    // Filter out all zero polynomials, as they don't add any restriction:
-    polys.retain(|poly| !poly.is_zero());
-    let polys = polys;
+    // TODO: breakup the problem into independent sets
+    // (i.e. sets of polynomials who don't share any variables).
+
+    // Autoreduce polynomial set as it is relativelly cheap and
+    // might help reducing the size of the problem:
+    let polys = polynomial::grobner_basis::autoreduce(polys);
 
     // Test if anything is a solution to the system:
     if polys.is_empty() {
@@ -180,35 +184,26 @@ pub fn prime_field_polynomial_system_solvability_test<
         (var_set.len(), degree.clone())
     };
 
-    // If the system is either linear or single variable,
-    // we can begin to decide the satisfiability by doing
-    // a full autoreduction among all polynomials.
-    if d.is_one() || n.is_one() {
-        let reduced = polynomial::grobner_basis::autoreduce(polys);
+    // Since system has been reduced and still has no constant polynomials,
+    // if it is linear then it is obviously solvable:
+    if d.is_one() {
+        return Ok(true);
+    }
 
-        // If reduced set has a non-zero constant in it, this is UNSAT:
-        let poly = &reduced[0];
-        if poly.is_constant() {
-            // It can't be zero, because we have sanitized the input:
-            assert!(!poly.is_zero());
-            return Ok(false);
+    // If the system is single variable, it can be solved by plain factorization.
+    if n.is_one() {
+        // Since the single variable system has been reduced,
+        // only one polynomial must have remained:
+        assert!(polys.len() == 1);
+        let poly = polys.into_iter().next().unwrap();
+
+        // If the polynomial has any irreducible linear factor, then it has a solution:
+        for f in finite_field_factorize(poly) {
+            if f.get_terms()[0].get_monomial().get_total_power().is_one() {
+                return Ok(true);
+            }
         }
-
-        // If the system is linear and didn't reduced to
-        // a constant, then it is obvious solvable:
-        if d.is_one() {
-            return Ok(true);
-        }
-
-        // If not d.is_one(), then n.is_one(), so this is a single variable system,
-        // thus autoreduction must have left a single univariate polynomial.
-        assert!(reduced.len() == 1);
-
-        // TODO: We can check for absolute irreducibility and perform the Schmidt
-        // test, and if that fails, we can extract a root by using Cantor-Zassenhaus.
-        // Or we can go directly to Canton-Zassenhaus.
-
-        todo!("Handle single variable, single polynomial case.");
+        return Ok(false);
     }
 
     // Test for the single polynomial case:
@@ -218,3 +213,5 @@ pub fn prime_field_polynomial_system_solvability_test<
         todo!("Handle multiple polynomial case.");
     }
 }
+
+// Tests if a polynomial over finite field is absolutely irreducible.
