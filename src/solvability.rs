@@ -4,7 +4,6 @@ use num_traits::{One, Zero};
 use rug::Complete;
 
 use crate::{
-    factorization::finite_field_factorize,
     finite_field,
     polynomial::{self, Polynomial},
 };
@@ -24,7 +23,7 @@ use crate::{
 /// https://doi.org/10.1016/j.ffa.2005.03.003
 /// "Improved explicit estimates on the number of solutions of equations over a finite field"
 /// by Antonio Cafurea and Guillermo Matera, 2006
-pub fn schimidt_lower_bound<
+pub fn schmidt_lower_bound<
     O: polynomial::monomial_ordering::Ordering,
     I: polynomial::Id + std::hash::Hash,
     C: finite_field::FiniteField,
@@ -110,16 +109,20 @@ pub fn schimidt_lower_bound<
     q >= (&d - 1u8).complete() * (&d - 2u8).complete() * q.sqrt_ref().complete() + d.square() * 6u8
 }
 
+fn decompose_varieties() {
+    // First, homogenize the polynomials.
+}
+
 /// The main algorithm: returns true if the polynomial system
 /// has solutions in the prime field.
 /// Empty set is considered solvable.
 pub fn prime_field_polynomial_system_solvability_test<
     O: polynomial::monomial_ordering::Ordering,
     I: polynomial::Id + std::hash::Hash,
-    C: finite_field::PrimeField,
+    C: finite_field::PrimeField + From<P>,
     P: polynomial::Power + Into<f64>,
 >(
-    mut polys: Vec<Polynomial<O, I, C, P>>,
+    polys: Vec<Polynomial<O, I, C, P>>,
 ) -> Result<bool, &'static str> {
     // We check the trivial cases first, use specialized techniques for them, and
     // only if there is no other resource, use the main algorithm from:
@@ -198,7 +201,7 @@ pub fn prime_field_polynomial_system_solvability_test<
         let poly = polys.into_iter().next().unwrap();
 
         // If the polynomial has any irreducible linear factor, then it has a solution:
-        for f in finite_field_factorize(poly) {
+        for f in crate::factorization::finite_field::factorize(poly) {
             if f.get_terms()[0].get_monomial().get_total_power().is_one() {
                 return Ok(true);
             }
@@ -206,12 +209,58 @@ pub fn prime_field_polynomial_system_solvability_test<
         return Ok(false);
     }
 
-    // Test for the single polynomial case:
+    fn single_polynomial_case<
+        O: polynomial::monomial_ordering::Ordering,
+        I: polynomial::Id + std::hash::Hash,
+        C: finite_field::PrimeField + From<P>,
+        P: polynomial::Power + Into<f64>,
+    >(
+        poly: Polynomial<O, I, C, P>,
+    ) -> Result<bool, &'static str> {
+        if crate::factorization::finite_field::is_absolutely_irreducible(&poly) {
+            return if schmidt_lower_bound(poly) {
+                Ok(true)
+            } else {
+                // TODO: maybe implement some fallback algorithm, like the one given in
+                // "Homotopy Methods for Equations over Finite Fields" (2003)
+                // by Alan G.B. Lauder
+                Err("polynomial failed Schmidt test, solution existence is not guaranteed")
+            };
+        }
+
+        // Polynomial is not absolutelly irreducible, we must add its derivative
+        // into the system and try to solve again.
+
+        // TODO: maybe find the variable with biggest degree to derivate?
+        let var = poly.get_terms()[0].get_monomial().get_product()[0]
+            .get_id()
+            .clone();
+
+        let new_poly = poly.clone().derivative(&var);
+
+        prime_field_polynomial_system_solvability_test(vec![poly, new_poly])
+    }
+
     if polys.len() == 1 {
-        todo!("Handle single polynomial case.");
+        // Single polynomial case:
+        let poly = polys.into_iter().next().unwrap();
+
+        let mut result = Ok(false);
+
+        for f in crate::factorization::finite_field::factorize(poly) {
+            match single_polynomial_case(f) {
+                Ok(true) => {
+                    return Ok(true);
+                }
+                Ok(false) => (),
+                Err(msg) => {
+                    result = Err(msg);
+                }
+            }
+        }
+
+        result
     } else {
-        todo!("Handle multiple polynomial case.");
+        Err("lalala")
     }
 }
-
-// Tests if a polynomial over finite field is absolutely irreducible.

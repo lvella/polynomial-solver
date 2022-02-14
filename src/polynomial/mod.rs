@@ -416,15 +416,11 @@ where
     }
 }
 
-pub trait MulAssignPower<P> {
-    fn mul_assign_power(&mut self, power: &P);
-}
-
 impl<O, I, C, P> Polynomial<O, I, C, P>
 where
     O: Ordering,
     I: Id,
-    C: Coefficient + MulAssignPower<P>,
+    C: Coefficient + From<P>,
     P: Power,
 {
     pub fn derivative(mut self, variable: &I) -> Self {
@@ -440,7 +436,7 @@ where
             };
 
             let var = &mut term.monomial.product[idx];
-            term.coefficient.mul_assign_power(&var.power);
+            term.coefficient *= &C::from(var.power.clone());
             var.power -= &P::one();
             if var.power.is_zero() {
                 term.monomial.product.remove(idx);
@@ -804,12 +800,6 @@ mod tests {
     impl Power for u16 {}
 
     pub type SmallPoly = Polynomial<monomial_ordering::Lex, u8, i32, u16>;
-
-    impl MulAssignPower<u16> for i32 {
-        fn mul_assign_power(&mut self, power: &u16) {
-            self.mul_assign(*power as i32);
-        }
-    }
 
     #[test]
     fn addition_and_subtraction_ordering() {
