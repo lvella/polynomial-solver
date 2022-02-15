@@ -8,7 +8,7 @@ pub mod factorization;
 pub mod finite_field;
 pub mod gcd;
 pub mod polynomial;
-pub mod solvability;
+pub mod prime_field_solvability;
 
 mod ordered_ops;
 
