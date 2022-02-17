@@ -1,7 +1,7 @@
 pub mod finite_field {
     use crate::polynomial::Polynomial;
     pub struct FactorsIter<O, I, C, P> {
-        p: Polynomial<O, I, C, P>, // placeholder
+        _p: Polynomial<O, I, C, P>, // placeholder
     }
 
     impl<O, I, C, P> Iterator for FactorsIter<O, I, C, P> {

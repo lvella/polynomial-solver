@@ -318,6 +318,14 @@ pub struct Polynomial<O, I, C, P> {
     terms: Vec<Term<O, I, C, P>>,
 }
 
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Hash)]
+pub enum ExtendedId<I: Id> {
+    Original(I),
+    Extra,
+}
+
+impl<I: Id> Id for ExtendedId<I> {}
+
 // TODO optimization: implement term * polynomial multiplication
 impl<O, I, C, P> Polynomial<O, I, C, P>
 where
@@ -394,6 +402,78 @@ where
         }
 
         ret
+    }
+
+    /// Make all terms of the polynomial the same given degree by introducing a new variable
+    /// and multiplying it to each term the appropriate number of times.
+    pub fn homogenize(self) -> Polynomial<O, ExtendedId<I>, C, P> {
+        // Calculate the degree of the polynomial:
+        let degree = self
+            .terms
+            .iter()
+            .map(|t| &t.monomial.total_power)
+            .max()
+            .unwrap_or(&P::zero())
+            .clone();
+
+        self.homogenize_to_degree(&degree).unwrap()
+    }
+
+    /// Make all terms of the polynomial the same given degree by introducing a
+    /// new variable and multiplying it to each term the appropriate number of times.
+    /// Target degree must be <= the degree of the polynomial.
+    ///
+    /// The original polynomial can be recovered by setting the new variable value to 1.
+    /// TODO: implement dehomogenize
+    pub fn homogenize_to_degree(
+        self,
+        degree: &P,
+    ) -> Result<Polynomial<O, ExtendedId<I>, C, P>, &'static str> {
+        let mut terms = Vec::new();
+
+        // Process each term
+        for term in self.terms {
+            // Transfer existing variables to the new type:
+            let mut product: Vec<_> = term
+                .monomial
+                .product
+                .into_iter()
+                .map(|v| VariablePower {
+                    id: ExtendedId::Original(v.id),
+                    power: v.power,
+                })
+                .collect();
+
+            // Create the new variable with appropriate degree, if needed.
+            match degree.cmp(&term.monomial.total_power) {
+                CmpOrd::Less => {
+                    return Err("can't homogenize a polynomial to a smaller degree");
+                }
+                CmpOrd::Equal => (/* term already at target degree */),
+                CmpOrd::Greater => {
+                    let new_var_deg = degree.clone() - term.monomial.total_power;
+                    product.push(VariablePower {
+                        id: ExtendedId::Extra,
+                        power: new_var_deg,
+                    });
+                }
+            }
+
+            // Push the new term.
+            terms.push(Term {
+                coefficient: term.coefficient,
+                monomial: Monomial {
+                    product,
+                    total_power: degree.clone(),
+                    _phantom_ordering: Default::default(),
+                },
+            });
+        }
+
+        // Homogenization might change the order among terms, so sort:
+        terms.sort_unstable_by(|a, b| a.monomial.cmp(&b.monomial));
+
+        Ok(Polynomial { terms })
     }
 
     fn sum_terms(
@@ -789,8 +869,6 @@ impl Power for u32 {}
 
 #[cfg(test)]
 mod tests {
-    use std::ops::MulAssign;
-
     use num_traits::Pow;
 
     use super::*;

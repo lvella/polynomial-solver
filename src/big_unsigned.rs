@@ -159,7 +159,7 @@ impl Display for BigUnsigned {
 }
 
 /// Integer part of natural logarithm
-fn log_rounded_down(x: &BigUnsigned) -> Option<u32> {
+pub fn log_rounded_down(x: &BigUnsigned) -> Option<u32> {
     if x.is_zero() {
         return None;
     }
