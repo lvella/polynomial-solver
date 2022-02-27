@@ -98,13 +98,48 @@ Special case #6: not implemented and not sure if it is worth, but in case of a s
 $n > 1$, [[1](#r1)] suggests factoring into irreducible factors: if any of the factors is absolutely
 irreducible (there is a test for that [[3](#r3)]) then we consider it satisfiable and we are done (there
 is a theorem that guarantees plenty of solutions if $d$ and $n$ are small enough compared to
-the field size [[1](#r1),[2](#r2)]). Each factor $f$ can then be handled independently like the following
-(even less sure if it is worth): recursively test if the system $\{f = df/dx = 0\}$ is satisfiable for
-some variable $x$ where $df/dx_i$ does not vanishes. The problem is satisfiable iff at least one of these
-subsystems spawned by the factors is satisfiable.
+the field size [[1](#r1), [2](#r2), [5](#r2)]). Each factor $f$ can then be handled independently like
+the following (even less sure if it is worth): recursively test if the system $\{f = df/dx = 0\}$ is
+satisfiable for some variable $x$ where $df/dx_i$ does not vanishes. The problem is satisfiable iff at
+least one of these subsystems spawned by the factors is satisfiable.
 
 I ran out of ideas for special cases, so now I will discuss the alternatives being explored for the
 general case.
+
+## Fast Algebraic Geometry Method
+
+If the set of polynomials contains some very particular properties, namely, defines a prime ideal
+(an ideal that is both primary and radical), and defines an absolutely irreducible algebraic set,
+then algorithm [[2](#r2)] allows for finding one common root in probabilistic polynomial time.
+
+The problem is, of course, this method is incomplete as not all problems will obey these properties.
+It is unclear how many of practical problems would so that the algorithm is useful on its own.
+I don't know either what happens if the algorithm is execute on a polynomial set without those
+properties (will it fail? will it run forever? remains to be clarified). Also don't know how to
+test if an ideal is radical without a full Gröbner basis, and don't know at all how to test if a
+variety is absolutely irreducible.
+
+Nothing on this front has been implemented.
+
+## Robust Algebraic Geometry Method
+
+There is another class of algorithms based on algebraic geometry (original probabilistic version
+given in [[1](#r1)], deterministic version given in [[7](#r7)]). Compared to the Fast Algebraic Geometry Method,
+instead of expecting the problem to be given as an absolutely irreducible variety, it recursively
+decomposes the problem until it either eventually reach an absolutely irreducible variety (then
+deciding for satisfiable) or it is no longer possible to decompose, deciding for unsatisfiable.
+
+This algorithm is double exponential on the number of variables, and only works if $p > d^{n^{O(n)}}$,
+where $p$ is the order of the prime field, $d$ is the maximum degree of the polynomials and $n$ is the
+number of variable. Using our assumptions of $p \approx 2^{254}$ and $d \approx 10$, this algorithm
+doesn't work in general for much more than a couple of variables.
+
+It is unclear for how many instances of the problem this algorithm might work in practice, but at
+least for the probabilistic version, this algorithm doesn't look practical at all.
+
+Nothing of the variety decomposition algorithm has been implemented. From here, I only implemented
+a test that tells if a single multivariate polynomial that happens to be absolutely irreducible has
+any roots (what I called the Schmidt test, originally from [[5](#r5)]).
 
 ## Methods based on Gröbner Basis
 
@@ -122,7 +157,7 @@ which is much worse in practice than Faugère's F4 and F5 (but have the same wor
 which for a very small system is capable of computing the Gröbner basis in grevlex ordering, but I
 don't believe it would terminate in a human lifetime for lexicographical ordering.
 
-### Triangular system
+### Triangular System
 
 For this approach, we need the Gröbner basis in lexicographical order, so that the system is in a
 triangular format where we can eliminate one variable at a time. But Gröbner basis is much faster to
@@ -159,6 +194,39 @@ how the search for a variable assignment in the triangular system that is better
 trial and error. It is unclear how to perform a local search in the triangular system, much less
 how to prove unsatisfiability. Maybe [4] can shed a light into this.
 
+### Primary Decomposition Method
+
+Given polynomials in the ring $\mathbb{F}[x_1,x_2,...,x_n]$, every polynomial set defines an algebraic set, which is the set of points in $\mathbb{F}^n$ where all polynomials evaluates to zero. This is the
+set from where we seek solutions: by finding one point in the algebraic set, we have proven the problem to
+be satisfiable, and by proving the algebraic set to be empty, we have proven the problem to be unsatisfiable.
+
+The set of polynomials we are trying to solve defines an ideal, and by Lasker-Noether theorem we know that
+every polynomial ideal is the intersection of a finite set of primary ideals (called the primary
+decomposition of the ideal), which implies any algebraic set is a union of irreducible algebraic
+sets, named varieties.
+
+So the idea of this approach is to find the radical of the ideal defined by our polynomial set,
+calculate its primary decomposition, and then, for each prime ideal found (which is primary and radical),
+try to find a zero in its algebraic set. This seems to go back to the initial problem: we have a set of polynomials for which we must find a common zero point. Well, not quite, because since we know we are
+dealing with an algebraic variety, we may be able to handle it with algebraic geometry methods such as the
+one described in [[2](#r2)].
+
+This can also be the first approach of a hybrid method, where the bigger is reduced to smaller sub-problems
+that can then be handled in parallel. Each subproblem we try to solve first by the Fast Algebraic
+Geometry method, and if it fails, we can apply the triangular system method, local search method, CDCL
+method or something else.
+
+Computing the Gröbner Basis is the first step of the primary decomposition algorithms and radical ideal
+algorithms I saw (such as [[6](#r6)]).
+
+Nothing of the sort have been implemented.
+
+The biggest issue of this method is that it is not complete: it will decide for satisfiability if it is
+easy to extract a rational point from one of the varieties (i.e. the variety is absolutely irreducible)
+and it will decide for unsatisfiability if the algebraic variety is empty on the extension field (Gröbner
+basis turns out to be a single non-zero constant), but besides partitioning the problem, it won't help in
+the case all varieties are reducible in the extension field.
+
 ### Base field restriction
 
 The satisfiability problem can be solved by finding the Gröbner basis of the system extended with the
@@ -182,34 +250,25 @@ f_5 = z^p - z
 $$
 where $p$ is the prime of the field.
 
-The Gröbner basis of the extended set will contain a constant iff the system is unsatisfiable. Such Gröbner
-basis can be calculated using any monomial ordering, like degree reverse lexicographical order, which is
-cheaper to calculate than the lexicographical order.
+I am not sure, but maybe $f_5$ can be omitted, because maximum degree of $z$ is 1, so it should have no
+values in the extension field.
+
+The Gröbner basis of the extended set will contain a non-zero constant polynomial iff the system is
+unsatisfiable. Such Gröbner basis can be calculated using any monomial ordering, like degree reverse
+lexicographical order, which is cheaper to calculate than the lexicographical order.
 
 I don't know how to turn this into a practical algorithm for the case where $p \gg 0$, as the procedure to
 calculate the Gröbner basis is prohibitively expensive due to the time complexity being $O(p^2)$ on the
 reduction step of $x^p - x = 0$. I suspect it can be done in $O(p \log p)$ by using exponentiation by
-squaring, but even that is impractical, and wouldn't help with the huge size of each reduced polynomial would
-have (on the order of $O(p)$). Maybe there can be a compact representation of the polynomial, but
-still don't look promising... 
-
-### Primary decomposition Method
-
-TODO
+squaring, but even linear on $p$ is impractical, and wouldn't help with the huge size of each reduced
+polynomial would have (on the order of $O(p)$). Maybe there can be a compact representation of the
+polynomial, but still don't look promising...
 
 ## Local Search Method
 
 TODO
 
 ## CDCL Approach
-
-TODO
-
-## Fast Algebraic Geometry Method
-
-TODO
-
-## Robust Algebraic Geometry Method
 
 TODO
 
@@ -221,7 +280,14 @@ but I find it unlikely, as SIMPLEX works by iteratively restricting the convex s
 by straight lines/hyperplanes, but the curves designated by non-linear polynomials are not planes, so
 the limited space will not be convex.
 
-I just barely considered this alternative.
+I just barely considered this possibility.
+
+## Other alternatives
+
+Thesis [[9](#r9)] looks very promising, I don't know how I missed it until now.
+
+An algorithm for the problem named Mutant Zhuang-Zi is given in [[8](#r8)]. Looking very superficially,
+doesn't seems to apply to large $p$ due to computations with $x^p - x$.
 
 ## References
 
@@ -231,4 +297,14 @@ I just barely considered this alternative.
 
 [<a id="r3">3</a>]: [*Fast parallel absolute irreducibility testing* (1985), by Erich Kaltofen](https://doi.org/10.1016/S0747-7171(85)80029-8)
 
-[<a id="r4">4</a>]: ???
+[<a id="r4">4</a>]: [*Solving Polynomial Systems over Finite Fields: Algorithms, Implementation and Applications* (2013) by Chenqi Mou](https://tel.archives-ouvertes.fr/tel-01110887)
+
+[<a id="r5">5</a>]: [*A lower bound for the number of solutions of equations over finite fields* (1974) by Wolfgang M.Schmidt](https://doi.org/10.1016/0022-314X(74)90043-2)
+
+[<a id="r6">6</a>]: [*Gröbner bases and primary decomposition of polynomial ideals* (1988) by Patrizia Giannia, Barry Trager and Gail Zacharias](https://doi.org/10.1016/S0747-7171(88)80040-3)
+
+[<a id="r7">7</a>]: [*Derandomizing some algebraic and number-theoretic algorithms* (2006) by Neeraj Kayal](https://www.microsoft.com/en-us/research/publication/derandomizing-some-algebraic-and-number-theoretic-algorithms/)
+
+[<a id="r8">8</a>]: [*Mutant Zhuang-Zi Algorithm* (2010) by Jintai Ding and Dieter S. Schmidt](https://link.springer.com/chapter/10.1007/978-3-642-12929-2_3)
+
+[<a id="r9">9</a>]: [*Counting Zeros over Finite Fields Using Gröbner Bases* (2009) by Sicun Gao](https://www.cs.cmu.edu/~sicung/papers/MS_thesis.pdf)
