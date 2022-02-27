@@ -197,6 +197,22 @@ still don't look promising...
 
 TODO
 
+## Local Search Method
+
+TODO
+
+## CDCL Approach
+
+TODO
+
+## Fast Algebraic Geometry Method
+
+TODO
+
+## Robust Algebraic Geometry Method
+
+TODO
+
 ## SIMPLEX generalization
 
 In linear systems, the search can be reduced by looking at the bounds of the variables with the
@@ -206,14 +222,6 @@ by straight lines/hyperplanes, but the curves designated by non-linear polynomia
 the limited space will not be convex.
 
 I just barely considered this alternative.
-
-## Robust Algebraic Geometry Method
-
-TODO
-
-## Fast Algebraic Geometry Method
-
-TODO
 
 ## References
 
