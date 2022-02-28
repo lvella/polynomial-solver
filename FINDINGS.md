@@ -211,15 +211,15 @@ try to find a zero in its algebraic set. This seems to go back to the initial pr
 dealing with an algebraic variety, we may be able to handle it with algebraic geometry methods such as the
 one described in [[2](#r2)].
 
-This can also be the first approach of a hybrid method, where the bigger is reduced to smaller sub-problems
-that can then be handled in parallel. Each subproblem we try to solve first by the Fast Algebraic
-Geometry method, and if it fails, we can apply the triangular system method, local search method, CDCL
-method or something else.
+This can also be the first approach of a hybrid method, where the bigger problem is reduced to smaller
+sub-problems that can then be handled in parallel. Each subproblem we try to solve first by the Fast
+Algebraic Geometry method, and if it fails, we can apply the triangular system method, local search
+method, CDCL approach or something else.
 
 Computing the Gröbner Basis is the first step of the primary decomposition algorithms and radical ideal
 algorithms I saw (such as [[6](#r6)]).
 
-Nothing of the sort have been implemented.
+Nothing of the sort have been implemented (besides Gröbner Basis itself).
 
 The biggest issue of this method is that it is not complete: it will decide for satisfiability if it is
 easy to extract a rational point from one of the varieties (i.e. the variety is absolutely irreducible)
@@ -266,11 +266,57 @@ polynomial, but still don't look promising...
 
 ## Local Search Method
 
-TODO
+This is more a complementary approach than an alternative, as it can not prove unsatisfiability, and
+it may find a solution very quickly if they are abundant.
+
+A local search is the standard way of approximating floating point solutions for pretty much every
+equation system found in engineering and simulations. You treat the problem as a black box function
+(called objective function), and variates the input (the solution you want) according to how it
+affects the output, usually following the gradient towards a local minimum. If you get to zero, you
+found a solution.
+
+The traditional way of building an objective function for systems of equations is to take some norm
+(usually $L_2$ or $L_\infty$) of the residual vector. In case of polynomials, the residual vector ends
+up being the evaluation of each polynomial at the given input. In case of prime fields, it is important
+to consider that the distance to 0 is at most $p/2$ when calculating the norm.
+
+In SAT solving, discrete probabilistic methods are generally used for local search, and might be a good
+choice in our case, too, like simulated annealing. But I think it is worth to investigate classical
+mathematical methods, like Powell, BFGS or even Newton-Raphson, since the polynomials are differentiable.
+
+That said, the problem is much harder on discrete case compared to continuous, because the search might
+narrow down to oscillate around zero, but never reach because it is in between the minimum discrete
+steps. Such problem does not happen over reals. A metaheuristic such as Taboo Search might be useful
+to exclude such convergent points, but a huge number of restarts might be unavoidable.
+
+Some ideas to consider: it might be beneficial to just use the equalities for the local search, removing
+the inequalities polynomial and considering each individual inequality as a constraint. Or if the
+inequalities happen to be useful in the search, it might be better to apply the Rabinowitsch trick
+individually for each negation, because adding new variables is not a problem for this method, and makes
+each restriction more explicit for the search algorithm.
 
 ## CDCL Approach
 
-TODO
+Paper [[10](#r10)] describes a solver for nonlinear constraints of polynomials over $\mathbb{Z}$ and its
+roots over $\mathbb{R}$. It is done by a CDCL-style procedure where a sequence of clauses and variable
+assignments is assembled one by one so that the total assignment is always consistent with the selected
+clauses.
+
+When a conflict is detected, the set of conflicting polynomial constraints is identified, and Cylindrical
+Algebraic Decomposition (CAD) is used to isolate a whole region in the search space where this conflict can
+happen. This region is then described as set of polynomial constraints that are added to the problem
+as learned clauses.
+
+The difficulty of generalizing this technique for prime fields is that we need a way for generalizing
+a conflict in one particular variable evaluation to a whole region of the search space (the role of CAD
+in the original algorithm), and also be able to describe it in a meaningful way for the deduction system
+(i.e. probably define the new restrictions only in terms of $=$ and $\ne$, not with $>$, $\ge$, $<$ and
+$\le$).
+
+It also complicates the matter that we are only interested in solutions that happens to be on the base
+field, not in the whole extension field, a restriction the original solver does not have to worry about.
+
+I don't see (yet) a way of generalizing this technique.
 
 ## SIMPLEX generalization
 
@@ -308,3 +354,5 @@ doesn't seems to apply to large $p$ due to computations with $x^p - x$.
 [<a id="r8">8</a>]: [*Mutant Zhuang-Zi Algorithm* (2010) by Jintai Ding and Dieter S. Schmidt](https://link.springer.com/chapter/10.1007/978-3-642-12929-2_3)
 
 [<a id="r9">9</a>]: [*Counting Zeros over Finite Fields Using Gröbner Bases* (2009) by Sicun Gao](https://www.cs.cmu.edu/~sicung/papers/MS_thesis.pdf)
+
+[<a id="r10">10</a>]: [*Solving Non-linear Arithmetic* (2012) by Dejan Jovanović and Leonardo de Moura](https://link.springer.com/chapter/10.1007/978-3-642-31365-3_27)
