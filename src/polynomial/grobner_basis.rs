@@ -353,7 +353,7 @@ where
         gb.insert(p);
     }
 
-    println!("=======================");
+    println!("=========== After autoreduction ============:");
     for (p, _) in gb.ordered_set.keys() {
         println!("{}", p);
     }
@@ -479,7 +479,21 @@ mod tests {
         let p = grobner_basis.first().unwrap();
         assert!(p.is_constant() && !p.is_zero());
 
-        println!("{}", grobner_basis.first().unwrap());
+        println!("{}", p);
+    }
+
+    #[test]
+    fn another_grobner_basis_test() {
+        let [x, y]: [QPoly; 2] = QPoly::new_variables([0, 1u8]).try_into().unwrap();
+        let system = [x.clone(), y.clone().pow(2u8) + x.clone()];
+
+        let grobner_basis = grobner_basis(&mut system.into_iter());
+
+        assert_eq!(grobner_basis.len(), 2);
+
+        for p in grobner_basis {
+            println!("{}", p);
+        }
     }
 
     #[test]
