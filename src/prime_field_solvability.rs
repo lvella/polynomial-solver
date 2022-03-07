@@ -120,11 +120,9 @@ pub fn polynomial_system_solvability_test<
 >(
     polys: Vec<Polynomial<O, I, C, P>>,
 ) -> Result<bool, &'static str> {
-    // We check the trivial cases first, use specialized techniques for them, and
-    // only if there is no other resource, use the main algorithm from:
+    // We first check the trivial cases, use specialized techniques for them,
+    // and only if there is no other resource, try the general algorithm.
     // "Solving Systems of Polynomial Congruences Modulo a Large Prime" (1996)
-    // by Ming-Deh Huang and Yiu-Chung Wong
-    // https://doi.org/10.1109/SFCS.1996.548470
 
     // TODO: breakup the problem into independent sets
     // (i.e. sets of polynomials who don't share any variables).
@@ -138,7 +136,7 @@ pub fn polynomial_system_solvability_test<
         return Ok(true);
     }
 
-    // Find number of variables and maximum degree:
+    // Find the number of variables and maximum degree:
     let (n, d) = {
         let mut var_set = HashSet::new();
 
@@ -196,7 +194,7 @@ pub fn polynomial_system_solvability_test<
         assert!(polys.len() == 1);
         let poly = polys.into_iter().next().unwrap();
 
-        // If the polynomial has any irreducible linear factor, then it has a solution:
+        // Polynomial has a solution iff it has at least one irreducible linear factor:
         for f in crate::factorization::finite_field::factorize(poly) {
             if f.get_terms()[0].get_monomial().get_total_power().is_one() {
                 return Ok(true);
