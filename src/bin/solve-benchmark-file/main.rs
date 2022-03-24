@@ -30,9 +30,7 @@ fn main() -> Result<(), String> {
         .collect::<Result<Vec<_>, _>>()?;
 
     let string = std::fs::read_to_string(filename).expect("cannot read file");
-    // TODO: order the variables in the sequence provided in the input file.
-    let mut systems: Vec<Vec<Poly>> =
-        parser::parse(&string).map_err(|err| format!("Parsing failed: {:#?}", err))?;
+    let mut systems: Vec<Vec<Poly>> = parser::parse(&string)?;
 
     if !indices.is_empty() {
         let filtered = indices

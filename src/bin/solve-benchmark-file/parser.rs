@@ -9,68 +9,71 @@ use polynomial_solver::polynomial::{
 #[grammar = "bin/solve-benchmark-file/systems.pest"]
 pub struct SystemsParser;
 
-pub fn parse<O, C>(
-    unparsed_file: &str,
-) -> Result<Vec<Vec<Polynomial<O, u32, C, u32>>>, pest::error::Error<Rule>>
+pub fn parse<O, C>(unparsed_file: &str) -> Result<Vec<Vec<Polynomial<O, u32, C, u32>>>, String>
 where
     O: Ordering,
     C: Coefficient + FromStr + num_traits::pow::Pow<u32, Output = C>,
     <C as FromStr>::Err: Debug,
 {
-    let file = SystemsParser::parse(Rule::file, unparsed_file)?
+    let file = SystemsParser::parse(Rule::file, unparsed_file)
+        .map_err(|err| format!("Parsing failed: {:#?}", err))?
         .next()
         .unwrap();
 
-    Ok(file
-        .into_inner()
+    file.into_inner()
         .filter(|x| x.as_rule() == Rule::system)
         .map(parse_system)
-        .collect())
-}
-
-struct VarEnumerator<'a>(HashMap<&'a str, u32>);
-
-impl<'a> VarEnumerator<'a> {
-    fn new() -> Self {
-        Self(HashMap::new())
-    }
-
-    fn get_id(&mut self, name: &'a str) -> u32 {
-        let size = self.0.len() as u32;
-        *self.0.entry(name).or_insert(size)
-    }
-}
-
-fn parse_system<O, C>(system: Pair<'_, Rule>) -> Vec<Polynomial<O, u32, C, u32>>
-where
-    O: Ordering,
-    C: Coefficient + FromStr + num_traits::pow::Pow<u32, Output = C>,
-    <C as FromStr>::Err: Debug,
-{
-    let mut vars = VarEnumerator::new();
-
-    system
-        .into_inner()
-        .filter(|x| x.as_rule() == Rule::polynomial)
-        .map(|x| parse_polynomial(&mut vars, x))
         .collect()
 }
 
-fn parse_polynomial<'a, O, C>(
-    var_ids: &mut VarEnumerator<'a>,
-    polynomial: Pair<'a, Rule>,
-) -> Polynomial<O, u32, C, u32>
+fn parse_system<O, C>(system: Pair<'_, Rule>) -> Result<Vec<Polynomial<O, u32, C, u32>>, String>
 where
     O: Ordering,
     C: Coefficient + FromStr + num_traits::pow::Pow<u32, Output = C>,
     <C as FromStr>::Err: Debug,
 {
-    Polynomial::from_terms(
-        polynomial
-            .into_inner()
-            .map(|x| parse_terms(var_ids, x))
-            .collect(),
-    )
+    let mut iter = system.into_inner();
+
+    let mut vars = Vec::new();
+
+    loop {
+        let var = iter.peek().unwrap();
+        if var.as_rule() != Rule::var {
+            break;
+        }
+
+        vars.push(var.as_str());
+        iter.next();
+    }
+
+    let vars = vars
+        .into_iter()
+        .rev()
+        .enumerate()
+        .map(|(val, key)| (key, val as u32))
+        .collect::<HashMap<_, _>>();
+
+    iter.map(|x| {
+        assert!(x.as_rule() == Rule::polynomial);
+        parse_polynomial(&vars, x)
+    })
+    .collect()
+}
+
+fn parse_polynomial<'a, O, C>(
+    var_ids: &'a HashMap<&'a str, u32>,
+    polynomial: Pair<'a, Rule>,
+) -> Result<Polynomial<O, u32, C, u32>, String>
+where
+    O: Ordering,
+    C: Coefficient + FromStr + num_traits::pow::Pow<u32, Output = C>,
+    <C as FromStr>::Err: Debug,
+{
+    polynomial
+        .into_inner()
+        .map(|x| parse_terms(var_ids, x))
+        .collect::<Result<_, _>>()
+        .map(|x| Polynomial::from_terms(x))
 }
 enum FactorValue<C> {
     None,
@@ -79,9 +82,9 @@ enum FactorValue<C> {
 }
 
 fn parse_terms<'a, O, C>(
-    var_ids: &mut VarEnumerator<'a>,
+    var_ids: &'a HashMap<&'a str, u32>,
     term: Pair<'a, Rule>,
-) -> Term<O, u32, C, u32>
+) -> Result<Term<O, u32, C, u32>, String>
 where
     O: Ordering,
     C: Coefficient + FromStr + num_traits::pow::Pow<u32, Output = C>,
@@ -105,7 +108,12 @@ where
                     }
                 }
                 Rule::var => {
-                    value = FactorValue::Var(var_ids.get_id(elem.as_str()));
+                    value = FactorValue::Var(*var_ids.get(elem.as_str()).ok_or_else(|| {
+                        format!(
+                            "Variable \"{}\" not defined in the variable list.",
+                            elem.as_str()
+                        )
+                    })?);
                 }
                 Rule::literal => {
                     value = FactorValue::Literal(elem.as_str().parse().unwrap());
@@ -135,5 +143,5 @@ where
         }
     }
 
-    Term::new_multi_vars(coef, vars)
+    Ok(Term::new_multi_vars(coef, vars))
 }
