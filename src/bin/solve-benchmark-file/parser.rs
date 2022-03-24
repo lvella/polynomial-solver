@@ -9,21 +9,23 @@ use polynomial_solver::polynomial::{
 #[grammar = "bin/solve-benchmark-file/systems.pest"]
 pub struct SystemsParser;
 
-pub fn parse<O, C>(unparsed_file: &str) -> Vec<Vec<Polynomial<O, u32, C, u32>>>
+pub fn parse<O, C>(
+    unparsed_file: &str,
+) -> Result<Vec<Vec<Polynomial<O, u32, C, u32>>>, pest::error::Error<Rule>>
 where
     O: Ordering,
     C: Coefficient + FromStr + num_traits::pow::Pow<u32, Output = C>,
     <C as FromStr>::Err: Debug,
 {
-    let file = SystemsParser::parse(Rule::file, unparsed_file)
-        .expect("parsing failed")
+    let file = SystemsParser::parse(Rule::file, unparsed_file)?
         .next()
         .unwrap();
 
-    file.into_inner()
+    Ok(file
+        .into_inner()
         .filter(|x| x.as_rule() == Rule::system)
         .map(parse_system)
-        .collect()
+        .collect())
 }
 
 struct VarEnumerator<'a>(HashMap<&'a str, u32>);

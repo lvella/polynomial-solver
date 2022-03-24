@@ -20,13 +20,32 @@ fn main() -> Result<(), String> {
     )
     .unwrap();
 
-    let filename = std::env::args()
-        .skip(1)
-        .next()
-        .ok_or_else(|| "Missing benchmark file.")?;
+    let mut args = std::env::args().skip(1);
+    let filename = args.next().ok_or_else(|| "Missing benchmark file.")?;
+    let indices = args
+        .map(|x| {
+            x.parse::<usize>()
+                .map_err(|err| format!("Failed to parce index: {}", err))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
     let string = std::fs::read_to_string(filename).expect("cannot read file");
-    let systems: Vec<Vec<Poly>> = parser::parse(&string);
+    // TODO: order the variables in the sequence provided in the input file.
+    let mut systems: Vec<Vec<Poly>> =
+        parser::parse(&string).map_err(|err| format!("Parsing failed: {:#?}", err))?;
+
+    if !indices.is_empty() {
+        let filtered = indices
+            .into_iter()
+            .map(|idx| systems.get_mut(idx).map(|s| std::mem::take(s)))
+            .collect::<Option<Vec<_>>>()
+            .ok_or(format!(
+                "Index too large, benchmark file only has {} systems.",
+                systems.len()
+            ))?;
+
+        systems = filtered;
+    }
 
     for system in systems {
         println!("\n\nSystem:");
