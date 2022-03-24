@@ -50,6 +50,10 @@ where
     I: Id,
     P: Power,
 {
+    pub fn new(id: I, power: P) -> Self {
+        VariablePower { id, power }
+    }
+
     pub fn get_id(&self) -> &I {
         &self.id
     }
@@ -180,12 +184,12 @@ pub struct Term<O, I, C, P> {
 
 impl<O, I, C, P> Term<O, I, C, P>
 where
+    I: Id,
     C: Coefficient,
     P: Power,
 {
     pub fn new(coefficient: C, id: I, power: P) -> Self {
         if power.is_zero() {
-            // No product is implictly one
             Self::new_constant(coefficient)
         } else {
             Term {
@@ -202,10 +206,42 @@ where
         }
     }
 
+    pub fn new_multi_vars(coefficient: C, mut vars: Vec<VariablePower<I, P>>) -> Self {
+        // Order the variables by id:
+        vars.sort_unstable_by(|x, y| y.id.cmp(&x.id));
+
+        let mut total_power = vars.first().map_or(P::zero(), |x| x.power.clone());
+
+        // Join same vars:
+        vars.dedup_by(|from, to| {
+            total_power += &from.power;
+
+            if from.id != to.id {
+                return false;
+            }
+
+            to.power += std::mem::replace(&mut from.power, P::zero());
+            true
+        });
+
+        // Remove any variable whose power is 0
+        vars.retain(|e| !e.power.is_zero());
+
+        Self {
+            coefficient,
+            monomial: Monomial {
+                product: vars,
+                total_power,
+                _phantom_ordering: PhantomData,
+            },
+        }
+    }
+
     pub fn new_constant(value: C) -> Self {
         Term {
             coefficient: value,
             monomial: Monomial {
+                // Empty product means implicitly one
                 product: Vec::new(),
                 total_power: P::zero(),
                 _phantom_ordering: PhantomData,
@@ -621,6 +657,7 @@ where
 
 impl<O, I, C, P> std::ops::Add<C> for Polynomial<O, I, C, P>
 where
+    I: Id,
     C: Coefficient,
     P: Power,
 {
@@ -672,6 +709,7 @@ where
 
 impl<O, I, C, P> std::ops::Sub<C> for Polynomial<O, I, C, P>
 where
+    I: Id,
     C: Coefficient,
     P: Power,
 {
@@ -865,6 +903,7 @@ where
 }
 
 impl Id for usize {}
+impl Id for u32 {}
 impl Power for u32 {}
 
 #[cfg(test)]

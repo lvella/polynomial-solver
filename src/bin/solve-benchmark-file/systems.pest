@@ -1,0 +1,23 @@
+COMMENT = _{ "#" ~ (!NEWLINE ~ ANY)* ~ NEWLINE }
+WHITESPACE = _{ (" " | NEWLINE) }
+
+file = {SOI ~ system* ~ EOI}
+
+system = {
+    "var" ~ ":=" ~ "[" ~ var ~ ("," ~ var)* ~ "]" ~ ":" ~
+    "sys" ~ ":=" ~ "[" ~ polynomial ~ ("," ~ polynomial)* ~ "]" ~ ":"
+}
+
+polynomial = { term ~ (&sign ~ term)* }
+
+term = { factor ~ ("*" ~ factor)* }
+
+factor = { sign* ~ (var | literal) ~ ("^" ~ power)? }
+
+sign = { "+" | "-" }
+
+var = @{ ASCII_ALPHA ~ ASCII_ALPHANUMERIC* }
+
+power = @{ ASCII_DIGIT+ }
+
+literal = @{ ASCII_DIGIT+ }

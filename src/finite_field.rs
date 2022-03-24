@@ -1,7 +1,7 @@
 use crate::polynomial::{self, division::InvertibleCoefficient};
 
 use rug;
-use std::{cell::RefCell, fmt::Display};
+use std::{cell::RefCell, fmt::Display, str::FromStr};
 
 use crate::polynomial::Coefficient;
 
@@ -75,6 +75,17 @@ where
     }
 }
 
+impl FromStr for ThreadPrimeField {
+    type Err = <rug::Integer as FromStr>::Err;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut result = ThreadPrimeField { value: s.parse()? };
+        result.normalize();
+
+        Ok(result)
+    }
+}
+
 impl std::ops::Add for ThreadPrimeField {
     type Output = Self;
 
@@ -129,6 +140,19 @@ impl std::ops::MulAssign<&Self> for ThreadPrimeField {
     fn mul_assign(&mut self, rhs: &Self) {
         self.value *= &rhs.value;
         self.normalize();
+    }
+}
+
+impl num_traits::pow::Pow<u32> for ThreadPrimeField {
+    type Output = Self;
+
+    fn pow(mut self, rhs: u32) -> Self {
+        Self::PRIME.with(|prime| {
+            self.value
+                .pow_mod_mut(&rug::Integer::from(rhs), &*prime.borrow())
+                .unwrap();
+            self
+        })
     }
 }
 
