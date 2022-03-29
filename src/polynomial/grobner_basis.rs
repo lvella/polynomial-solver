@@ -26,8 +26,6 @@ use super::{
 /// https://gitlab.trnsz.com/reduce-algebra/reduce-algebra/-/blob/master/packages/groebner/groebopt.red
 ///
 /// Returns a map from the old variables to the new ones.
-///
-/// PS: this heuristic sucks for my zokrates example
 pub fn reorder_vars_for_easier_gb<O, C, P>(
     polynomials: &mut Vec<Polynomial<O, usize, C, P>>,
 ) -> HashMap<usize, usize>
@@ -42,9 +40,8 @@ where
         for t in p.terms.iter() {
             for var in t.monomial.product.iter() {
                 let entry = var_map.entry(var.id).or_insert((P::zero(), 0usize));
-                // TODO: maybe the correct is to use variable power, not monomial power?
-                if entry.0 < t.monomial.total_power {
-                    *entry = (t.monomial.total_power.clone(), 1);
+                if entry.0 < var.power {
+                    *entry = (var.power.clone(), 1);
                 } else {
                     entry.1 += 1;
                 }
@@ -287,9 +284,9 @@ where
     let mut iter_q = q.terms.iter();
 
     if let (Some(ini_p), Some(ini_q)) = (iter_p.next(), iter_q.next()) {
-        if !ini_p.monomial.has_shared_variables(&ini_q.monomial) {
+        /*if !ini_p.monomial.has_shared_variables(&ini_q.monomial) {
             return Polynomial::zero();
-        }
+        }*/
 
         let p_complement = sat_diff(ini_q, ini_p);
         let mut q_complement = sat_diff(ini_p, ini_q);
@@ -349,13 +346,7 @@ where
     let mut gb = ReducedSet::new();
 
     for p in input {
-        println!("{}", p);
         gb.insert(p);
-    }
-
-    println!("=========== After autoreduction ============:");
-    for (p, _) in gb.ordered_set.keys() {
-        println!("{}", p);
     }
 
     while let Some(((elem, next_to_spar), _)) = gb.ordered_set.iter().fold(None, |acc, e| {
@@ -392,18 +383,14 @@ where
         if partner.1 < elem.1 {
             let new_p = spar(&elem.0, &partner.0);
             println!("Sparred! Inserting ...");
+            let prev_size = gb.ordered_set.len();
             gb.insert(new_p);
-            println!("Inserted! New set:");
-
-            for ((p, id), nts) in gb.ordered_set.iter() {
-                println!(
-                    " {}: {} (LT deg: {}, term count: {})",
-                    id,
-                    nts.get(),
-                    p.terms[0].monomial.total_power,
-                    p.terms.len()
-                );
-            }
+            println!(
+                "Previous size: {}, Current size: {} (delta: {})",
+                prev_size,
+                gb.ordered_set.len(),
+                gb.ordered_set.len() as i64 - prev_size as i64
+            );
         } else {
             println!("Skipped");
         }

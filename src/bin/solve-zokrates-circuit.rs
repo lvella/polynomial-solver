@@ -81,7 +81,8 @@ fn solve<T: Field, I: Iterator<Item = ir::Statement<T>>>(ir_prog: ir::ProgIterat
     println!("\nGröbner Basis:");
 
     let gb = polynomial_solver::polynomial::grobner_basis::grobner_basis(&mut poly_set.into_iter());
-    for p in gb {
+    for p in gb.iter() {
         println!("  {}", p);
     }
+    println!("Size of the Gröbner Basis: {} polynomials.", gb.len());
 }
