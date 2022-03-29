@@ -56,7 +56,6 @@ fn solve<T: Field, I: Iterator<Item = ir::Statement<T>>>(ir_prog: ir::ProgIterat
     println!("Prime number: {}", prime);
     ThreadPrimeField::set_prime(prime).unwrap();
 
-    println!("Set of polynomials constrained to 0:");
     let mut poly_set = Vec::new();
 
     for s in ir_prog.statements.into_iter() {
@@ -66,17 +65,20 @@ fn solve<T: Field, I: Iterator<Item = ir::Statement<T>>>(ir_prog: ir::ProgIterat
             let rhs = to_poly(lin);
 
             let p = ql * qr - rhs;
-            println!("  {}", p);
-
             poly_set.push(p);
         }
     }
 
-    /*println!("\nVariables reordered to:");
+    println!("\nVariables reordered to:");
     let var_map = reorder_vars_for_easier_gb(&mut poly_set);
     for (from, to) in var_map {
         println!("{} → {}", from, to);
-    }*/
+    }
+
+    println!("Set of polynomials constrained to 0:");
+    for p in poly_set.iter() {
+        println!("  {}", p);
+    }
 
     println!("\nGröbner Basis:");
 

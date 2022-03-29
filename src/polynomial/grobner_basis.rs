@@ -383,14 +383,8 @@ where
         if partner.1 < elem.1 {
             let new_p = spar(&elem.0, &partner.0);
             println!("Sparred! Inserting ...");
-            let prev_size = gb.ordered_set.len();
             gb.insert(new_p);
-            println!(
-                "Previous size: {}, Current size: {} (delta: {})",
-                prev_size,
-                gb.ordered_set.len(),
-                gb.ordered_set.len() as i64 - prev_size as i64
-            );
+            println!("Current size: {}", gb.ordered_set.len());
         } else {
             println!("Skipped");
         }
