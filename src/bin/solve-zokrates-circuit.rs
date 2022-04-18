@@ -2,6 +2,7 @@ use polynomial_solver::polynomial::division::InvertibleCoefficient;
 use polynomial_solver::polynomial::grobner_basis::reorder_vars_for_easier_gb;
 use polynomial_solver::polynomial::monomial_ordering::Grevlex;
 use polynomial_solver::polynomial::{Coefficient, Term};
+use rug::Complete;
 use std::{env, fs::File, io::BufReader};
 use zokrates_core::flat_absy::FlatVariable;
 use zokrates_core::ir::Statement::Constraint;
@@ -55,7 +56,15 @@ impl<'a, T: Field> std::ops::MulAssign<&'a FieldWrapper<T>> for FieldWrapper<T> 
 
 impl<T: Field> std::fmt::Display for FieldWrapper<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.0, f)
+        let prime = to_rug(&T::max_value()) + 1u8;
+        let halfway = (&prime / 2u8).complete();
+        let val = to_rug(&self.0);
+
+        if val > halfway {
+            std::fmt::Display::fmt(&(val - prime), f)
+        } else {
+            std::fmt::Display::fmt(&val, f)
+        }
     }
 }
 
