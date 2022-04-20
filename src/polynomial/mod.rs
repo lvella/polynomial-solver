@@ -102,11 +102,11 @@ where
                 CmpOrd::Equal => {
                     return true;
                 }
-                CmpOrd::Less => {
+                CmpOrd::Greater => {
                     next_a = iter_a.next();
                     next_b = Some(b);
                 }
-                CmpOrd::Greater => {
+                CmpOrd::Less => {
                     next_a = Some(a);
                     next_b = iter_b.next();
                 }

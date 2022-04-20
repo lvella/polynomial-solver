@@ -284,9 +284,9 @@ where
     let mut iter_q = q.terms.iter();
 
     if let (Some(ini_p), Some(ini_q)) = (iter_p.next(), iter_q.next()) {
-        /*if !ini_p.monomial.has_shared_variables(&ini_q.monomial) {
+        if !ini_p.monomial.has_shared_variables(&ini_q.monomial) {
             return Polynomial::zero();
-        }*/
+        }
 
         let p_complement = sat_diff(ini_q, ini_p);
         let mut q_complement = sat_diff(ini_p, ini_q);
@@ -490,5 +490,28 @@ mod tests {
         // Assert set is empty:
         let empty: Vec<QPoly> = grobner_basis(&mut [].into_iter());
         assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn test_common_variable_detector() {
+        let [x5, x6, x7, x8, x9]: [QPoly; 5] =
+            QPoly::new_variables([5u8, 6, 7, 8, 9]).try_into().unwrap();
+
+        assert!(!x5.terms[0]
+            .monomial
+            .has_shared_variables((&x6.terms[0].monomial)));
+
+        let p1 = x7 * x6 * x5;
+        let p2 = x8.clone() * x9;
+
+        assert!(!p1.terms[0]
+            .monomial
+            .has_shared_variables(&p2.terms[0].monomial));
+
+        let p1 = x8 * p1;
+
+        assert!(p1.terms[0]
+            .monomial
+            .has_shared_variables(&p2.terms[0].monomial));
     }
 }
