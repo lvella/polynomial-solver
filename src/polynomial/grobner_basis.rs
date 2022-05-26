@@ -254,11 +254,11 @@ where
             b.monomial.product.iter(),
             |x, y| y.id.cmp(&x.id),
             |mut x, y| {
-                x.power = x.power.saturating_sub(&y.power);
-                if x.power.is_zero() {
-                    None
-                } else {
+                if x.power > y.power {
+                    x.power -= &y.power;
                     Some(x)
+                } else {
+                    None
                 }
             },
         );
@@ -499,7 +499,7 @@ mod tests {
 
         assert!(!x5.terms[0]
             .monomial
-            .has_shared_variables((&x6.terms[0].monomial)));
+            .has_shared_variables(&x6.terms[0].monomial));
 
         let p1 = x7 * x6 * x5;
         let p2 = x8.clone() * x9;

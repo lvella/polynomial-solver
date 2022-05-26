@@ -1,7 +1,7 @@
 use super::{Id, Monomial, Power};
 use std::cmp::Ordering as CmpOrd;
 
-pub trait Ordering: core::fmt::Debug {
+pub trait Ordering: core::fmt::Debug + Clone + Eq + Ord {
     fn ord<I, P>(a: &Monomial<Self, I, P>, b: &Monomial<Self, I, P>) -> CmpOrd
     where
         I: Id,
@@ -9,7 +9,7 @@ pub trait Ordering: core::fmt::Debug {
 }
 
 /// Lexicographical ordering.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Lex;
 
 impl Ordering for Lex {
@@ -37,7 +37,7 @@ impl Ordering for Lex {
 
 /// Graded reverse lexicographical ordering.
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Grevlex;
 
 impl Ordering for Grevlex {

@@ -1,9 +1,11 @@
 pub mod division;
 pub mod grobner_basis;
 pub mod monomial_ordering;
+pub mod signature_basis;
 
 use super::ordered_ops;
 use monomial_ordering::Ordering;
+use num_traits::One;
 use std::{
     cmp::{Ordering as CmpOrd, Reverse},
     fmt::Write,
@@ -32,8 +34,6 @@ pub trait Power:
     + std::ops::AddAssign
     + for<'a> std::ops::AddAssign<&'a Self>
     + for<'a> std::ops::SubAssign<&'a Self>
-    + num_traits::ops::saturating::SaturatingSub
-    + num_traits::Unsigned
     + num_traits::Zero
     + num_traits::One
 {
@@ -73,12 +73,18 @@ where
     I: Id,
     P: Power,
 {
-    pub fn whole_division(mut self: Self, divisor: &Self) -> Option<Self> {
+    /// Division implementation, in two variants. If self is not divisible by
+    /// divisor, either return None, or return a result with negative exponents
+    /// (depending on the template argument).
+    ///
+    /// TODO: there may be a more elegant way to do this, where return value is
+    /// either Option<Self> or Self directly.
+    fn division_impl<const ALLOW_NEGATIVE_EXP: bool>(mut self, divisor: &Self) -> Option<Self> {
         let mut iter = self.product.iter_mut();
 
         for var in divisor.product.iter() {
             let found = iter.find(|e| e.id == var.id)?;
-            if found.power < var.power {
+            if ALLOW_NEGATIVE_EXP && found.power < var.power {
                 return None;
             }
 
@@ -89,6 +95,15 @@ where
         self.product.retain(|e| !e.power.is_zero());
 
         Some(self)
+    }
+
+    pub fn whole_division(self, divisor: &Self) -> Option<Self> {
+        self.division_impl::<false>(divisor)
+    }
+
+    pub fn fraction_division(self, divisor: &Self) -> Self {
+        // I am counting the optimizer will see this value can never be None.
+        self.division_impl::<true>(divisor).unwrap()
     }
 
     pub fn has_shared_variables(&self, other: &Self) -> bool {
@@ -136,43 +151,75 @@ impl<O, I: Clone, P: Clone> Clone for Monomial<O, I, P> {
 }
 
 // I did't use derive(PartialEq) because total_power
-// need not to be part of the comparision.
-impl<O, I, P> PartialEq for Monomial<O, I, P>
-where
-    I: PartialEq,
-    P: PartialEq,
-{
+// need not to be part of the comparison.
+impl<O, I: PartialEq, P: PartialEq> PartialEq for Monomial<O, I, P> {
     fn eq(&self, other: &Self) -> bool {
         self.product == other.product
     }
 }
 
-impl<O, I, P> Eq for Monomial<O, I, P>
-where
-    I: Eq,
-    P: Eq,
-{
-}
+impl<O, I: Eq, P: Eq> Eq for Monomial<O, I, P> {}
 
-impl<O, I, P> Ord for Monomial<O, I, P>
-where
-    I: Id,
-    P: Power,
-    O: Ordering,
-{
+impl<O: Ordering, I: Id, P: Power> Ord for Monomial<O, I, P> {
     fn cmp(&self, other: &Self) -> CmpOrd {
         Ordering::ord(self, other)
     }
 }
 
-impl<O, I, P> PartialOrd for Monomial<O, I, P>
-where
-    I: Id,
-    P: Power,
-    O: Ordering,
-{
+impl<O: Ordering, I: Id, P: Power> PartialOrd for Monomial<O, I, P> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(Ordering::ord(self, other))
+    }
+}
+
+impl<O, I, P> One for Monomial<O, I, P>
+where
+    O: Ordering,
+    I: Id,
+    P: Power,
+{
+    fn one() -> Self {
+        Monomial {
+            // Empty product means implicitly one
+            product: Vec::new(),
+            total_power: P::zero(),
+            _phantom_ordering: PhantomData,
+        }
+    }
+}
+
+impl<O, I, P> std::ops::Mul for Monomial<O, I, P>
+where
+    O: Ordering,
+    I: Id,
+    P: Power,
+{
+    type Output = Self;
+
+    fn mul(self, rhs: Self) -> Self {
+        let product = ordered_ops::sum(
+            self.product.into_iter(),
+            rhs.product.into_iter(),
+            |x, y| y.id.cmp(&x.id),
+            |mut x, y| {
+                x.power += y.power;
+                if x.power.is_zero() {
+                    None
+                } else {
+                    Some(x)
+                }
+            },
+        );
+        let mut total_power = P::zero();
+        for e in product.iter() {
+            total_power += &e.power;
+        }
+
+        Monomial {
+            product,
+            total_power,
+            _phantom_ordering: PhantomData,
+        }
     }
 }
 
@@ -184,6 +231,7 @@ pub struct Term<O, I, C, P> {
 
 impl<O, I, C, P> Term<O, I, C, P>
 where
+    O: Ordering,
     I: Id,
     C: Coefficient,
     P: Power,
@@ -240,12 +288,7 @@ where
     pub fn new_constant(value: C) -> Self {
         Term {
             coefficient: value,
-            monomial: Monomial {
-                // Empty product means implicitly one
-                product: Vec::new(),
-                total_power: P::zero(),
-                _phantom_ordering: PhantomData,
-            },
+            monomial: Monomial::<O, I, P>::one(),
         }
     }
 
@@ -307,6 +350,7 @@ where
 
 impl<O, I, C, P> std::ops::Mul for Term<O, I, C, P>
 where
+    O: Ordering,
     I: Id,
     C: Coefficient,
     P: Power,
@@ -317,33 +361,9 @@ where
         let mut coefficient = self.coefficient;
         coefficient *= &rhs.coefficient;
 
-        let product = ordered_ops::sum(
-            self.monomial.product.into_iter(),
-            rhs.monomial.product.into_iter(),
-            |x, y| y.id.cmp(&x.id),
-            |mut x, y| {
-                x.power += y.power;
-                if x.power.is_zero() {
-                    None
-                } else {
-                    Some(x)
-                }
-            },
-        );
-        let mut total_power = P::zero();
-        for e in product.iter() {
-            total_power += &e.power;
-        }
-
-        let monomial = Monomial {
-            product,
-            total_power,
-            _phantom_ordering: PhantomData,
-        };
-
         Self {
             coefficient,
-            monomial,
+            monomial: self.monomial * rhs.monomial,
         }
     }
 }
@@ -487,7 +507,8 @@ where
                 }
                 CmpOrd::Equal => (/* term already at target degree */),
                 CmpOrd::Greater => {
-                    let new_var_deg = degree.clone() - term.monomial.total_power;
+                    let mut new_var_deg = degree.clone();
+                    new_var_deg -= &term.monomial.total_power;
                     product.push(VariablePower {
                         id: ExtendedId::Extra,
                         power: new_var_deg,
@@ -657,6 +678,7 @@ where
 
 impl<O, I, C, P> std::ops::Add<C> for Polynomial<O, I, C, P>
 where
+    O: Ordering,
     I: Id,
     C: Coefficient,
     P: Power,
@@ -709,6 +731,7 @@ where
 
 impl<O, I, C, P> std::ops::Sub<C> for Polynomial<O, I, C, P>
 where
+    O: Ordering,
     I: Id,
     C: Coefficient,
     P: Power,
