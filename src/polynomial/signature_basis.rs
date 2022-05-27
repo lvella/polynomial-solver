@@ -4,7 +4,13 @@
 //! http://www.broune.com/papers/issac2012.html
 
 use super::{monomial_ordering::Ordering, Coefficient, Id, Monomial, Polynomial, Power};
-use num_traits::One;
+use num_traits::{One, Signed};
+
+/// The Power type must be signed for this algorithm to work,
+/// because we store the signature to leading monomial ratio, where
+/// variable exponents can be negative.
+pub trait SignedPower: Power + Signed {}
+impl<T> SignedPower for T where T: Power + Signed {}
 
 /// The signature of a polynomial.
 ///
@@ -15,7 +21,7 @@ use num_traits::One;
 /// There is a total order among signatures that is related to the monomial
 /// ordering.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct Signature<O: Ordering, I: Id, P: Power> {
+struct Signature<O: Ordering, I: Id, P: SignedPower> {
     idx: u32,
     monomial: Monomial<O, I, P>,
 }
@@ -26,16 +32,19 @@ struct Signature<O: Ordering, I: Id, P: Power> {
 /// polynomial module, but it turns out that representing this element as a
 /// pair (signature, polynomial) is sufficient for all the computations.
 /// Other fields are optimizations.
-struct SigPoly<O: Ordering, I: Id, C: Coefficient, P: Power> {
+struct SigPoly<O: Ordering, I: Id, C: Coefficient, P: SignedPower> {
     signature: Signature<O, I, P>,
     polynomial: Polynomial<O, I, C, P>,
 
-    /// The signature to leading term ratio allows us to quickly
+    /// The signature to leading monomial ratio allows us to quickly
     /// find out what is the signature of a new S-pair calculated.
-    sig_to_lead_term_ratio: Signature<O, I, P>,
+    ///
+    /// TODO: there is an optimization where every such ratio is
+    /// assigned an integer, thus can be compared in one instruction.
+    sign_to_lm_ratio: Signature<O, I, P>,
 }
 
-impl<O: Ordering, I: Id, C: Coefficient, P: Power> SigPoly<O, I, C, P> {
+impl<O: Ordering, I: Id, C: Coefficient, P: SignedPower> SigPoly<O, I, C, P> {
     /// Creates a new Signature Polynomial.
     ///
     /// Polynomial can not be zero, otherwise this will panic.
@@ -51,7 +60,7 @@ impl<O: Ordering, I: Id, C: Coefficient, P: Power> SigPoly<O, I, C, P> {
         Self {
             signature,
             polynomial,
-            sig_to_lead_term_ratio,
+            sign_to_lm_ratio: sig_to_lead_term_ratio,
         }
     }
 }
@@ -61,7 +70,7 @@ impl<O: Ordering, I: Id, C: Coefficient, P: Power> SigPoly<O, I, C, P> {
 /// This is analogous to calculate the remainder on a multivariate polynomial
 /// division, but with extra restrictions on what polynomials can be the divisor
 /// according to their signature.
-fn regular_reduce<O: Ordering, I: Id, C: Coefficient, P: Power>(
+fn regular_reduce<O: Ordering, I: Id, C: Coefficient, P: SignedPower>(
     reduced: SigPoly<O, I, C, P>,
     reducer: Vec<SigPoly<O, I, C, P>>,
 ) {
@@ -71,21 +80,21 @@ fn regular_reduce<O: Ordering, I: Id, C: Coefficient, P: Power>(
 mod s_pairs {
     use std::collections::BinaryHeap;
 
-    use crate::polynomial::{monomial_ordering::Ordering, Coefficient, Id, Monomial, Power};
+    use crate::polynomial::{monomial_ordering::Ordering, Coefficient, Id, Monomial};
 
-    use super::{SigPoly, Signature};
+    use super::{SigPoly, Signature, SignedPower};
 
     /// Partial S-pair
     ///
     /// This contains everything needed build and classify an S-pair, without
     /// carrying out the full computation.
-    struct SPair<O: Ordering, I: Id, P: Power> {
+    struct SPair<O: Ordering, I: Id, P: SignedPower> {
         signature: Signature<O, I, P>,
-        leading_monomial: Monomial<O, I, P>,
+        //leading_monomial: Monomial<O, I, P>,
         idx: u32,
     }
 
-    impl<O: Ordering, I: Id, P: Power> SPair<O, I, P> {
+    impl<O: Ordering, I: Id, P: SignedPower> SPair<O, I, P> {
         /// Creates a new S-pair, if not eliminated by early elimination criteria.
         fn new_if_viable<C: Coefficient>(
             sig_poly: &SigPoly<O, I, C, P>,
@@ -93,18 +102,46 @@ mod s_pairs {
             basis: &[SigPoly<O, I, C, P>],
         ) -> Option<Self> {
             let other = &basis[idx as usize];
-            // TODO: to be continued
-            // TODO: List of elimination criteria to implement here. Any of
-            // these criteria being true means that the S-pair reduces to 0 and
-            // can be eliminated:
-            // - non-regular criterion: test if Sig(a*p1) == Sig(b*p2)
-            // (and more)
-            None
+
+            // Find what polynomial to calculate the signature from.
+            // It is the one with highest signature to LM ratio.
+            let (sign_base, sign_other) =
+                match sig_poly.sign_to_lm_ratio.cmp(&other.sign_to_lm_ratio) {
+                    std::cmp::Ordering::Equal => {
+                        // Non-regular criterion: if the signature from both
+                        // polynomials are the same, this S-pair is singular and can
+                        // be eliminated immediately.
+                        return None;
+                    }
+                    std::cmp::Ordering::Less => {
+                        // TODO: implement here high-ratio base divisor criterion
+                        (other, sig_poly)
+                    }
+                    std::cmp::Ordering::Greater => {
+                        // TODO: implement here low-ratio base divisor criterion
+                        (sig_poly, other)
+                    }
+                };
+
+            // Calculate the S-pair signature.
+            let monomial = sign_base.signature.monomial.clone()
+                * sign_other.polynomial.terms[0]
+                    .monomial
+                    .div_by_gcd(&sign_base.polynomial.terms[0].monomial);
+
+            // TODO: implement here signature criterion
+
+            let signature = Signature {
+                monomial,
+                ..sign_base.signature
+            };
+
+            Some(SPair { signature, idx })
         }
     }
 
     /// Elements of the SPairTriangle, ordered by head_spair signature.
-    struct SPairColumn<O: Ordering, I: Id, P: Power> {
+    struct SPairColumn<O: Ordering, I: Id, P: SignedPower> {
         head_spair: SPair<O, I, P>,
 
         /// The index of the polynomial S-pairing with the others in the colum.
@@ -117,21 +154,21 @@ mod s_pairs {
         column: Vec<u32>,
     }
 
-    impl<O: Ordering, I: Id, P: Power> PartialEq for SPairColumn<O, I, P> {
+    impl<O: Ordering, I: Id, P: SignedPower> PartialEq for SPairColumn<O, I, P> {
         fn eq(&self, other: &Self) -> bool {
             self.head_spair.signature.eq(&other.head_spair.signature)
         }
     }
 
-    impl<O: Ordering, I: Id, P: Power> Eq for SPairColumn<O, I, P> {}
+    impl<O: Ordering, I: Id, P: SignedPower> Eq for SPairColumn<O, I, P> {}
 
-    impl<O: Ordering, I: Id, P: Power> PartialOrd for SPairColumn<O, I, P> {
+    impl<O: Ordering, I: Id, P: SignedPower> PartialOrd for SPairColumn<O, I, P> {
         fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
             Some(self.cmp(&other))
         }
     }
 
-    impl<O: Ordering, I: Id, P: Power> Ord for SPairColumn<O, I, P> {
+    impl<O: Ordering, I: Id, P: SignedPower> Ord for SPairColumn<O, I, P> {
         fn cmp(&self, other: &Self) -> std::cmp::Ordering {
             // The elements are ordered in descending order so that
             // the binary heap will return the smallest element.
@@ -144,11 +181,11 @@ mod s_pairs {
     /// Data structure defined in the paper to efficiently store and quickly
     /// retrieve the S-pair with minimal signature. This is basically a
     /// heap of ordered vectors.
-    pub struct SPairTriangle<O: Ordering, I: Id, P: Power> {
+    pub struct SPairTriangle<O: Ordering, I: Id, P: SignedPower> {
         heads: BinaryHeap<SPairColumn<O, I, P>>,
     }
 
-    impl<O: Ordering, I: Id, P: Power> SPairTriangle<O, I, P> {
+    impl<O: Ordering, I: Id, P: SignedPower> SPairTriangle<O, I, P> {
         pub fn new() -> Self {
             SPairTriangle {
                 heads: BinaryHeap::new(),
@@ -184,12 +221,12 @@ mod s_pairs {
 }
 
 /// Hold together the structures that must be coherent during the algorithm execution
-struct BasisCalculator<O: Ordering, I: Id, C: Coefficient, P: Power> {
+struct BasisCalculator<O: Ordering, I: Id, C: Coefficient, P: SignedPower> {
     basis: Vec<SigPoly<O, I, C, P>>,
     spairs: s_pairs::SPairTriangle<O, I, P>,
 }
 
-impl<O: Ordering, I: Id, C: Coefficient, P: Power> BasisCalculator<O, I, C, P> {
+impl<O: Ordering, I: Id, C: Coefficient, P: SignedPower> BasisCalculator<O, I, C, P> {
     fn new() -> Self {
         BasisCalculator {
             basis: Vec::new(),
@@ -205,7 +242,7 @@ impl<O: Ordering, I: Id, C: Coefficient, P: Power> BasisCalculator<O, I, C, P> {
 }
 
 /// Calculates the Grobner Basis using the Signature Buchberger (SB) algorithm.
-pub fn grobner_basis<O: Ordering, I: Id, C: Coefficient, P: Power>(
+pub fn grobner_basis<O: Ordering, I: Id, C: Coefficient, P: SignedPower>(
     input: &mut dyn Iterator<Item = Polynomial<O, I, C, P>>,
 ) -> Vec<Polynomial<O, I, C, P>> {
     // The algorithm performance might depend on the order the

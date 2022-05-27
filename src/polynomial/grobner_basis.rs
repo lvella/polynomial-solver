@@ -248,36 +248,12 @@ where
     C: InvertibleCoefficient,
     P: Power,
 {
-    let sat_diff = |a: &Term<O, I, C, P>, b: &Term<O, I, C, P>| {
-        let product = ordered_ops::saturating_sub(
-            a.monomial.product.iter().cloned(),
-            b.monomial.product.iter(),
-            |x, y| y.id.cmp(&x.id),
-            |mut x, y| {
-                if x.power > y.power {
-                    x.power -= &y.power;
-                    Some(x)
-                } else {
-                    None
-                }
-            },
-        );
-
-        let total_power = product.iter().fold(P::zero(), |mut acc, v| {
-            acc += &v.power;
-            acc
-        });
-
-        let monomial = Monomial {
-            product,
-            total_power,
-            _phantom_ordering: std::marker::PhantomData,
-        };
-
-        Term {
-            monomial,
-            coefficient: a.coefficient.clone(),
-        }
+    // Helper function used to calculate the complement of each polynomial
+    let complement = |a: &Term<O, I, C, P>, b: &Term<O, I, C, P>| Term {
+        monomial: a.monomial.div_by_gcd(&b.monomial),
+        // Each complement has the coefficient of the other polynomial, so that
+        // when multiplied, they end up with the same value.
+        coefficient: a.coefficient.clone(),
     };
 
     let mut iter_p = p.terms.iter();
@@ -288,10 +264,11 @@ where
             return Polynomial::zero();
         }
 
-        let p_complement = sat_diff(ini_q, ini_p);
-        let mut q_complement = sat_diff(ini_p, ini_q);
+        let p_complement = complement(ini_q, ini_p);
+        let mut q_complement = complement(ini_p, ini_q);
 
-        // q_complement must be negative, so the sum would eliminate the first term:
+        // q_complement's coefficient must be the opposite, so the sum would
+        // eliminate the first term:
         q_complement.coefficient = {
             let mut neg = C::zero();
             neg -= q_complement.coefficient;

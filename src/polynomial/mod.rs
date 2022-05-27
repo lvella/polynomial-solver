@@ -102,8 +102,37 @@ where
     }
 
     pub fn fraction_division(self, divisor: &Self) -> Self {
-        // I am counting the optimizer will see this value can never be None.
+        // I am counting the optimizer will see this value can never be None,
+        // and optimize away the unwrap.
         self.division_impl::<true>(divisor).unwrap()
+    }
+
+    /// Divides self by its gcd with of other monomial
+    pub fn div_by_gcd(&self, other: &Self) -> Self {
+        let product = ordered_ops::saturating_sub(
+            self.product.iter().cloned(),
+            other.product.iter(),
+            |x, y| y.id.cmp(&x.id),
+            |mut x, y| {
+                if x.power > y.power {
+                    x.power -= &y.power;
+                    Some(x)
+                } else {
+                    None
+                }
+            },
+        );
+
+        let total_power = product.iter().fold(P::zero(), |mut acc, v| {
+            acc += &v.power;
+            acc
+        });
+
+        Self {
+            product,
+            total_power,
+            _phantom_ordering: std::marker::PhantomData,
+        }
     }
 
     pub fn has_shared_variables(&self, other: &Self) -> bool {
