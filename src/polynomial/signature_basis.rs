@@ -80,23 +80,22 @@ fn regular_reduce<O: Ordering, I: Id, C: Coefficient, P: SignedPower>(
 mod s_pairs {
     use std::collections::BinaryHeap;
 
-    use crate::polynomial::{monomial_ordering::Ordering, Coefficient, Id, Monomial};
+    use crate::polynomial::{monomial_ordering::Ordering, Coefficient, Id, Monomial, Term};
 
     use super::{SigPoly, Signature, SignedPower};
 
-    /// Partial S-pair
+    /// Half S-pair
     ///
-    /// This contains everything needed build and classify an S-pair, without
-    /// carrying out the full computation.
-    struct SPair<O: Ordering, I: Id, P: SignedPower> {
+    /// This contains only what is needed to classify the S-pair (the signature), and
+    /// the index of the other polynomial needed to build the full S-pair.
+    struct HalfSPair<O: Ordering, I: Id, P: SignedPower> {
         signature: Signature<O, I, P>,
-        //leading_monomial: Monomial<O, I, P>,
         idx: u32,
     }
 
-    impl<O: Ordering, I: Id, P: SignedPower> SPair<O, I, P> {
+    impl<O: Ordering, I: Id, P: SignedPower> HalfSPair<O, I, P> {
         /// Creates a new S-pair, if not eliminated by early elimination criteria.
-        fn new_if_viable<C: Coefficient>(
+        fn new_if_not_eliminated<C: Coefficient>(
             sig_poly: &SigPoly<O, I, C, P>,
             idx: u32,
             basis: &[SigPoly<O, I, C, P>],
@@ -124,25 +123,55 @@ mod s_pairs {
                 };
 
             // Calculate the S-pair signature.
-            let monomial = sign_base.signature.monomial.clone()
-                * sign_other.polynomial.terms[0]
-                    .monomial
-                    .div_by_gcd(&sign_base.polynomial.terms[0].monomial);
+            let signature = HalfSPair::calculate_signature(sign_base, sign_other);
 
             // TODO: implement here signature criterion
 
-            let signature = Signature {
-                monomial,
-                ..sign_base.signature
-            };
+            Some(HalfSPair { signature, idx })
+        }
 
-            Some(SPair { signature, idx })
+        /// Creates a new S-pair without checking any elimination criteria.
+        fn new_unconditionally<C: Coefficient>(
+            sig_poly: &SigPoly<O, I, C, P>,
+            idx: u32,
+            basis: &[SigPoly<O, I, C, P>],
+        ) -> Self {
+            let other = &basis[idx as usize];
+
+            // Find what polynomial to calculate the signature from.
+            // It is the one with highest signature to LM ratio.
+            let (sign_base, sign_other) =
+                match sig_poly.sign_to_lm_ratio.cmp(&other.sign_to_lm_ratio) {
+                    std::cmp::Ordering::Less => (other, sig_poly),
+                    _ => (sig_poly, other),
+                };
+
+            HalfSPair {
+                signature: HalfSPair::calculate_signature(sign_base, sign_other),
+                idx,
+            }
+        }
+
+        /// Calculate the S-pair signature.
+        fn calculate_signature<C: Coefficient>(
+            base: &SigPoly<O, I, C, P>,
+            other: &SigPoly<O, I, C, P>,
+        ) -> Signature<O, I, P> {
+            let monomial = base.signature.monomial.clone()
+                * other.polynomial.terms[0]
+                    .monomial
+                    .div_by_gcd(&base.polynomial.terms[0].monomial);
+
+            Signature {
+                monomial,
+                ..base.signature
+            }
         }
     }
 
     /// Elements of the SPairTriangle, ordered by head_spair signature.
     struct SPairColumn<O: Ordering, I: Id, P: SignedPower> {
-        head_spair: SPair<O, I, P>,
+        head_spair: HalfSPair<O, I, P>,
 
         /// The index of the polynomial S-pairing with the others in the colum.
         origin_idx: u32,
@@ -176,12 +205,33 @@ mod s_pairs {
         }
     }
 
+    /// S-Pair where only the leading term has been evaluated.
+    struct PartialSPair<'a, O: Ordering, I: Id, C: Coefficient, P: SignedPower> {
+        leading_term: Term<O, I, C, P>,
+        a_factor: Term<O, I, C, P>,
+        a_iter: &'a dyn Iterator<Item = Term<O, I, C, P>>,
+        b_factor: Term<O, I, C, P>,
+        b_iter: &'a dyn Iterator<Item = Term<O, I, C, P>>,
+    }
+
+    impl<'a, O: Ordering, I: Id, C: Coefficient, P: SignedPower> PartialSPair<'a, O, I, C, P> {
+        fn new_if_not_eliminated(
+            a_idx: &SigPoly<O, I, C, P>,
+            b_idx: &SigPoly<O, I, C, P>,
+        ) -> Option<Self> {
+            // TODO: perform elimination via relativelly prime criterion.
+            // TODO: to be continued...
+            None
+        }
+    }
+
     /// Efficient priority queue to store S-pairs.
     ///
     /// Data structure defined in the paper to efficiently store and quickly
     /// retrieve the S-pair with minimal signature. This is basically a
     /// heap of ordered vectors.
     pub struct SPairTriangle<O: Ordering, I: Id, P: SignedPower> {
+        // TODO: test if storing Box<SPairColumn> improves performance
         heads: BinaryHeap<SPairColumn<O, I, P>>,
     }
 
@@ -200,7 +250,9 @@ mod s_pairs {
             let mut new_spairs: Vec<_> = basis
                 .iter()
                 .enumerate()
-                .filter_map(|(idx, poly)| SPair::new_if_viable(sig_poly, idx as u32, basis))
+                .filter_map(|(idx, _)| {
+                    HalfSPair::new_if_not_eliminated(sig_poly, idx as u32, basis)
+                })
                 .collect();
 
             // Sort by signature in decreasing order, so we can pop the next element from the tail.
@@ -216,6 +268,91 @@ mod s_pairs {
                     origin_idx,
                 });
             }
+        }
+
+        /// Extract the one of the S-pairs with minimal signature. There can be multiple.
+        fn pop<'a, C: Coefficient>(
+            &mut self,
+            basis: &'a [SigPoly<O, I, C, P>],
+        ) -> Option<(
+            Signature<O, I, P>,
+            &'a SigPoly<O, I, C, P>,
+            &'a SigPoly<O, I, C, P>,
+        )> {
+            // Get the S-pair at the head of the column
+            let mut head = self.heads.pop()?;
+            let ret = head.head_spair;
+            let a_poly = &basis[head.origin_idx as usize];
+            let b_poly = &basis[ret.idx as usize];
+
+            // Update the column's head and insert back into the heap
+            if let Some(next_head_idx) = head.column.pop() {
+                head.head_spair = HalfSPair::new_unconditionally(a_poly, next_head_idx, basis);
+                self.heads.push(head);
+            }
+
+            Some((ret.signature, a_poly, b_poly))
+        }
+
+        /// Return the next S-pair to be reduced, which is the S-pair of minimal
+        /// signature. Or None if there are no more S-pairs.
+        pub fn get_next<C: Coefficient>(
+            &mut self,
+            basis: &[SigPoly<O, I, C, P>],
+        ) -> Option<PartialSPair<O, I, C, P>> {
+            // Iterate until some S-pair remains that is not eliminated by one
+            // of the late elimination criteria.
+            while let Some((signature, a_poly, b_poly)) = self.pop(basis) {
+                let mut chosen_spair = PartialSPair::new_if_not_eliminated(a_poly, b_poly);
+
+                // Duplicate signature criterion: only one of all S-pairs of the
+                // same signature must be chosen, the one with the smallest
+                // leading monomial.
+                while let Some(head) = self.heads.peek() {
+                    if head.head_spair.signature != signature {
+                        break;
+                    }
+
+                    let (_, a_poly, b_poly) = self.pop(basis).unwrap();
+
+                    // Only process the new S-pair if no other of same signature has been eliminated.
+                    if let Some(spair) = &mut chosen_spair {
+                        match PartialSPair::new_if_not_eliminated(a_poly, b_poly) {
+                            Some(new_spair) => {
+                                // There is a non-eliminated new S-pair,
+                                // replace the chosen one if it has a smaller
+                                // signature.
+                                if new_spair.leading_term.monomial < spair.leading_term.monomial {
+                                    *spair = new_spair;
+                                }
+                            }
+                            None => {
+                                // The new S-pair was eliminated, so every
+                                // S-pair of same signature can be eliminated
+                                // as well.
+                                chosen_spair = None;
+                            }
+                        }
+                    }
+                }
+
+                // All S-pairs of signature have been consumed, and there is at most one remaining.
+                let spair = match chosen_spair {
+                    Some(spair) => spair,
+                    None => {
+                        continue;
+                    }
+                };
+
+                // TODO: perform all these elimination criteria:
+                // - late signature criterion
+                // - Koszul criterion
+                // not sure if here or before calculating all those lading terms.
+
+                // TODO: perform singular criterion elimination.
+                return Some(spair);
+            }
+            None
         }
     }
 }
