@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Debug, process::Output, str::FromStr};
+use std::{collections::HashMap, fmt::Debug, str::FromStr};
 
 use pest::{iterators::Pair, Parser};
 use polynomial_solver::polynomial::{

@@ -15,11 +15,11 @@ pub mod finite_field {
     }
 
     /// Factorize a polynomial over finite_fields into its distinct irreducible factors.
-    pub fn factorize<O, I, C, P>(poly: Polynomial<O, I, C, P>) -> FactorsIter<O, I, C, P> {
+    pub fn factorize<O, I, C, P>(_poly: Polynomial<O, I, C, P>) -> FactorsIter<O, I, C, P> {
         todo!("factorization not implemented");
     }
 
-    pub fn is_absolutely_irreducible<O, I, C, P>(poly: &Polynomial<O, I, C, P>) -> bool {
+    pub fn is_absolutely_irreducible<O, I, C, P>(_poly: &Polynomial<O, I, C, P>) -> bool {
         todo!("absolute irreducibility not implemented");
     }
 }
