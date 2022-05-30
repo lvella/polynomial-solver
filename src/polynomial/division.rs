@@ -92,7 +92,8 @@ where
                     let difference = divisor.terms[1..]
                         .iter()
                         .map(|t| t.clone() * factor.clone());
-                    self.terms = Polynomial::sum_terms(iter, difference);
+                    self.terms = Vec::new();
+                    Polynomial::sum_terms(iter, difference, &mut self.terms);
 
                     quot.push(-factor);
 

@@ -226,7 +226,8 @@ where
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self {
-        let product = ordered_ops::sum(
+        let mut product = Vec::new();
+        ordered_ops::sum(
             self.product.into_iter(),
             rhs.product.into_iter(),
             |x, y| y.id.cmp(&x.id),
@@ -238,6 +239,7 @@ where
                     Some(x)
                 }
             },
+            &mut product,
         );
         let mut total_power = P::zero();
         for e in product.iter() {
@@ -565,7 +567,8 @@ where
     fn sum_terms(
         a: impl Iterator<Item = Term<O, I, C, P>>,
         b: impl Iterator<Item = Term<O, I, C, P>>,
-    ) -> Vec<Term<O, I, C, P>> {
+        output: &mut Vec<Term<O, I, C, P>>,
+    ) {
         ordered_ops::sum(
             a,
             b,
@@ -578,6 +581,7 @@ where
                     Some(x)
                 }
             },
+            output,
         )
     }
 }
@@ -699,9 +703,9 @@ where
     type Output = Polynomial<O, I, C, P>;
 
     fn add(self, rhs: Polynomial<O, I, C, P>) -> Self::Output {
-        Self {
-            terms: Self::sum_terms(self.terms.into_iter(), rhs.terms.into_iter()),
-        }
+        let mut terms = Vec::new();
+        Self::sum_terms(self.terms.into_iter(), rhs.terms.into_iter(), &mut terms);
+        Self { terms }
     }
 }
 

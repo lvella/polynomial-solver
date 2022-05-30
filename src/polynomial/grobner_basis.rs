@@ -3,10 +3,7 @@
 //    - https://en.wikipedia.org/wiki/Faug%C3%A8re%27s_F4_and_F5_algorithms
 // - Use degrevlex ordering, and then transform to lex, which is cheaper than calculating in lex directly
 
-use crate::{
-    ordered_ops,
-    polynomial::{Id, Polynomial, Power, Term},
-};
+use crate::polynomial::{Id, Polynomial, Power, Term};
 
 use num_traits::Zero;
 use std::{
@@ -18,7 +15,7 @@ use std::{
 use super::{
     division::{InvertibleCoefficient, TermAccumulator},
     monomial_ordering::Ordering,
-    Coefficient, Monomial,
+    Coefficient,
 };
 
 /// Replace polynomial variables so that they have an order that is
@@ -113,7 +110,7 @@ where
         let difference: Vec<_> = ref_iter.map(|t| factor.clone() * t.clone()).collect();
 
         // Sum the remaining terms into a new polinomial:
-        p.terms = Polynomial::sum_terms(p_iter, difference.into_iter());
+        Polynomial::sum_terms(p_iter, difference.into_iter(), &mut p.terms);
 
         true
     } else {
@@ -259,6 +256,7 @@ where
     let mut iter_p = p.terms.iter();
     let mut iter_q = q.terms.iter();
 
+    let mut ret = Polynomial::zero();
     if let (Some(ini_p), Some(ini_q)) = (iter_p.next(), iter_q.next()) {
         if !ini_p.monomial.has_shared_variables(&ini_q.monomial) {
             return Polynomial::zero();
@@ -275,15 +273,14 @@ where
             neg
         };
 
-        Polynomial {
-            terms: Polynomial::sum_terms(
-                iter_p.cloned().map(|x| x * p_complement.clone()),
-                iter_q.cloned().map(|x| x * q_complement.clone()),
-            ),
-        }
-    } else {
-        Polynomial::zero()
+        Polynomial::sum_terms(
+            iter_p.cloned().map(|x| x * p_complement.clone()),
+            iter_q.cloned().map(|x| x * q_complement.clone()),
+            &mut ret.terms,
+        );
     }
+
+    ret
 }
 
 /// Just autoreduce a set of polynomials among themselves instead of doing

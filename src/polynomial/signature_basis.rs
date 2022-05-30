@@ -80,7 +80,10 @@ fn regular_reduce<O: Ordering, I: Id, C: Coefficient, P: SignedPower>(
 mod s_pairs {
     use std::collections::BinaryHeap;
 
-    use crate::polynomial::{monomial_ordering::Ordering, Coefficient, Id, Monomial, Term};
+    use crate::{
+        ordered_ops::partial_sum,
+        polynomial::{monomial_ordering::Ordering, Coefficient, Id, Polynomial, Term},
+    };
 
     use super::{SigPoly, Signature, SignedPower};
 
@@ -208,20 +211,91 @@ mod s_pairs {
     /// S-Pair where only the leading term has been evaluated.
     struct PartialSPair<'a, O: Ordering, I: Id, C: Coefficient, P: SignedPower> {
         leading_term: Term<O, I, C, P>,
-        a_factor: Term<O, I, C, P>,
-        a_iter: &'a dyn Iterator<Item = Term<O, I, C, P>>,
-        b_factor: Term<O, I, C, P>,
-        b_iter: &'a dyn Iterator<Item = Term<O, I, C, P>>,
+        iter_p: Box<(dyn Iterator<Item = Term<O, I, C, P>> + 'a)>,
+        iter_q: Box<(dyn Iterator<Item = Term<O, I, C, P>> + 'a)>,
+    }
+
+    impl<'a, O: Ordering, I: Id, C: Coefficient, P: SignedPower> From<PartialSPair<'a, O, I, C, P>>
+        for Polynomial<O, I, C, P>
+    {
+        /// Complete the calculation of PartialSPair into a SigPoly
+        fn from(spair: PartialSPair<O, I, C, P>) -> Self {
+            let mut terms = vec![spair.leading_term];
+            Self::sum_terms(spair.iter_p, spair.iter_q, &mut terms);
+            Self { terms }
+        }
     }
 
     impl<'a, O: Ordering, I: Id, C: Coefficient, P: SignedPower> PartialSPair<'a, O, I, C, P> {
+        /// Creates a partial S-pair with a leading term plus enough information
+        /// to finish the computation. Performs relativelly prime elimination
+        /// criterion, and return None if the S-pair was either eliminated or
+        /// turns out to evaluate to zero.
         fn new_if_not_eliminated(
-            a_idx: &SigPoly<O, I, C, P>,
-            b_idx: &SigPoly<O, I, C, P>,
+            p: &'a SigPoly<O, I, C, P>,
+            q: &'a SigPoly<O, I, C, P>,
         ) -> Option<Self> {
-            // TODO: perform elimination via relativelly prime criterion.
-            // TODO: to be continued...
-            None
+            // Helper function used to calculate the complement of each polynomial
+            let complement = |a: &Term<O, I, C, P>, b: &Term<O, I, C, P>| Term {
+                monomial: a.monomial.div_by_gcd(&b.monomial),
+                // Each complement has the coefficient of the other polynomial, so that
+                // when multiplied, they end up with the same value.
+                coefficient: a.coefficient.clone(),
+            };
+
+            let mut iter_p = p.polynomial.terms.iter();
+            let ini_p = iter_p.next()?;
+
+            let mut iter_q = q.polynomial.terms.iter();
+            let ini_q = iter_q.next()?;
+
+            // Relativelly prime criterion: if leading monomials are relativelly
+            // prime, the S-pair will reduce to zero.
+            if !ini_p.monomial.has_shared_variables(&ini_q.monomial) {
+                return None;
+            }
+
+            let p_complement = complement(ini_q, ini_p);
+            let mut q_complement = complement(ini_p, ini_q);
+
+            // q_complement's coefficient must be the opposite, so the sum would
+            // eliminate the first term:
+            q_complement.coefficient = {
+                let mut neg = C::zero();
+                neg -= q_complement.coefficient;
+                neg
+            };
+
+            let mut iter_p = Box::new(
+                iter_p
+                    .map(move |x| p_complement.clone() * x.clone())
+                    .peekable(),
+            );
+            let mut iter_q = Box::new(
+                iter_q
+                    .map(move |x| q_complement.clone() * x.clone())
+                    .peekable(),
+            );
+
+            let leading_term = partial_sum(
+                &mut iter_p,
+                &mut iter_q,
+                |a, b| b.monomial.cmp(&a.monomial),
+                |mut a, b| {
+                    a.coefficient += b.coefficient;
+                    if a.coefficient.is_zero() {
+                        None
+                    } else {
+                        Some(a)
+                    }
+                },
+            )?;
+
+            Some(PartialSPair {
+                leading_term,
+                iter_p,
+                iter_q,
+            })
         }
     }
 
@@ -296,10 +370,10 @@ mod s_pairs {
 
         /// Return the next S-pair to be reduced, which is the S-pair of minimal
         /// signature. Or None if there are no more S-pairs.
-        pub fn get_next<C: Coefficient>(
+        pub fn get_next<C: Coefficient, Iter: Iterator<Item = Term<O, I, C, P>>>(
             &mut self,
             basis: &[SigPoly<O, I, C, P>],
-        ) -> Option<PartialSPair<O, I, C, P>> {
+        ) -> Option<SigPoly<O, I, C, P>> {
             // Iterate until some S-pair remains that is not eliminated by one
             // of the late elimination criteria.
             while let Some((signature, a_poly, b_poly)) = self.pop(basis) {
@@ -336,10 +410,13 @@ mod s_pairs {
                     }
                 }
 
-                // All S-pairs of signature have been consumed, and there is at most one remaining.
+                // All S-pairs of this signature have been consumed, and there
+                // is at most one remaining.
                 let spair = match chosen_spair {
                     Some(spair) => spair,
                     None => {
+                        // The current S-pair has been eliminated.
+                        // Try another one.
                         continue;
                     }
                 };
@@ -347,10 +424,12 @@ mod s_pairs {
                 // TODO: perform all these elimination criteria:
                 // - late signature criterion
                 // - Koszul criterion
-                // not sure if here or before calculating all those lading terms.
+                // not sure if here or before calculating all these lading terms.
 
                 // TODO: perform singular criterion elimination.
-                return Some(spair);
+
+                // Create the full signature polynomial to return.
+                return Some(SigPoly::new(signature, spair.into()));
             }
             None
         }

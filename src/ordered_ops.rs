@@ -1,3 +1,5 @@
+use std::iter::Peekable;
+
 /// A term of the summable sequence with total order for the key, and
 /// a summable type with null value.
 /// In a polynomial term, Key is the monomial, and Value is the coefficient.
@@ -19,9 +21,8 @@ pub fn sum<T>(
     mut b_iter: impl Iterator<Item = T>,
     cmp: impl Fn(&T, &T) -> std::cmp::Ordering,
     op: impl Fn(T, T) -> Option<T>,
-) -> Vec<T> {
-    let mut new_terms = Vec::new();
-
+    output: &mut Vec<T>,
+) {
     let mut a = a_iter.next();
     let mut b = b_iter.next();
 
@@ -31,30 +32,30 @@ pub fn sum<T>(
                 std::cmp::Ordering::Equal => {
                     // Do the operation
                     if let Some(r) = op(va, vb) {
-                        new_terms.push(r);
+                        output.push(r);
                     }
                     a = a_iter.next();
                     b = b_iter.next();
                 }
                 std::cmp::Ordering::Less => {
-                    new_terms.push(va);
+                    output.push(va);
                     a = a_iter.next();
                     b = Some(vb);
                 }
                 std::cmp::Ordering::Greater => {
-                    new_terms.push(vb);
+                    output.push(vb);
                     a = Some(va);
                     b = b_iter.next();
                 }
             },
             (None, Some(b)) => {
-                new_terms.push(b);
-                new_terms.extend(b_iter);
+                output.push(b);
+                output.extend(b_iter);
                 break;
             }
             (Some(a), None) => {
-                new_terms.push(a);
-                new_terms.extend(a_iter);
+                output.push(a);
+                output.extend(a_iter);
                 break;
             }
             (None, None) => {
@@ -62,8 +63,53 @@ pub fn sum<T>(
             }
         }
     }
+}
 
-    new_terms
+/// Like sum, but stops when the first element is calculated.
+pub fn partial_sum<T: Clone>(
+    mut a_iter: &mut Peekable<impl Iterator<Item = T>>,
+    mut b_iter: &mut Peekable<impl Iterator<Item = T>>,
+    cmp: impl Fn(&T, &T) -> std::cmp::Ordering,
+    op: impl Fn(T, T) -> Option<T>,
+) -> Option<T> {
+    loop {
+        let ret;
+        match (a_iter.peek(), b_iter.peek()) {
+            (Some(ra), Some(rb)) => match cmp(ra, rb) {
+                std::cmp::Ordering::Equal => {
+                    let a = a_iter.next().unwrap();
+                    let b = b_iter.next().unwrap();
+
+                    // Do the operation
+                    match op(a, b) {
+                        Some(r) => {
+                            ret = r;
+                            false
+                        }
+                        None => {
+                            continue;
+                        }
+                    };
+                }
+                std::cmp::Ordering::Less => {
+                    ret = a_iter.next().unwrap();
+                }
+                std::cmp::Ordering::Greater => {
+                    ret = b_iter.next().unwrap();
+                }
+            },
+            (None, Some(_)) => {
+                ret = b_iter.next().unwrap();
+            }
+            (Some(_), None) => {
+                ret = a_iter.next().unwrap();
+            }
+            (None, None) => {
+                return None;
+            }
+        }
+        return Some(ret);
+    }
 }
 
 /// Implements ordered saturated difference.
