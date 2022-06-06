@@ -964,6 +964,8 @@ impl Power for u32 {}
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use num_traits::Pow;
 
     use super::*;
@@ -973,6 +975,48 @@ mod tests {
     impl Power for u16 {}
 
     pub type SmallPoly = Polynomial<monomial_ordering::Lex, u8, i32, u16>;
+
+    #[test]
+    fn map_build_time() {
+        let mut elapsed = Duration::ZERO;
+        for _ in 0..100 {
+            // Build a random sparse polynomial
+            let mut terms = Vec::new();
+            for _ in 0..2000 {
+                let mut monomial = Vec::new();
+                for i in 0u8..100 {
+                    if rand::random() {
+                        continue;
+                    }
+                    let power: u16 = rand::random::<u16>() % 52u16;
+                    monomial.push(VariablePower::new(i, power));
+                }
+                terms.push(Term::new_multi_vars(42i32, monomial));
+            }
+            // Properly sort the terms:
+            let p = SmallPoly::from_terms(terms);
+
+            use std::time::Instant;
+            let now = Instant::now();
+
+            // Code block to measure.
+            let map: std::collections::BTreeMap<_, _>;
+            {
+                map = p
+                    .terms
+                    .into_iter()
+                    .rev()
+                    .map(|term| (term.monomial, term.coefficient))
+                    .collect();
+            }
+
+            elapsed += now.elapsed();
+            if let Some((m, c)) = map.first_key_value() {
+                println!("{:#?}, {}", m, c);
+            }
+        }
+        println!("Elapsed: {:.2?}", elapsed);
+    }
 
     #[test]
     fn addition_and_subtraction_ordering() {

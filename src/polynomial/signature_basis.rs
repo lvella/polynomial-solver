@@ -3,90 +3,83 @@
 //! by Bjarke Hammersholt Roune and Michael Stillman
 //! http://www.broune.com/papers/issac2012.html
 
-use super::{monomial_ordering::Ordering, Coefficient, Id, Monomial, Polynomial};
+use std::collections::BTreeMap;
+
+use super::division::InvertibleCoefficient;
+use super::{monomial_ordering::Ordering, Id, Monomial, Polynomial, Power, Term};
 use num_traits::{One, Zero};
 
-mod sign_poly {
-    use num_traits::Signed;
+use num_traits::Signed;
 
-    use crate::polynomial::{
-        monomial_ordering::Ordering, Coefficient, Id, Monomial, Polynomial, Power,
-    };
+/// The Power type must be signed for this algorithm to work,
+/// because we store the signature to leading monomial ratio, where
+/// variable exponents can be negative.
+pub trait SignedPower: Power + Signed {}
+impl<T> SignedPower for T where T: Power + Signed {}
 
-    /// The Power type must be signed for this algorithm to work,
-    /// because we store the signature to leading monomial ratio, where
-    /// variable exponents can be negative.
-    pub trait SignedPower: Power + Signed {}
-    impl<T> SignedPower for T where T: Power + Signed {}
-
-    /// The signature of a polynomial.
-    ///
-    /// The signature of a polynomial is used to track what monomial multiplied by
-    /// which of the input polynomials originated it. For the formal definition, see
-    /// the paper.
-    ///
-    /// There is a total order among signatures that is related to the monomial
-    /// ordering.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-    pub struct Signature<O: Ordering, I: Id, P: SignedPower> {
-        pub idx: u32,
-        pub monomial: Monomial<O, I, P>,
-    }
-
-    /// Signature polynomial.
-    ///
-    /// In the paper, the SB algorithm is described in terms of elements of a
-    /// polynomial module, but it turns out that representing this element as a
-    /// pair (signature, polynomial) is sufficient for all the computations.
-    /// Other fields are optimizations.
-    pub struct SignPoly<O: Ordering, I: Id, C: Coefficient, P: SignedPower> {
-        pub signature: Signature<O, I, P>,
-        pub polynomial: Polynomial<O, I, C, P>,
-
-        /// The signature monomial to leading monomial ratio allows us to quickly
-        /// find out what is the signature of a new S-pair calculated.
-        ///
-        /// TODO: there is an optimization where every such ratio is assigned an
-        /// integer, thus can be compared in one instruction.
-        sign_to_lm_ratio: Monomial<O, I, P>,
-    }
-
-    impl<O: Ordering, I: Id, C: Coefficient, P: SignedPower> SignPoly<O, I, C, P> {
-        /// Creates a new Signature Polynomial.
-        ///
-        /// Polynomial can not be zero, otherwise this will panic.
-        pub fn new(signature: Signature<O, I, P>, polynomial: Polynomial<O, I, C, P>) -> Self {
-            let sign_to_lm_ratio = signature
-                .monomial
-                .clone()
-                .fraction_division(&polynomial.get_terms()[0].get_monomial());
-
-            Self {
-                signature,
-                polynomial,
-                sign_to_lm_ratio,
-            }
-        }
-
-        /// Compare SigPolys by signature to leading monomial ratio.
-        pub fn sign_to_lm_ratio_cmp(&self, other: &Self) -> std::cmp::Ordering {
-            (self.signature.idx, &self.sign_to_lm_ratio)
-                .cmp(&(other.signature.idx, &other.sign_to_lm_ratio))
-        }
-    }
+/// The signature of a polynomial.
+///
+/// The signature of a polynomial is used to track what monomial multiplied by
+/// which of the input polynomials originated it. For the formal definition, see
+/// the paper.
+///
+/// There is a total order among signatures that is related to the monomial
+/// ordering.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Signature<O: Ordering, I: Id, P: SignedPower> {
+    idx: u32,
+    monomial: Monomial<O, I, P>,
 }
 
-use sign_poly::{SignPoly, Signature, SignedPower};
-
-/// Regular reduction, as defined in the paper.
+/// Calculates signature to term ratio.
 ///
-/// This is analogous to calculate the remainder on a multivariate polynomial
-/// division, but with extra restrictions on what polynomials can be the divisor
-/// according to their signature.
-fn regular_reduce<O: Ordering, I: Id, C: Coefficient, P: SignedPower>(
-    reduced: SignPoly<O, I, C, P>,
-    reducer: Vec<SignPoly<O, I, C, P>>,
-) {
+/// By allowing negative exponents, we can calculate the ratio between
+/// a signature and a monomial, which is useful for comparison.
+fn sign_to_monomial_ratio<O: Ordering, I: Id, P: SignedPower>(
+    mut signature: Signature<O, I, P>,
+    monomial: &Monomial<O, I, P>,
+) -> Signature<O, I, P> {
+    signature.monomial = signature.monomial.fraction_division(monomial);
+    signature
+}
+
+/// Signature polynomial.
+///
+/// In the paper, the SB algorithm is described in terms of elements of a
+/// polynomial module, but it turns out that representing this element as a
+/// pair (signature, polynomial) is sufficient for all the computations.
+/// Other fields are optimizations.
+struct SignPoly<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> {
+    signature: Signature<O, I, P>,
+    polynomial: Polynomial<O, I, C, P>,
+
+    /// The signature to leading monomial ratio allows us to quickly find
+    /// out what is the signature of a new S-pair calculated.
+    ///
+    /// TODO: there is an optimization where every such ratio is assigned an
+    /// integer, thus can be compared in one instruction.
+    sign_to_lm_ratio: Signature<O, I, P>,
+}
+
+impl<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> SignPoly<O, I, C, P> {
+    /// Creates a new Signature Polynomial.
+    ///
+    /// Polynomial can not be zero, otherwise this will panic.
+    fn new(signature: Signature<O, I, P>, polynomial: Polynomial<O, I, C, P>) -> Self {
+        let sign_to_lm_ratio =
+            sign_to_monomial_ratio(signature.clone(), &polynomial.terms[0].monomial);
+
+        Self {
+            signature,
+            polynomial,
+            sign_to_lm_ratio,
+        }
+    }
+
+    /// Compare SigPolys by signature to leading monomial ratio.
+    fn sign_to_lm_ratio_cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.sign_to_lm_ratio.cmp(&other.sign_to_lm_ratio)
+    }
 }
 
 /// S-pairs data structures.
@@ -95,7 +88,9 @@ mod s_pairs {
 
     use crate::{
         ordered_ops::partial_sum,
-        polynomial::{monomial_ordering::Ordering, Coefficient, Id, Polynomial, Term},
+        polynomial::{
+            division::InvertibleCoefficient, monomial_ordering::Ordering, Id, Polynomial, Term,
+        },
     };
 
     use super::{SignPoly, Signature, SignedPower};
@@ -111,7 +106,7 @@ mod s_pairs {
 
     impl<O: Ordering, I: Id, P: SignedPower> HalfSPair<O, I, P> {
         /// Creates a new S-pair, if not eliminated by early elimination criteria.
-        fn new_if_not_eliminated<C: Coefficient>(
+        fn new_if_not_eliminated<C: InvertibleCoefficient>(
             sign_poly: &SignPoly<O, I, C, P>,
             idx: u32,
             basis: &[SignPoly<O, I, C, P>],
@@ -146,7 +141,7 @@ mod s_pairs {
         }
 
         /// Creates a new S-pair without checking any elimination criteria.
-        fn new_unconditionally<C: Coefficient>(
+        fn new_unconditionally<C: InvertibleCoefficient>(
             sign_poly: &SignPoly<O, I, C, P>,
             idx: u32,
             basis: &[SignPoly<O, I, C, P>],
@@ -167,7 +162,7 @@ mod s_pairs {
         }
 
         /// Calculate the S-pair signature.
-        fn calculate_signature<C: Coefficient>(
+        fn calculate_signature<C: InvertibleCoefficient>(
             base: &SignPoly<O, I, C, P>,
             other: &SignPoly<O, I, C, P>,
         ) -> Signature<O, I, P> {
@@ -220,14 +215,14 @@ mod s_pairs {
     }
 
     /// S-Pair where only the leading term has been evaluated.
-    struct PartialSPair<'a, O: Ordering, I: Id, C: Coefficient, P: SignedPower> {
+    struct PartialSPair<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> {
         leading_term: Term<O, I, C, P>,
         iter_p: Box<(dyn Iterator<Item = Term<O, I, C, P>> + 'a)>,
         iter_q: Box<(dyn Iterator<Item = Term<O, I, C, P>> + 'a)>,
     }
 
-    impl<'a, O: Ordering, I: Id, C: Coefficient, P: SignedPower> From<PartialSPair<'a, O, I, C, P>>
-        for Polynomial<O, I, C, P>
+    impl<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower>
+        From<PartialSPair<'a, O, I, C, P>> for Polynomial<O, I, C, P>
     {
         /// Complete the calculation of PartialSPair into a SigPoly
         fn from(spair: PartialSPair<O, I, C, P>) -> Self {
@@ -237,7 +232,9 @@ mod s_pairs {
         }
     }
 
-    impl<'a, O: Ordering, I: Id, C: Coefficient, P: SignedPower> PartialSPair<'a, O, I, C, P> {
+    impl<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower>
+        PartialSPair<'a, O, I, C, P>
+    {
         /// Creates a partial S-pair with a leading term plus enough information
         /// to finish the computation. Performs relativelly prime elimination
         /// criterion, and return None if the S-pair was either eliminated or
@@ -327,7 +324,7 @@ mod s_pairs {
             }
         }
 
-        pub fn add_column<C: Coefficient>(
+        pub fn add_column<C: InvertibleCoefficient>(
             &mut self,
             sign_poly: &SignPoly<O, I, C, P>,
             basis: &[SignPoly<O, I, C, P>],
@@ -356,7 +353,7 @@ mod s_pairs {
         }
 
         /// Extract the one of the S-pairs with minimal signature. There can be multiple.
-        fn pop<'a, C: Coefficient>(
+        fn pop<'a, C: InvertibleCoefficient>(
             &mut self,
             basis: &'a [SignPoly<O, I, C, P>],
         ) -> Option<(
@@ -381,10 +378,10 @@ mod s_pairs {
 
         /// Return the next S-pair to be reduced, which is the S-pair of minimal
         /// signature. Or None if there are no more S-pairs.
-        pub fn get_next<C: Coefficient>(
+        pub fn get_next<C: InvertibleCoefficient>(
             &mut self,
             basis: &[SignPoly<O, I, C, P>],
-        ) -> Option<SignPoly<O, I, C, P>> {
+        ) -> Option<(Signature<O, I, P>, Polynomial<O, I, C, P>)> {
             // Iterate until some S-pair remains that is not eliminated by one
             // of the late elimination criteria.
             while let Some((signature, a_poly, b_poly)) = self.pop(basis) {
@@ -439,8 +436,7 @@ mod s_pairs {
 
                 // TODO: perform singular criterion elimination.
 
-                // Create the full signature polynomial to return.
-                return Some(SignPoly::new(signature, spair.into()));
+                return Some((signature, spair.into()));
             }
             None
         }
@@ -448,22 +444,23 @@ mod s_pairs {
 }
 
 /// Hold together the structures that must be coherent during the algorithm execution
-struct BasisCalculator<O: Ordering, I: Id, C: Coefficient, P: SignedPower> {
+struct BasisCalculator<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> {
     basis: Vec<SignPoly<O, I, C, P>>,
     spairs: s_pairs::SPairTriangle<O, I, P>,
 }
 
-/// The 3 possible results of a regular reduction.
-enum RegularReductionResult<O: Ordering, I: Id, C: Coefficient, P: SignedPower> {
-    /// Polynomial was singular top reducible
+/// Result from searching for a regular reducer.
+enum ReducerSearchResult<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> {
+    /// A regular reducer was found, it is the returned monomial multiplied by
+    /// the returned polynomial.
+    Some(Monomial<O, I, P>, &'a SignPoly<O, I, C, P>),
+    /// A reducer of same signature was found, so the reduction can be skipped
     Singular,
-    /// Polynomial was reduced to zero.
-    Zero(Signature<O, I, P>),
-    /// Polynomial was reduced to some non singular top reducible polynomial.
-    Some(SignPoly<O, I, C, P>),
+    /// No reducer could be found, so the term is reduced.
+    None,
 }
 
-impl<O: Ordering, I: Id, C: Coefficient, P: SignedPower> BasisCalculator<O, I, C, P> {
+impl<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> BasisCalculator<O, I, C, P> {
     fn new() -> Self {
         BasisCalculator {
             basis: Vec::new(),
@@ -477,26 +474,180 @@ impl<O: Ordering, I: Id, C: Coefficient, P: SignedPower> BasisCalculator<O, I, C
         self.basis.push(sign_poly);
     }
 
-    fn next_spair(&mut self) -> Option<SignPoly<O, I, C, P>> {
+    fn next_spair(&mut self) -> Option<(Signature<O, I, P>, Polynomial<O, I, C, P>)> {
         self.spairs.get_next(&self.basis)
+    }
+
+    fn find_a_regular_reducer(
+        &self,
+        ratio: &Signature<O, I, P>,
+        term: &Term<O, I, C, P>,
+    ) -> ReducerSearchResult<O, I, C, P> {
+        // TODO: to be continued...
+        todo!()
     }
 
     fn add_syzygy_signature(&mut self, signature: Signature<O, I, P>) {
         // TODO: to be continued...
         todo!()
     }
+}
 
-    fn regular_reduce(
-        &self,
-        sign_poly: SignPoly<O, I, C, P>,
-    ) -> RegularReductionResult<O, I, C, P> {
-        // TODO: to be continued...
-        todo!()
+/// The 3 possible results of a regular reduction.
+enum RegularReductionResult<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> {
+    /// Polynomial was singular top reducible
+    Singular,
+    /// Polynomial was reduced to zero.
+    Zero(Signature<O, I, P>),
+    /// Polynomial was reduced to some non-zero constant.
+    NonZeroConstant(Polynomial<O, I, C, P>),
+    /// Polynomial was reduced to some non singular top reducible polynomial.
+    Reduced(SignPoly<O, I, C, P>),
+}
+
+/// Regular reduction, as defined in the paper.
+///
+/// This is analogous to calculate the remainder on a multivariate polynomial
+/// division, but with extra restrictions on what polynomials can be the divisor
+/// according to their signature.
+fn regular_reduce<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower>(
+    signature: Signature<O, I, P>,
+    polynomial: Polynomial<O, I, C, P>,
+    basis: &BasisCalculator<O, I, C, P>,
+) -> RegularReductionResult<O, I, C, P> {
+    // The paper suggests splitting the reduced polynomial into a hash map of
+    // monomial -> coefficient, so that we can efficiently sum the new terms,
+    // and a priority queue, so that we know what is the next monomial to be
+    // reduced. We can do both with a single BTreeMap, which is ordered and has
+    // fast map access. For now, I will use a BTreeMap, which I suspect to be
+    // good enough.
+    //
+    // TODO: compare with the paper's solution
+
+    // The tree with the terms to be reduced.
+    let mut to_reduce: BTreeMap<Monomial<O, I, P>, C> = polynomial
+        .terms
+        .into_iter()
+        // Since this is already reverse sorted, rev() is a little faster, as we
+        // insert the elements in increasing order.
+        .rev()
+        .map(|term| (term.monomial, term.coefficient))
+        .collect();
+
+    // Reduce one term at a time.
+    let mut reduced_terms = Vec::new();
+    let mut sign_to_lm_ratio = None;
+    while let Some((m, c)) = to_reduce.pop_last() {
+        // Reassemble the term
+        let term = Term {
+            coefficient: c,
+            monomial: m,
+        };
+
+        // Skip searching for a divisor for 1 and (maybe) save some time.
+        if term.monomial.is_one() {
+            reduced_terms.push(term);
+            break;
+        }
+
+        // Calculate signature to monomial ratio, to search for a reducer,
+        // and possibly store it as the ratio for the leading term.
+        let sign_to_term_ratio = sign_to_monomial_ratio(signature.clone(), &term.monomial);
+
+        match basis.find_a_regular_reducer(&sign_to_term_ratio, &term) {
+            ReducerSearchResult::Some(monomial, reducer) => {
+                let mut iter = reducer.polynomial.terms.iter();
+
+                // Calculate the multiplier coefficient using the reducer leading term:
+                let coefficient = term
+                    .coefficient
+                    .elimination_factor(&iter.next().unwrap().coefficient.clone().inv());
+
+                let factor = Term {
+                    coefficient,
+                    monomial,
+                };
+
+                // Subtract every element of the reducer from the rest of the
+                // polynomial.
+                for term in iter {
+                    let reducer_term = factor.clone() * term.clone();
+
+                    match to_reduce.entry(reducer_term.monomial) {
+                        std::collections::btree_map::Entry::Vacant(entry) => {
+                            // There was no such monomial, just insert:
+                            entry.insert(reducer_term.coefficient);
+                        }
+                        std::collections::btree_map::Entry::Occupied(mut entry) => {
+                            // Sum the coefficients, and remove if result is zero.
+                            *entry.get_mut() += reducer_term.coefficient;
+                            if entry.get().is_zero() {
+                                entry.remove_entry();
+                            }
+                        }
+                    }
+                }
+
+                // Don't insert any new term in the final polynomial
+                continue;
+            }
+            ReducerSearchResult::Singular => {
+                // Since the reduction is singular, we can stop if we are
+                // reducing the leading term.
+                if reduced_terms.is_empty() {
+                    return RegularReductionResult::Singular;
+                }
+                // otherwise this simply fall through as it can't be reduced.
+
+                // TODO: Really can't? It seems to me signature stuff can be
+                // ignored if we are not reducing the leading term. Eventually
+                // we should experiment with only considering signatures with
+                // the leading term.
+            }
+            ReducerSearchResult::None => (
+                // No reducer was found.
+            ),
+        }
+
+        // The term could not be reduced. Store the ratio if this is the
+        // leading term:
+        if let None = sign_to_lm_ratio {
+            assert!(reduced_terms.len() == 0);
+            sign_to_lm_ratio = Some(sign_to_term_ratio);
+        }
+
+        // And insert it into the output. These terms are already in
+        // decreasing order.
+        reduced_terms.push(term)
+    }
+
+    let polynomial = Polynomial {
+        terms: reduced_terms,
+    };
+
+    match sign_to_lm_ratio {
+        Some(sign_to_lm_ratio) => RegularReductionResult::Reduced(SignPoly {
+            signature,
+            polynomial,
+            sign_to_lm_ratio,
+        }),
+        None => {
+            // The only way for sign_to_lm_ratio to be None is when
+            // reduced_terms is empty or constant.
+            match polynomial.terms.len() {
+                0 => RegularReductionResult::Zero(signature),
+                1 => {
+                    assert!(polynomial.is_constant());
+                    RegularReductionResult::NonZeroConstant(polynomial)
+                }
+                _ => panic!("This should never happen!"),
+            }
+        }
     }
 }
 
 /// Calculates the Grobner Basis using the Signature Buchberger (SB) algorithm.
-pub fn grobner_basis<O: Ordering, I: Id, C: Coefficient, P: SignedPower>(
+pub fn grobner_basis<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower>(
     input: &mut dyn Iterator<Item = Polynomial<O, I, C, P>>,
 ) -> Vec<Polynomial<O, I, C, P>> {
     // The algorithm performance might depend on the order the
@@ -532,25 +683,26 @@ pub fn grobner_basis<O: Ordering, I: Id, C: Coefficient, P: SignedPower>(
     // Main loop, reduce every S-pair and insert in the basis until there are no
     // more S-pairs to be reduced. Since each newly inserted polynomials can
     // generate up to n-1 new S-pairs, this loop is exponential.
-    while let Some(sign_poly) = c.next_spair() {
-        match c.regular_reduce(sign_poly) {
-            RegularReductionResult::Singular => (
-                // Polynomial was singular top reducible, so it was redundant
-                // and discarded.
-            ),
+    while let Some((signature, polynomial)) = c.next_spair() {
+        match regular_reduce(signature, polynomial, &c) {
+            RegularReductionResult::Reduced(reduced) => {
+                // Polynomial is a new valid member of the basis. Insert it into
+                // the basis.
+                c.insert_poly_with_spairs(reduced);
+            }
             RegularReductionResult::Zero(signature) => {
                 // Polynomial reduces to zero, so we keep the signature to
                 // eliminate S-pairs before reduction.
                 c.add_syzygy_signature(signature);
             }
-            RegularReductionResult::Some(reduced) => {
-                // Polynomial is a new valid member of the basis. Either we
-                // are done if it is constant, or we insert it into the basis
-                // and resume.
-                if reduced.polynomial.is_constant() {
-                    return vec![reduced.polynomial];
-                }
-                c.insert_poly_with_spairs(reduced);
+            RegularReductionResult::Singular => (
+                // Polynomial was singular top reducible, so it was redundant
+                // and discarded.
+            ),
+            RegularReductionResult::NonZeroConstant(polynomial) => {
+                // The new basis member is a constant, so it reduces everything
+                // to zero and we can stop.
+                return vec![polynomial];
             }
         }
     }
