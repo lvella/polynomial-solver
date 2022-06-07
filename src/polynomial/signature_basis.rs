@@ -36,11 +36,15 @@ pub struct Signature<O: Ordering, I: Id, P: SignedPower> {
 /// By allowing negative exponents, we can calculate the ratio between
 /// a signature and a monomial, which is useful for comparison.
 fn sign_to_monomial_ratio<O: Ordering, I: Id, P: SignedPower>(
-    mut signature: Signature<O, I, P>,
+    signature: &Signature<O, I, P>,
     monomial: &Monomial<O, I, P>,
 ) -> Signature<O, I, P> {
-    signature.monomial = signature.monomial.fraction_division(monomial);
-    signature
+    let monomial = signature.monomial.fraction_division(monomial);
+
+    Signature {
+        monomial,
+        ..*signature
+    }
 }
 
 /// Signature polynomial.
@@ -66,8 +70,7 @@ impl<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> SignPoly<O, I
     ///
     /// Polynomial can not be zero, otherwise this will panic.
     fn new(signature: Signature<O, I, P>, polynomial: Polynomial<O, I, C, P>) -> Self {
-        let sign_to_lm_ratio =
-            sign_to_monomial_ratio(signature.clone(), &polynomial.terms[0].monomial);
+        let sign_to_lm_ratio = sign_to_monomial_ratio(&signature, &polynomial.terms[0].monomial);
 
         Self {
             signature,
@@ -109,9 +112,9 @@ mod s_pairs {
         fn new_if_not_eliminated<C: InvertibleCoefficient>(
             sign_poly: &SignPoly<O, I, C, P>,
             idx: u32,
-            basis: &[SignPoly<O, I, C, P>],
+            basis: &[Box<SignPoly<O, I, C, P>>],
         ) -> Option<Self> {
-            let other = &basis[idx as usize];
+            let other = basis[idx as usize].as_ref();
 
             // Find what polynomial to calculate the signature from.
             // It is the one with highest signature to LM ratio.
@@ -144,9 +147,9 @@ mod s_pairs {
         fn new_unconditionally<C: InvertibleCoefficient>(
             sign_poly: &SignPoly<O, I, C, P>,
             idx: u32,
-            basis: &[SignPoly<O, I, C, P>],
+            basis: &[Box<SignPoly<O, I, C, P>>],
         ) -> Self {
-            let other = &basis[idx as usize];
+            let other = basis[idx as usize].as_ref();
 
             // Find what polynomial to calculate the signature from.
             // It is the one with highest signature to LM ratio.
@@ -327,7 +330,7 @@ mod s_pairs {
         pub fn add_column<C: InvertibleCoefficient>(
             &mut self,
             sign_poly: &SignPoly<O, I, C, P>,
-            basis: &[SignPoly<O, I, C, P>],
+            basis: &[Box<SignPoly<O, I, C, P>>],
         ) {
             let mut new_spairs: Vec<_> = basis
                 .iter()
@@ -355,7 +358,7 @@ mod s_pairs {
         /// Extract the one of the S-pairs with minimal signature. There can be multiple.
         fn pop<'a, C: InvertibleCoefficient>(
             &mut self,
-            basis: &'a [SignPoly<O, I, C, P>],
+            basis: &'a [Box<SignPoly<O, I, C, P>>],
         ) -> Option<(
             Signature<O, I, P>,
             &'a SignPoly<O, I, C, P>,
@@ -364,8 +367,8 @@ mod s_pairs {
             // Get the S-pair at the head of the column
             let mut head = self.heads.pop()?;
             let ret = head.head_spair;
-            let a_poly = &basis[head.origin_idx as usize];
-            let b_poly = &basis[ret.idx as usize];
+            let a_poly = basis[head.origin_idx as usize].as_ref();
+            let b_poly = basis[ret.idx as usize].as_ref();
 
             // Update the column's head and insert it back into the heap
             if let Some(next_head_idx) = head.column.pop() {
@@ -380,7 +383,7 @@ mod s_pairs {
         /// signature. Or None if there are no more S-pairs.
         pub fn get_next<C: InvertibleCoefficient>(
             &mut self,
-            basis: &[SignPoly<O, I, C, P>],
+            basis: &[Box<SignPoly<O, I, C, P>>],
         ) -> Option<(Signature<O, I, P>, Polynomial<O, I, C, P>)> {
             // Iterate until some S-pair remains that is not eliminated by one
             // of the late elimination criteria.
@@ -443,17 +446,51 @@ mod s_pairs {
     }
 }
 
+struct PointedCmp<T: Ord>(*const T);
+
+impl<T: Ord> PartialEq for PointedCmp<T> {
+    fn eq(&self, other: &Self) -> bool {
+        unsafe { *self.0 == *other.0 }
+    }
+}
+
+impl<T: Ord> PartialOrd for PointedCmp<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(&other))
+    }
+}
+
+impl<T: Ord> Eq for PointedCmp<T> {}
+
+impl<T: Ord> Ord for PointedCmp<T> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        unsafe { (*self.0).cmp(&*other.0) }
+    }
+}
+
 /// Hold together the structures that must be coherent during the algorithm execution
 struct BasisCalculator<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> {
-    basis: Vec<SignPoly<O, I, C, P>>,
+    /// Owns the basis polynomials, ordered by insertion order (which is
+    /// important to the spair triangle).
+    basis: Vec<Box<SignPoly<O, I, C, P>>>,
+
+    /// Priority queue of the S-pairs pending to be processed.
+    /// Elements are represent as pair of indices in "basis" Vec.
     spairs: s_pairs::SPairTriangle<O, I, P>,
+
+    /// Basis ordered by signature to leading monomial ratio.
+    ///
+    /// TODO: to search for a reducer, maybe this should be a 2-D index (like
+    /// R*-tree), indexing both the leading monomial and the signature/leading
+    /// monomial ratio.
+    sorted_basis: BTreeMap<PointedCmp<Signature<O, I, P>>, *const SignPoly<O, I, C, P>>,
 }
 
 /// Result from searching for a regular reducer.
 enum ReducerSearchResult<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> {
     /// A regular reducer was found, it is the returned monomial multiplied by
     /// the returned polynomial.
-    Some(Monomial<O, I, P>, &'a SignPoly<O, I, C, P>),
+    Some(&'a SignPoly<O, I, C, P>),
     /// A reducer of same signature was found, so the reduction can be skipped
     Singular,
     /// No reducer could be found, so the term is reduced.
@@ -465,13 +502,18 @@ impl<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> BasisCalculat
         BasisCalculator {
             basis: Vec::new(),
             spairs: s_pairs::SPairTriangle::new(),
+            sorted_basis: BTreeMap::new(),
         }
     }
 
     /// Adds a new polynomial to the Gröbner Basis and calculates its S-pairs.
     fn insert_poly_with_spairs(&mut self, sign_poly: SignPoly<O, I, C, P>) {
-        self.spairs.add_column(&sign_poly, &self.basis);
-        self.basis.push(sign_poly);
+        let rc = Box::new(sign_poly);
+
+        self.spairs.add_column(rc.as_ref(), &self.basis);
+        self.sorted_basis
+            .insert(PointedCmp(&rc.signature), rc.as_ref());
+        self.basis.push(rc);
     }
 
     fn next_spair(&mut self) -> Option<(Signature<O, I, P>, Polynomial<O, I, C, P>)> {
@@ -483,13 +525,40 @@ impl<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> BasisCalculat
         ratio: &Signature<O, I, P>,
         term: &Term<O, I, C, P>,
     ) -> ReducerSearchResult<O, I, C, P> {
-        // TODO: to be continued...
-        todo!()
+        // Filter out the unsuitable ratios:
+        let mut suitable = self.sorted_basis.range(..=PointedCmp(ratio));
+
+        // Test if this is singular (i.e. the last element has the same
+        // signature/monomial ratio):
+        let mut next = match suitable.next_back() {
+            Some((key, next)) => unsafe {
+                if *key.0 == *ratio {
+                    return ReducerSearchResult::Singular;
+                };
+                &**next
+            },
+            None => return ReducerSearchResult::None,
+        };
+
+        // Search all the suitable range for a divisor of term.
+        loop {
+            if next.polynomial.terms[0].monomial.divides(&term.monomial) {
+                return ReducerSearchResult::Some(next);
+            }
+
+            if let Some((_, elem)) = suitable.next() {
+                unsafe {
+                    next = &**elem;
+                }
+            } else {
+                return ReducerSearchResult::None;
+            }
+        }
     }
 
     fn add_syzygy_signature(&mut self, signature: Signature<O, I, P>) {
         // TODO: to be continued...
-        todo!()
+        //todo!()
     }
 }
 
@@ -552,16 +621,25 @@ fn regular_reduce<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower>(
 
         // Calculate signature to monomial ratio, to search for a reducer,
         // and possibly store it as the ratio for the leading term.
-        let sign_to_term_ratio = sign_to_monomial_ratio(signature.clone(), &term.monomial);
+        let sign_to_term_ratio = sign_to_monomial_ratio(&signature, &term.monomial);
 
         match basis.find_a_regular_reducer(&sign_to_term_ratio, &term) {
-            ReducerSearchResult::Some(monomial, reducer) => {
+            ReducerSearchResult::Some(reducer) => {
                 let mut iter = reducer.polynomial.terms.iter();
+                let leading_term = iter.next().unwrap();
 
-                // Calculate the multiplier coefficient using the reducer leading term:
+                // Calculate the multiplier monomial that will nullify the term.
+                // We can unwrap() because we trust "find_a_regular_reducer" to
+                // have returned a valid reducer.
+                let monomial = term
+                    .monomial
+                    .whole_division(&leading_term.monomial)
+                    .unwrap();
+
+                // Calculate the multiplier's coefficient using the reducer leading term:
                 let coefficient = term
                     .coefficient
-                    .elimination_factor(&iter.next().unwrap().coefficient.clone().inv());
+                    .elimination_factor(&leading_term.coefficient.clone().inv());
 
                 let factor = Term {
                     coefficient,
@@ -588,7 +666,8 @@ fn regular_reduce<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower>(
                     }
                 }
 
-                // Don't insert any new term in the final polynomial
+                // Don't insert any new term in the final polynomial, as the
+                // term has been eliminated.
                 continue;
             }
             ReducerSearchResult::Singular => {

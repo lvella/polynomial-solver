@@ -73,18 +73,14 @@ where
     I: Id,
     P: Power,
 {
-    /// Division implementation, in two variants. If self is not divisible by
-    /// divisor, either return None, or return a result with negative exponents
-    /// (depending on the template argument).
-    ///
-    /// TODO: there may be a more elegant way to do this, where return value is
-    /// either Option<Self> or Self directly.
-    fn division_impl<const ALLOW_NEGATIVE_EXP: bool>(mut self, divisor: &Self) -> Option<Self> {
+    /// Whole division implementation. If self is not divisible by
+    /// divisor, returns None.
+    pub fn whole_division(mut self, divisor: &Self) -> Option<Self> {
         let mut iter = self.product.iter_mut();
 
         for var in divisor.product.iter() {
             let found = iter.find(|e| e.id == var.id)?;
-            if ALLOW_NEGATIVE_EXP && found.power < var.power {
+            if found.power < var.power {
                 return None;
             }
 
@@ -97,14 +93,90 @@ where
         Some(self)
     }
 
-    pub fn whole_division(self, divisor: &Self) -> Option<Self> {
-        self.division_impl::<false>(divisor)
+    /// Return the ratio between two monomials, allowing exponents to be
+    /// negative.
+    pub fn fraction_division(&self, divisor: &Self) -> Self {
+        let mut product = Vec::new();
+        ordered_ops::sum(
+            self.product.iter().cloned(),
+            divisor.product.iter().cloned(),
+            |a, b| b.id.cmp(&a.id),
+            |a, b| {
+                let mut ret = a.clone();
+                ret.power -= &b.power;
+                if ret.power.is_zero() {
+                    None
+                } else {
+                    Some(ret)
+                }
+            },
+            &mut product,
+        );
+
+        let mut total_power = self.total_power.clone();
+        total_power -= &divisor.total_power;
+
+        Self {
+            product,
+            total_power,
+            _phantom_ordering: PhantomData,
+        }
     }
 
-    pub fn fraction_division(self, divisor: &Self) -> Self {
-        // I am counting the optimizer will see this value can never be None,
-        // and optimize away the unwrap.
-        self.division_impl::<true>(divisor).unwrap()
+    /// Tells if you can whole divide other by self.
+    ///
+    /// This function is intended to be faster than directly attempting
+    /// whole_division.
+    pub fn divides(&self, other: &Self) -> bool {
+        if self.total_power > other.total_power || self.product.len() > other.product.len() {
+            return false;
+        }
+
+        let mut window_start = 0;
+        let mut window_end = other.product.len() - self.product.len();
+
+        // Search each self variable in the possible range of other, considering
+        // both sequences are ordered by decreasing variable.
+        'outer: for self_var in self.product.iter() {
+            // There is only a window of variables that is worth searching for a
+            // match in the other monomial, because even it is present later,
+            // there is no room for the remaining variables. If not present in
+            // this window, we know self can't divide other.
+            let window = &other.product[window_start..=window_end];
+            window_end += 1;
+
+            // Search inside the window:
+            for (j, other_var) in window.iter().enumerate() {
+                match other_var.id.cmp(&self_var.id) {
+                    CmpOrd::Less => {
+                        // Since monomial.product is ordered in decreasing
+                        // order, there is no match for self_var in other.
+                        return false;
+                    }
+                    CmpOrd::Equal => {
+                        // The variable is in both monomials, but we still have
+                        // to compare the powers:
+                        if other_var.power < self_var.power {
+                            return false;
+                        }
+
+                        // Next time, the window starts on the next element.
+                        window_start += j + 1;
+
+                        continue 'outer;
+                    }
+                    CmpOrd::Greater => {
+                        // Not this one, maybe it is the next one.
+                    }
+                }
+            }
+            // There is no match for the variable in the window, so it is not
+            // divisible.
+            return false;
+        }
+
+        // All self variables have been properly matched.
+        true
     }
 
     /// Divides self by its gcd with of other monomial
@@ -961,6 +1033,7 @@ where
 impl Id for usize {}
 impl Id for u32 {}
 impl Power for u32 {}
+impl Power for i32 {}
 
 #[cfg(test)]
 mod tests {

@@ -118,7 +118,7 @@ fn to_rug(v: &impl Field) -> rug::Integer {
     rug::Integer::from_digits(&v.to_byte_vector()[..], rug::integer::Order::Lsf)
 }
 
-type Poly<C> = polynomial_solver::polynomial::Polynomial<Grevlex, usize, C, u32>;
+type Poly<C> = polynomial_solver::polynomial::Polynomial<Grevlex, usize, C, i32>;
 
 fn to_poly<T: Field>(lin: LinComb<T>) -> Poly<FieldWrapper<T>> {
     let mut terms = Vec::new();
@@ -165,7 +165,8 @@ fn solve<T: Field, I: Iterator<Item = ir::Statement<T>>>(ir_prog: ir::ProgIterat
 
     println!("\nGröbner Basis:");
 
-    let gb = polynomial_solver::polynomial::grobner_basis::grobner_basis(&mut poly_set.into_iter());
+    let gb =
+        polynomial_solver::polynomial::signature_basis::grobner_basis(&mut poly_set.into_iter());
     for p in gb.iter() {
         println!("  {}", p);
     }
