@@ -1,6 +1,6 @@
 use itertools::{EitherOrBoth, Itertools};
 
-use super::{Id, Monomial, Power, VariablePower};
+use super::{Id, Monomial, Power};
 use std::cmp::Ordering as CmpOrd;
 
 pub trait Ordering: core::fmt::Debug + Clone + Eq + Ord {
@@ -12,19 +12,15 @@ pub trait Ordering: core::fmt::Debug + Clone + Eq + Ord {
 
 /// Compare two variables' power as if they where in the same position in the
 /// ordered monomial list, where zeros are omitted.
-fn power_cmp<I: Id, P: Power>(
-    id_cmp: CmpOrd,
-    a: &VariablePower<I, P>,
-    b: &VariablePower<I, P>,
-) -> CmpOrd {
+fn power_cmp<P: Power>(id_cmp: CmpOrd, a: &P, b: &P) -> CmpOrd {
     match id_cmp {
-        CmpOrd::Equal => a.power.cmp(&b.power),
+        CmpOrd::Equal => a.cmp(b),
         // To accommodate for the possibility of exponent being negative, which
         // is used in signature Gröbner Basis, we must assume the same variable
         // on the other monomial is zero, so we invert the result depending
         // wether the power of the most significant variable is negative.
-        CmpOrd::Less => P::zero().cmp(&b.power),
-        CmpOrd::Greater => a.power.cmp(&P::zero()),
+        CmpOrd::Less => P::zero().cmp(b),
+        CmpOrd::Greater => a.cmp(&P::zero()),
     }
 }
 
@@ -41,7 +37,7 @@ impl Ordering for Lex {
         for pair in a.product.iter().zip_longest(b.product.iter()) {
             match pair {
                 EitherOrBoth::Both(a, b) => {
-                    let var_cmp = power_cmp(a.id.cmp(&b.id), a, b);
+                    let var_cmp = power_cmp(a.id.cmp(&b.id), &a.power, &b.power);
                     if var_cmp != CmpOrd::Equal {
                         return var_cmp;
                     }
@@ -72,19 +68,16 @@ impl Ordering for Grevlex {
             }
         }
 
-        for pair in a.product.iter().zip_longest(b.product.iter()) {
-            match pair {
-                EitherOrBoth::Both(a, b) => {
-                    let var_cmp = power_cmp(b.id.cmp(&a.id), a, b);
-                    if var_cmp != CmpOrd::Equal {
-                        return var_cmp;
-                    }
-                }
-                EitherOrBoth::Left(a) => return a.power.cmp(&P::zero()),
-                EitherOrBoth::Right(b) => return P::zero().cmp(&b.power),
+        for (a, b) in a.product.iter().rev().zip(b.product.iter().rev()) {
+            let var_cmp = power_cmp(a.id.cmp(&b.id), &b.power, &a.power);
+            if var_cmp != CmpOrd::Equal {
+                return var_cmp;
             }
         }
 
+        // It can only get here if all tested variables and powers matches, and
+        // both must have the same number of variables because the total power
+        // also matches, so they must be equal.
         CmpOrd::Equal
     }
 }
