@@ -81,7 +81,35 @@ mod tests {
 
     use super::*;
 
+    pub type LexPoly = Polynomial<Lex, u8, i32, u16>;
     pub type GrevlexPoly = Polynomial<Grevlex, u8, i32, u16>;
+
+    #[test]
+    fn test_lex_ordering() {
+        let [z, y, x]: [LexPoly; 3] = LexPoly::new_variables([0u8, 1u8, 2u8]).try_into().unwrap();
+
+        let ordered = [
+            x.clone().pow(3u8),
+            y.clone() * x.clone().pow(2u8),
+            z.clone() * x.clone().pow(2u8),
+            z.clone() * y.clone() * x.clone(),
+            y.clone().pow(3u8),
+            z.clone() * y.clone().pow(2u8),
+            z.clone().pow(2u8) * y.clone(),
+            z.clone().pow(3u8),
+            LexPoly::new_constant(1),
+        ];
+
+        let mut sorted = ordered.clone();
+        sorted.shuffle(&mut rand::thread_rng());
+
+        sorted.sort();
+
+        assert_eq!(sorted.len(), ordered.len());
+        for (orig_t, sort_t) in ordered.into_iter().zip(sorted.into_iter().rev()) {
+            assert_eq!(orig_t, sort_t);
+        }
+    }
 
     #[test]
     fn test_grevlex_ordering() {
