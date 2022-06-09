@@ -4,6 +4,7 @@
 //! http://www.broune.com/papers/issac2012.html
 
 use std::collections::BTreeMap;
+use std::fmt::Display;
 
 use super::division::InvertibleCoefficient;
 use super::{monomial_ordering::Ordering, Id, Monomial, Polynomial, Power, Term};
@@ -63,6 +64,21 @@ struct SignPoly<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> {
     /// TODO: there is an optimization where every such ratio is assigned an
     /// integer, thus can be compared in one instruction.
     sign_to_lm_ratio: Signature<O, I, P>,
+}
+
+impl<O: Ordering, I: Id + Display, C: InvertibleCoefficient, P: SignedPower + Display> Display
+    for SignPoly<O, I, C, P>
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{{{}, {}}}: {} ...({})",
+            self.signature.idx,
+            self.signature.monomial,
+            self.polynomial.terms[0].monomial,
+            self.polynomial.terms.len() - 1
+        )
+    }
 }
 
 impl<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> SignPoly<O, I, C, P> {
@@ -406,7 +422,7 @@ mod s_pairs {
                             Some(new_spair) => {
                                 // There is a non-eliminated new S-pair,
                                 // replace the chosen one if it has a smaller
-                                // signature.
+                                // leading monomial.
                                 if new_spair.leading_term.monomial < spair.leading_term.monomial {
                                     *spair = new_spair;
                                 }
@@ -497,7 +513,13 @@ enum ReducerSearchResult<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: Si
     None,
 }
 
-impl<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> BasisCalculator<O, I, C, P> {
+impl<
+        O: Ordering,
+        I: Id + Display,
+        C: InvertibleCoefficient + Display,
+        P: SignedPower + Display,
+    > BasisCalculator<O, I, C, P>
+{
     fn new() -> Self {
         BasisCalculator {
             basis: Vec::new(),
@@ -513,6 +535,8 @@ impl<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> BasisCalculat
         self.spairs.add_column(rc.as_ref(), &self.basis);
         self.sorted_basis
             .insert(PointedCmp(&rc.signature), rc.as_ref());
+
+        println!("{}", *rc);
         self.basis.push(rc);
     }
 
@@ -579,7 +603,12 @@ enum RegularReductionResult<O: Ordering, I: Id, C: InvertibleCoefficient, P: Sig
 /// This is analogous to calculate the remainder on a multivariate polynomial
 /// division, but with extra restrictions on what polynomials can be the divisor
 /// according to their signature.
-fn regular_reduce<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower>(
+fn regular_reduce<
+    O: Ordering,
+    I: Id + Display,
+    C: InvertibleCoefficient + Display,
+    P: SignedPower + Display,
+>(
     signature: Signature<O, I, P>,
     polynomial: Polynomial<O, I, C, P>,
     basis: &BasisCalculator<O, I, C, P>,
@@ -726,7 +755,12 @@ fn regular_reduce<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower>(
 }
 
 /// Calculates the Grobner Basis using the Signature Buchberger (SB) algorithm.
-pub fn grobner_basis<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower>(
+pub fn grobner_basis<
+    O: Ordering,
+    I: Id + Display,
+    C: InvertibleCoefficient + Display,
+    P: SignedPower + Display,
+>(
     input: &mut dyn Iterator<Item = Polynomial<O, I, C, P>>,
 ) -> Vec<Polynomial<O, I, C, P>> {
     // The algorithm performance might depend on the order the
@@ -786,12 +820,49 @@ pub fn grobner_basis<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPowe
         }
     }
 
-    // Take the polynomials from the basis and return.
-    //
-    // TODO: maybe autoreduce this basis so that we have a Reduced Gröbner
-    // Basis, which is unique.
-    c.basis
+    // Take the polynomials from the basis and return and autoreduce them, so
+    // that we have a Reduced Gröbner Basis, which is unique.
+    let gb = c
+        .basis
         .into_iter()
         .map(|sign_poly| sign_poly.polynomial)
-        .collect()
+        .collect();
+
+    super::grobner_basis::autoreduce(gb)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::polynomial::division::tests::*;
+    use num_traits::{Inv, Pow};
+
+    #[test]
+    fn grobner_basis_test() {
+        let [x, y, z]: [QPoly; 3] = QPoly::new_variables([2, 1, 0u8]).try_into().unwrap();
+        let eqs = [
+            x.clone() * x.clone() + y.clone() * y.clone() + z.clone() * z.clone() - r(1),
+            x.clone() * x.clone() - y.clone() + z.clone() * z.clone(),
+            x.clone() - z.clone(),
+        ];
+
+        let grobner_basis = grobner_basis(&mut eqs.into_iter());
+        println!("Gröbner Basis:");
+        for p in grobner_basis.iter() {
+            println!("{}", p);
+        }
+
+        let expected_solution = [
+            &z.clone().pow(4u8) * r(4) + &z.clone().pow(2u8) * r(2) - r(1),
+            y.clone() - &z.clone().pow(2u8) * r(2),
+            x - z,
+        ];
+
+        for (result, expected) in grobner_basis.iter().zip(expected_solution) {
+            assert_eq!(
+                result * result.terms[0].coefficient.clone().inv(),
+                &expected * expected.terms[0].coefficient.clone().inv()
+            );
+        }
+    }
 }

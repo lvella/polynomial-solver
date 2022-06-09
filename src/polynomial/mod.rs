@@ -968,6 +968,33 @@ where
     }
 }
 
+impl<O, I, P> std::fmt::Display for Monomial<O, I, P>
+where
+    I: Id + std::fmt::Display,
+    P: Power + std::fmt::Display,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut iter = self.product.iter();
+        if let Some(mut v) = iter.next() {
+            loop {
+                write!(f, "x{}", v.id)?;
+                if !v.power.is_one() {
+                    write!(f, "^{}", v.power)?;
+                }
+                v = if let Some(v) = iter.next() {
+                    f.write_char('*')?;
+                    v
+                } else {
+                    break;
+                }
+            }
+            Ok(())
+        } else {
+            write!(f, "1")
+        }
+    }
+}
+
 impl<O, I, C, P> std::fmt::Display for Term<O, I, C, P>
 where
     I: Id + std::fmt::Display,
@@ -975,32 +1002,12 @@ where
     P: Power + std::fmt::Display,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let has_coef = if !self.coefficient.is_one() || self.monomial.product.is_empty() {
-            std::fmt::Display::fmt(&self.coefficient, f)?;
-            true
-        } else {
-            false
-        };
-
-        let mut i = self.monomial.product.iter();
-        if let Some(mut v) = i.next() {
-            if has_coef {
-                f.write_char('*')?;
-            }
-            loop {
-                write!(f, "x{}", v.id)?;
-                if !v.power.is_one() {
-                    write!(f, "^{}", v.power)?;
-                }
-                v = if let Some(v) = i.next() {
-                    v
-                } else {
-                    break;
-                };
-                f.write_char('*')?;
-            }
+        match (self.coefficient.is_one(), self.monomial.product.is_empty()) {
+            (false, false) => write!(f, "{}*{}", self.coefficient, self.monomial),
+            (false, true) => std::fmt::Display::fmt(&self.coefficient, f),
+            (true, false) => std::fmt::Display::fmt(&self.monomial, f),
+            (true, true) => write!(f, "1"),
         }
-        Ok(())
     }
 }
 
@@ -1032,6 +1039,11 @@ where
 
 impl Id for usize {}
 impl Id for u32 {}
+impl Id for u16 {}
+impl Id for u8 {}
+impl Coefficient for i32 {}
+impl Power for u16 {}
+impl Power for i16 {}
 impl Power for u32 {}
 impl Power for i32 {}
 
@@ -1042,10 +1054,6 @@ mod tests {
     use num_traits::Pow;
 
     use super::*;
-
-    impl Id for u8 {}
-    impl Coefficient for i32 {}
-    impl Power for u16 {}
 
     pub type SmallPoly = Polynomial<monomial_ordering::Lex, u8, i32, u16>;
 
