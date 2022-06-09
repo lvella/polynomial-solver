@@ -32,6 +32,12 @@ pub struct Signature<O: Ordering, I: Id, P: SignedPower> {
     monomial: Monomial<O, I, P>,
 }
 
+impl<O: Ordering, I: Id + Display, P: SignedPower + Display> Display for Signature<O, I, P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{{{}, {}}}", self.idx, self.monomial)
+    }
+}
+
 /// Calculates signature to term ratio.
 ///
 /// By allowing negative exponents, we can calculate the ratio between
@@ -72,9 +78,8 @@ impl<O: Ordering, I: Id + Display, C: InvertibleCoefficient, P: SignedPower + Di
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{{{}, {}}}: {} ...({})",
-            self.signature.idx,
-            self.signature.monomial,
+            "{}: {} ...({})",
+            self.signature,
             self.polynomial.terms[0].monomial,
             self.polynomial.terms.len() - 1
         )
@@ -103,7 +108,7 @@ impl<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> SignPoly<O, I
 
 /// S-pairs data structures.
 mod s_pairs {
-    use std::collections::BinaryHeap;
+    use std::{collections::BinaryHeap, fmt::Display};
 
     use crate::{
         ordered_ops::partial_sum,
@@ -336,7 +341,7 @@ mod s_pairs {
         heads: BinaryHeap<SPairColumn<O, I, P>>,
     }
 
-    impl<O: Ordering, I: Id, P: SignedPower> SPairTriangle<O, I, P> {
+    impl<O: Ordering, I: Id + Display, P: SignedPower + Display> SPairTriangle<O, I, P> {
         pub fn new() -> Self {
             SPairTriangle {
                 heads: BinaryHeap::new(),
@@ -499,7 +504,7 @@ struct BasisCalculator<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPo
     /// TODO: to search for a reducer, maybe this should be a 2-D index (like
     /// R*-tree), indexing both the leading monomial and the signature/leading
     /// monomial ratio.
-    sorted_basis: BTreeMap<PointedCmp<Signature<O, I, P>>, *const SignPoly<O, I, C, P>>,
+    by_sign_lm_ratio: BTreeMap<PointedCmp<Signature<O, I, P>>, *const SignPoly<O, I, C, P>>,
 }
 
 /// Result from searching for a regular reducer.
@@ -524,7 +529,7 @@ impl<
         BasisCalculator {
             basis: Vec::new(),
             spairs: s_pairs::SPairTriangle::new(),
-            sorted_basis: BTreeMap::new(),
+            by_sign_lm_ratio: BTreeMap::new(),
         }
     }
 
@@ -533,8 +538,8 @@ impl<
         let rc = Box::new(sign_poly);
 
         self.spairs.add_column(rc.as_ref(), &self.basis);
-        self.sorted_basis
-            .insert(PointedCmp(&rc.signature), rc.as_ref());
+        self.by_sign_lm_ratio
+            .insert(PointedCmp(&rc.sign_to_lm_ratio), rc.as_ref());
 
         println!("{}", *rc);
         self.basis.push(rc);
@@ -550,7 +555,7 @@ impl<
         term: &Term<O, I, C, P>,
     ) -> ReducerSearchResult<O, I, C, P> {
         // Filter out the unsuitable ratios:
-        let mut suitable = self.sorted_basis.range(..=PointedCmp(ratio));
+        let mut suitable = self.by_sign_lm_ratio.range(..=PointedCmp(ratio));
 
         // Test if this is singular (i.e. the last element has the same
         // signature/monomial ratio):
@@ -621,6 +626,8 @@ fn regular_reduce<
     // good enough.
     //
     // TODO: compare with the paper's solution
+
+    //println!("To reduce: {}", polynomial);
 
     // The tree with the terms to be reduced.
     let mut to_reduce: BTreeMap<Monomial<O, I, P>, C> = polynomial

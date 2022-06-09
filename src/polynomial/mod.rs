@@ -5,7 +5,7 @@ pub mod signature_basis;
 
 use super::ordered_ops;
 use monomial_ordering::Ordering;
-use num_traits::One;
+use num_traits::{One, Signed};
 use std::{
     cmp::{Ordering as CmpOrd, Reverse},
     fmt::Write,
@@ -91,36 +91,6 @@ where
         self.product.retain(|e| !e.power.is_zero());
 
         Some(self)
-    }
-
-    /// Return the ratio between two monomials, allowing exponents to be
-    /// negative.
-    pub fn fraction_division(&self, divisor: &Self) -> Self {
-        let mut product = Vec::new();
-        ordered_ops::sum(
-            self.product.iter().cloned(),
-            divisor.product.iter().cloned(),
-            |a, b| b.id.cmp(&a.id),
-            |a, b| {
-                let mut ret = a.clone();
-                ret.power -= &b.power;
-                if ret.power.is_zero() {
-                    None
-                } else {
-                    Some(ret)
-                }
-            },
-            &mut product,
-        );
-
-        let mut total_power = self.total_power.clone();
-        total_power -= &divisor.total_power;
-
-        Self {
-            product,
-            total_power,
-            _phantom_ordering: PhantomData,
-        }
     }
 
     /// Tells if you can whole divide other by self.
@@ -238,6 +208,46 @@ where
 
     pub fn get_total_power(&self) -> &P {
         &self.total_power
+    }
+}
+
+impl<O, I, P> Monomial<O, I, P>
+where
+    O: Ordering,
+    I: Id,
+    P: Power + Signed,
+{
+    /// Return the ratio between two monomials, allowing exponents to be
+    /// negative.
+    pub fn fraction_division(&self, divisor: &Self) -> Self {
+        let mut product = Vec::new();
+        ordered_ops::sum(
+            self.product.iter().cloned(),
+            divisor.product.iter().cloned().map(|mut var| {
+                var.power = -var.power;
+                var
+            }),
+            |a, b| b.id.cmp(&a.id),
+            |a, b| {
+                let mut ret = a.clone();
+                ret.power += &b.power;
+                if ret.power.is_zero() {
+                    None
+                } else {
+                    Some(ret)
+                }
+            },
+            &mut product,
+        );
+
+        let mut total_power = self.total_power.clone();
+        total_power -= &divisor.total_power;
+
+        Self {
+            product,
+            total_power,
+            _phantom_ordering: PhantomData,
+        }
     }
 }
 
