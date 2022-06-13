@@ -1,9 +1,9 @@
 use itertools::{EitherOrBoth, Itertools};
 
 use super::{Id, Monomial, Power};
-use std::cmp::Ordering as CmpOrd;
+use std::{cmp::Ordering as CmpOrd, hash::Hash};
 
-pub trait Ordering: core::fmt::Debug + Clone + Eq + Ord {
+pub trait Ordering: core::fmt::Debug + Clone + Eq + Ord + Hash {
     fn ord<I, P>(a: &Monomial<Self, I, P>, b: &Monomial<Self, I, P>) -> CmpOrd
     where
         I: Id,
@@ -25,7 +25,7 @@ fn power_cmp<P: Power>(id_cmp: CmpOrd, a: &P, b: &P) -> CmpOrd {
 }
 
 /// Lexicographical ordering.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Lex;
 
 impl Ordering for Lex {
@@ -52,7 +52,7 @@ impl Ordering for Lex {
 }
 
 /// Graded reverse lexicographical ordering.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Grevlex;
 
 impl Ordering for Grevlex {
