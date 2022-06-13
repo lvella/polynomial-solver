@@ -133,7 +133,7 @@ where
     }
 
     fn test_possible_divisor<'a>(&'a self, divisor: &Self, index: impl Fn(I) -> Option<&'a P>) -> bool {
-        if self.total_power > divisor.total_power || self.product.len() > divisor.product.len() {
+        if divisor.total_power > self.total_power || divisor.product.len() > self.product.len() {
             return false;
         }
 
