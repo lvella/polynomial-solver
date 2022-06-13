@@ -10,9 +10,10 @@ use std::{
     cmp::{Ordering as CmpOrd, Reverse},
     fmt::Write,
     marker::PhantomData,
+    hash::Hash, collections::HashMap
 };
 
-pub trait Id: core::fmt::Debug + Eq + Ord + Clone + Into<usize>{}
+pub trait Id: core::fmt::Debug + Eq + Ord + Clone + Hash {}
 
 pub trait Coefficient:
     core::fmt::Debug
@@ -101,29 +102,12 @@ where
     where
         Iter: Iterator<Item = T>,
     {
-        let zero = P::zero();
-
-        let to_usize = |x: &VariablePower<I, P>| x.id.clone().into();
-
-        // Build an index of the variables in self.
-        let lowest: usize = self.product.last().map_or(0, &to_usize);
-        let index = {
-            let highest: usize = self.product.first().map_or(0, &to_usize);
-
-            let mut index = Vec::new();
-            index.resize(highest - lowest + 1, &zero);
-            for var in self.product.iter() {
-                index[to_usize(&var) - lowest] = &var.power;
-            }
-
-            index
-        };
+        let index: HashMap<_, _> = self.product.iter().map(|var| (var.id.clone(), var.power.clone())).collect();
 
         // Test each possible divisor
         for e in possible_divisors {
             if self.test_possible_divisor(monomial(&e), |id| {
-                let idx = id.into().checked_sub(lowest)?;
-                index.get(idx).map(|v| *v)
+                index.get(&id)
             }) {
                 return Some(e);
             }
@@ -495,15 +479,6 @@ pub struct Polynomial<O, I, C, P> {
 pub enum ExtendedId<I: Id> {
     Original(I),
     Extra,
-}
-
-impl<I: Id> From<ExtendedId<I>> for usize {
-    fn from(item: ExtendedId<I>) -> Self {
-        match item {
-            ExtendedId::Original(i) => 1 + i.into(),
-            ExtendedId::Extra => 0
-        }
-    }
 }
 
 impl<I: Id> Id for ExtendedId<I> {}
