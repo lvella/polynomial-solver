@@ -230,7 +230,6 @@ impl<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower>
 /// retrieve the S-pair with minimal signature. This is basically a
 /// heap of ordered vectors.
 pub struct SPairTriangle<O: Ordering, I: Id, P: SignedPower> {
-    // TODO: test if storing Box<SPairColumn> improves performance
     heads: BinaryHeap<SPairColumn<O, I, P>>,
 }
 
