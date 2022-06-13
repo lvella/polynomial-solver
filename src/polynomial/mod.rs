@@ -115,34 +115,27 @@ where
             let window = &other.product[window_start..=window_end];
             window_end += 1;
 
-            // Search inside the window:
-            for (j, other_var) in window.iter().enumerate() {
-                match other_var.id.cmp(&self_var.id) {
-                    CmpOrd::Less => {
-                        // Since monomial.product is ordered in decreasing
-                        // order, there is no match for self_var in other.
+            // Search inside the window using binary search. We can do that
+            // because it is sorted by reverse id.
+            match window.binary_search_by(|other_var| self_var.id.cmp(&other_var.id)) {
+                Ok(j) => {
+                    let other_var = &window[j];
+
+                    // The variable is in both monomials, but we still have
+                    // to compare the powers:
+                    if other_var.power < self_var.power {
                         return false;
                     }
-                    CmpOrd::Equal => {
-                        // The variable is in both monomials, but we still have
-                        // to compare the powers:
-                        if other_var.power < self_var.power {
-                            return false;
-                        }
 
-                        // Next time, the window starts on the next element.
-                        window_start += j + 1;
+                    // Next time, the window starts on the next element.
+                    window_start += j + 1;
 
-                        continue 'outer;
-                    }
-                    CmpOrd::Greater => {
-                        // Not this one, maybe it is the next one.
-                    }
+                    continue 'outer;
+                },
+                Err(_) => {
+                    return false;
                 }
             }
-            // There is no match for the variable in the window, so it is not
-            // divisible.
-            return false;
         }
 
         // All self variables have been properly matched.
