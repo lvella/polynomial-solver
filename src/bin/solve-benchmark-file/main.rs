@@ -10,7 +10,7 @@ extern crate pest_derive;
 
 mod parser;
 
-type Poly = polynomial_solver::polynomial::Polynomial<Grevlex, u32, ThreadPrimeField, u32>;
+type Poly = polynomial_solver::polynomial::Polynomial<Grevlex, usize, ThreadPrimeField, u32>;
 
 fn main() -> Result<(), String> {
     ThreadPrimeField::set_prime(

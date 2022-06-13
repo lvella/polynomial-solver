@@ -9,7 +9,7 @@ use polynomial_solver::polynomial::{
 #[grammar = "bin/solve-benchmark-file/systems.pest"]
 pub struct SystemsParser;
 
-pub fn parse<O, C>(unparsed_file: &str) -> Result<Vec<Vec<Polynomial<O, u32, C, u32>>>, String>
+pub fn parse<O, C>(unparsed_file: &str) -> Result<Vec<Vec<Polynomial<O, usize, C, u32>>>, String>
 where
     O: Ordering,
     C: Coefficient + FromStr + num_traits::pow::Pow<u32, Output = C>,
@@ -26,7 +26,7 @@ where
         .collect()
 }
 
-fn parse_system<O, C>(system: Pair<'_, Rule>) -> Result<Vec<Polynomial<O, u32, C, u32>>, String>
+fn parse_system<O, C>(system: Pair<'_, Rule>) -> Result<Vec<Polynomial<O, usize, C, u32>>, String>
 where
     O: Ordering,
     C: Coefficient + FromStr + num_traits::pow::Pow<u32, Output = C>,
@@ -50,7 +50,7 @@ where
         .into_iter()
         .rev()
         .enumerate()
-        .map(|(val, key)| (key, val as u32))
+        .map(|(val, key)| (key, val))
         .collect::<HashMap<_, _>>();
 
     iter.map(|x| {
@@ -61,9 +61,9 @@ where
 }
 
 fn parse_polynomial<'a, O, C>(
-    var_ids: &'a HashMap<&'a str, u32>,
+    var_ids: &'a HashMap<&'a str, usize>,
     polynomial: Pair<'a, Rule>,
-) -> Result<Polynomial<O, u32, C, u32>, String>
+) -> Result<Polynomial<O, usize, C, u32>, String>
 where
     O: Ordering,
     C: Coefficient + FromStr + num_traits::pow::Pow<u32, Output = C>,
@@ -77,14 +77,14 @@ where
 }
 enum FactorValue<C> {
     None,
-    Var(u32),
+    Var(usize),
     Literal(C),
 }
 
 fn parse_terms<'a, O, C>(
-    var_ids: &'a HashMap<&'a str, u32>,
+    var_ids: &'a HashMap<&'a str, usize>,
     term: Pair<'a, Rule>,
-) -> Result<Term<O, u32, C, u32>, String>
+) -> Result<Term<O, usize, C, u32>, String>
 where
     O: Ordering,
     C: Coefficient + FromStr + num_traits::pow::Pow<u32, Output = C>,

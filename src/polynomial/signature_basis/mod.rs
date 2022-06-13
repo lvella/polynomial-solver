@@ -199,33 +199,24 @@ impl<
         term: &Term<O, I, C, P>,
     ) -> ReducerSearchResult<O, I, C, P> {
         // Filter out the unsuitable ratios:
-        let mut suitable = self.by_sign_lm_ratio.range(..=PointedCmp(ratio));
+        let mut suitable = self.by_sign_lm_ratio.range(..=PointedCmp(ratio)).rev().peekable();
 
         // Test if this is singular (i.e. the last element has the same
         // signature/monomial ratio):
-        let mut next = match suitable.next_back() {
-            Some((key, next)) => unsafe {
+        match suitable.peek() {
+            Some((key, _)) => unsafe {
                 if *key.0 == *ratio {
                     return ReducerSearchResult::Singular;
                 };
-                &**next
             },
             None => return ReducerSearchResult::None,
         };
 
         // Search all the suitable range for a divisor of term.
-        loop {
-            if next.polynomial.terms[0].monomial.divides(&term.monomial) {
-                return ReducerSearchResult::Some(next);
-            }
-
-            if let Some((_, elem)) = suitable.next() {
-                unsafe {
-                    next = &**elem;
-                }
-            } else {
-                return ReducerSearchResult::None;
-            }
+        match term.monomial.find_divisor(suitable, |(_, poly)| unsafe { &(***poly).polynomial.terms[0].monomial })
+        {
+            None => ReducerSearchResult::None,
+            Some(elem) => ReducerSearchResult::Some(unsafe { &**elem.1 })
         }
     }
 

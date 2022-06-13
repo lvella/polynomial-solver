@@ -12,7 +12,7 @@ use std::{
     marker::PhantomData,
 };
 
-pub trait Id: core::fmt::Debug + Eq + Ord + Clone {}
+pub trait Id: core::fmt::Debug + Eq + Ord + Clone + Into<usize>{}
 
 pub trait Coefficient:
     core::fmt::Debug
@@ -93,56 +93,60 @@ where
         Some(self)
     }
 
-    /// Tells if you can whole divide other by self.
+    /// Find the first divisor of this polynomial in a sequence.
     ///
     /// This function is intended to be faster than directly attempting
-    /// whole_division.
-    pub fn divides(&self, other: &Self) -> bool {
-        if self.total_power > other.total_power || self.product.len() > other.product.len() {
+    /// whole_division one by one.
+    pub fn find_divisor<'a, T, Iter>(&'a self, possible_divisors: Iter, monomial: impl Fn(&T) -> &'a Self) -> Option<T>
+    where
+        Iter: Iterator<Item = T>,
+    {
+        let zero = P::zero();
+
+        let to_usize = |x: &VariablePower<I, P>| x.id.clone().into();
+
+        // Build an index of the variables in self.
+        let lowest: usize = self.product.last().map_or(0, &to_usize);
+        let index = {
+            let highest: usize = self.product.first().map_or(0, &to_usize);
+
+            let mut index = Vec::new();
+            index.resize(highest - lowest + 1, &zero);
+            for var in self.product.iter() {
+                index[to_usize(&var) - lowest] = &var.power;
+            }
+
+            index
+        };
+
+        // Test each possible divisor
+        for e in possible_divisors {
+            if self.test_possible_divisor(monomial(&e), |id| {
+                let idx = id.into().checked_sub(lowest)?;
+                index.get(idx).map(|v| *v)
+            }) {
+                return Some(e);
+            }
+        }
+
+        None
+    }
+
+    fn test_possible_divisor<'a>(&'a self, divisor: &Self, index: impl Fn(I) -> Option<&'a P>) -> bool {
+        if self.total_power > divisor.total_power || self.product.len() > divisor.product.len() {
             return false;
         }
 
-        let mut window_start = 0;
-        let mut window_end = other.product.len() - self.product.len();
-
-        // Search each self variable in the possible range of other, considering
-        // both sequences are ordered by decreasing variable.
-        'outer: for self_var in self.product.iter() {
-            // There is only a window of variables that is worth searching for a
-            // match in the other monomial, because even it is present later,
-            // there is no room for the remaining variables. If not present in
-            // this window, we know self can't divide other.
-            let window = &other.product[window_start..=window_end];
-            window_end += 1;
-
-            // Search inside the window:
-            for (j, other_var) in window.iter().enumerate() {
-                match other_var.id.cmp(&self_var.id) {
-                    CmpOrd::Less => {
-                        // Since monomial.product is ordered in decreasing
-                        // order, there is no match for self_var in other.
-                        return false;
-                    }
-                    CmpOrd::Equal => {
-                        // The variable is in both monomials, but we still have
-                        // to compare the powers:
-                        if other_var.power < self_var.power {
-                            return false;
-                        }
-
-                        // Next time, the window starts on the next element.
-                        window_start += j + 1;
-
-                        continue 'outer;
-                    }
-                    CmpOrd::Greater => {
-                        // Not this one, maybe it is the next one.
-                    }
+        // Search each divisor variable in the index:
+        for var in divisor.product.iter() {
+            // Compare with the index
+            if let Some(p) = index(var.id.clone()) {
+                if var.power > *p {
+                    return false;
                 }
+            } else {
+                return false;
             }
-            // There is no match for the variable in the window, so it is not
-            // divisible.
-            return false;
         }
 
         // All self variables have been properly matched.
@@ -491,6 +495,15 @@ pub struct Polynomial<O, I, C, P> {
 pub enum ExtendedId<I: Id> {
     Original(I),
     Extra,
+}
+
+impl<I: Id> From<ExtendedId<I>> for usize {
+    fn from(item: ExtendedId<I>) -> Self {
+        match item {
+            ExtendedId::Original(i) => 1 + i.into(),
+            ExtendedId::Extra => 0
+        }
+    }
 }
 
 impl<I: Id> Id for ExtendedId<I> {}
@@ -1048,7 +1061,6 @@ where
 }
 
 impl Id for usize {}
-impl Id for u32 {}
 impl Id for u16 {}
 impl Id for u8 {}
 impl Coefficient for i32 {}
