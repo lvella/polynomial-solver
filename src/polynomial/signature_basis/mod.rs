@@ -148,17 +148,6 @@ struct BasisCalculator<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPo
     by_sign_lm_ratio: BTreeMap<PointedCmp<Signature<O, I, P>>, *const SignPoly<O, I, C, P>>,
 }
 
-/// Result from searching for a regular reducer.
-enum ReducerSearchResult<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> {
-    /// A regular reducer was found, it is the returned monomial multiplied by
-    /// the returned polynomial.
-    Some(&'a SignPoly<O, I, C, P>),
-    /// A reducer of same signature was found, so the reduction can be skipped
-    Singular,
-    /// No reducer could be found, so the term is reduced.
-    None,
-}
-
 impl<
         O: Ordering,
         I: Id + Display,
@@ -197,36 +186,22 @@ impl<
         &self,
         ratio: &Signature<O, I, P>,
         term: &Term<O, I, C, P>,
-    ) -> ReducerSearchResult<O, I, C, P> {
+    ) -> Option<&SignPoly<O, I, C, P>> {
         // Filter out the unsuitable ratios:
         let mut suitable = self.by_sign_lm_ratio.range(..=PointedCmp(ratio));
 
-        // Test if this is singular (i.e. the last element has the same
-        // signature/monomial ratio):
-        let mut next = match suitable.next_back() {
-            Some((key, next)) => unsafe {
-                if *key.0 == *ratio {
-                    return ReducerSearchResult::Singular;
-                };
-                &**next
-            },
-            None => return ReducerSearchResult::None,
-        };
-
         // Search all the suitable range for a divisor of term.
-        loop {
-            if next.polynomial.terms[0].monomial.divides(&term.monomial) {
-                return ReducerSearchResult::Some(next);
-            }
+        for (_, elem) in suitable {
+            let next = unsafe {
+                 &**elem
+            };
 
-            if let Some((_, elem)) = suitable.next() {
-                unsafe {
-                    next = &**elem;
-                }
-            } else {
-                return ReducerSearchResult::None;
+            if next.polynomial.terms[0].monomial.divides(&term.monomial) {
+                return Some(next);
             }
         }
+
+        None
     }
 
     fn add_syzygy_signature(&mut self, signature: Signature<O, I, P>) {
@@ -301,70 +276,59 @@ fn regular_reduce<
         // and possibly store it as the ratio for the leading term.
         let sign_to_term_ratio = sign_to_monomial_ratio(&signature, &term.monomial);
 
-        match basis.find_a_regular_reducer(&sign_to_term_ratio, &term) {
-            ReducerSearchResult::Some(reducer) => {
-                let mut iter = reducer.polynomial.terms.iter();
-                let leading_term = iter.next().unwrap();
+        if let Some(reducer) = basis.find_a_regular_reducer(&sign_to_term_ratio, &term) {
+            // Since the reduction is singular, we can stop if we are
+            // reducing the leading term.
+            if reduced_terms.is_empty() && reducer.signature == signature {
+                return RegularReductionResult::Singular;
+            }
 
-                // Calculate the multiplier monomial that will nullify the term.
-                // We can unwrap() because we trust "find_a_regular_reducer" to
-                // have returned a valid reducer.
-                let monomial = term
-                    .monomial
-                    .whole_division(&leading_term.monomial)
-                    .unwrap();
+            let mut iter = reducer.polynomial.terms.iter();
+            let leading_term = iter.next().unwrap();
 
-                // Calculate the multiplier's coefficient using the reducer leading term:
-                let coefficient = term
-                    .coefficient
-                    .elimination_factor(&leading_term.coefficient.clone().inv());
+            // Calculate the multiplier monomial that will nullify the term.
+            // We can unwrap() because we trust "find_a_regular_reducer" to
+            // have returned a valid reducer.
+            let monomial = term
+                .monomial
+                .whole_division(&leading_term.monomial)
+                .unwrap();
 
-                let factor = Term {
-                    coefficient,
-                    monomial,
-                };
+            // Calculate the multiplier's coefficient using the reducer leading term:
+            let coefficient = term
+                .coefficient
+                .elimination_factor(&leading_term.coefficient.clone().inv());
 
-                // Subtract every element of the reducer from the rest of the
-                // polynomial.
-                for term in iter {
-                    let reducer_term = factor.clone() * term.clone();
+            let factor = Term {
+                coefficient,
+                monomial,
+            };
 
-                    match to_reduce.entry(reducer_term.monomial) {
-                        std::collections::btree_map::Entry::Vacant(entry) => {
-                            // There was no such monomial, just insert:
-                            entry.insert(reducer_term.coefficient);
-                        }
-                        std::collections::btree_map::Entry::Occupied(mut entry) => {
-                            // Sum the coefficients, and remove if result is zero.
-                            *entry.get_mut() += reducer_term.coefficient;
-                            if entry.get().is_zero() {
-                                entry.remove_entry();
-                            }
+            // Subtract every element of the reducer from the rest of the
+            // polynomial.
+            for term in iter {
+                let reducer_term = factor.clone() * term.clone();
+
+                match to_reduce.entry(reducer_term.monomial) {
+                    std::collections::btree_map::Entry::Vacant(entry) => {
+                        // There was no such monomial, just insert:
+                        entry.insert(reducer_term.coefficient);
+                    }
+                    std::collections::btree_map::Entry::Occupied(mut entry) => {
+                        // Sum the coefficients, and remove if result is zero.
+                        *entry.get_mut() += reducer_term.coefficient;
+                        if entry.get().is_zero() {
+                            entry.remove_entry();
                         }
                     }
                 }
-
-                // Don't insert any new term in the final polynomial, as the
-                // term has been eliminated.
-                continue;
             }
-            ReducerSearchResult::Singular => {
-                // Since the reduction is singular, we can stop if we are
-                // reducing the leading term.
-                if reduced_terms.is_empty() {
-                    return RegularReductionResult::Singular;
-                }
-                // otherwise this simply fall through as it can't be reduced.
 
-                // TODO: Really can't? It seems to me signature stuff can be
-                // ignored if we are not reducing the leading term. Eventually
-                // we should experiment with only considering signatures with
-                // the leading term.
-            }
-            ReducerSearchResult::None => (
-                // No reducer was found.
-            ),
+            // Don't insert any new term in the final polynomial, as the
+            // term has been eliminated.
+            continue;
         }
+        // No reducer was found.
 
         // The term could not be reduced. Store the ratio if this is the
         // leading term:
