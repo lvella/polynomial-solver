@@ -6,10 +6,9 @@
 mod s_pairs;
 
 use std::{
-    collections::{BTreeMap, BinaryHeap, HashMap},
+    collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap},
     fmt::Display,
     hash::Hash,
-    rc::Rc,
 };
 
 use super::division::InvertibleCoefficient;
@@ -140,11 +139,22 @@ impl<T: Hash> Hash for PointedCmp<T> {
     }
 }
 
-/// Hold together the structures that must be coherent during the algorithm execution
-struct BasisCalculator<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> {
+/// Stores all the basis elements known and processed so far,
+struct KnownBasis<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> {
     /// Owns the basis polynomials, ordered by insertion order (which is
     /// important to the spair triangle).
-    basis: Vec<Box<SignPoly<O, I, C, P>>>,
+    polys: Vec<Box<SignPoly<O, I, C, P>>>,
+
+    /// Signatures of polynomials know to reduce to zero.
+    ///
+    /// TODO: like the above, use a proper multidimensional index.
+    syzygies: BTreeSet<Signature<O, I, P>>,
+}
+
+/// Hold together the structures that must be coherent during the algorithm execution
+struct BasisCalculator<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> {
+    /// The basis elements and syzygies.
+    basis: KnownBasis<O, I, C, P>,
 
     /// Priority queue of the S-pairs pending to be processed.
     /// Elements are represent as pair of indices in "basis" Vec.
@@ -167,7 +177,10 @@ impl<
 {
     fn new() -> Self {
         BasisCalculator {
-            basis: Vec::new(),
+            basis: KnownBasis {
+                polys: Vec::new(),
+                syzygies: BTreeSet::new(),
+            },
             spairs: s_pairs::SPairTriangle::new(),
             by_sign_lm_ratio: BTreeMap::new(),
         }
@@ -181,11 +194,7 @@ impl<
         self.by_sign_lm_ratio
             .insert(PointedCmp(&rc.sign_to_lm_ratio), rc.as_ref());
 
-        println!("#{}, {}", self.basis.len(), *rc);
-        if self.basis.len() == 700 {
-            panic!("Limit reached!");
-        }
-        self.basis.push(rc);
+        self.basis.polys.push(rc);
     }
 
     fn next_spair(&mut self) -> Option<(Signature<O, I, P>, Polynomial<O, I, C, P>)> {
@@ -198,7 +207,7 @@ impl<
         term: &Term<O, I, C, P>,
     ) -> Option<&SignPoly<O, I, C, P>> {
         // Filter out the unsuitable ratios:
-        let mut suitable = self.by_sign_lm_ratio.range(..=PointedCmp(ratio));
+        let suitable = self.by_sign_lm_ratio.range(..=PointedCmp(ratio));
 
         // Search all the suitable range for a divisor of term.
         for (_, elem) in suitable {
@@ -213,8 +222,7 @@ impl<
     }
 
     fn add_syzygy_signature(&mut self, signature: Signature<O, I, P>) {
-        // TODO: to be continued...
-        //todo!()
+        self.basis.syzygies.insert(signature);
     }
 }
 
@@ -420,7 +428,7 @@ pub fn grobner_basis<
         }
 
         let signature = Signature {
-            idx: c.basis.len() as u32,
+            idx: c.basis.polys.len() as u32,
             monomial: Monomial::one(),
         };
         c.insert_poly_with_spairs(SignPoly::new(signature, polynomial));
@@ -432,6 +440,16 @@ pub fn grobner_basis<
     while let Some((signature, polynomial)) = c.next_spair() {
         match regular_reduce(signature, polynomial, &c) {
             RegularReductionResult::Reduced(reduced) => {
+                println!(
+                    "#(p: {}, s: {}), {}",
+                    c.basis.polys.len(),
+                    c.basis.syzygies.len(),
+                    reduced
+                );
+                if c.basis.polys.len() == 3000 {
+                    panic!("Limit reached!");
+                }
+
                 // Polynomial is a new valid member of the basis. Insert it into
                 // the basis.
                 c.insert_poly_with_spairs(reduced);
@@ -457,6 +475,7 @@ pub fn grobner_basis<
     // that we have a Reduced Gröbner Basis, which is unique.
     let gb = c
         .basis
+        .polys
         .into_iter()
         .map(|sign_poly| sign_poly.polynomial)
         .collect();

@@ -1,16 +1,47 @@
-
 //! S-pairs data structures.
 
-use std::{collections::BinaryHeap, fmt::Display};
+use std::{
+    collections::{BTreeSet, BinaryHeap},
+    fmt::Display,
+};
+
+use num_traits::One;
 
 use crate::{
     ordered_ops::partial_sum,
     polynomial::{
-        division::InvertibleCoefficient, monomial_ordering::Ordering, Id, Polynomial, Term,
+        division::InvertibleCoefficient, monomial_ordering::Ordering, Id, Monomial, Polynomial,
+        Term,
     },
 };
 
-use super::{SignPoly, Signature, SignedPower};
+use super::{KnownBasis, SignPoly, Signature, SignedPower};
+
+/// Tests in a set contains a divisor for a signature.
+///
+/// This is basically the implementation of signature criterion.
+fn contains_divisor<O: Ordering, I: Id, P: SignedPower>(
+    signature: &Signature<O, I, P>,
+    set: &BTreeSet<Signature<O, I, P>>,
+) -> bool {
+    // Iterate over smaller signatures, testing if they are divisible
+    let minimal = Signature {
+        monomial: Monomial::one(),
+        ..*signature
+    };
+    for maybe_divisor in set.range(&minimal..=signature) {
+        if maybe_divisor.idx != signature.idx {
+            // Only signatures with the same idx can possible be divisors.
+            break;
+        }
+
+        if maybe_divisor.monomial.divides(&signature.monomial) {
+            return true;
+        }
+    }
+
+    false
+}
 
 /// Half S-pair
 ///
@@ -26,9 +57,9 @@ impl<O: Ordering, I: Id, P: SignedPower> HalfSPair<O, I, P> {
     fn new_if_not_eliminated<C: InvertibleCoefficient>(
         sign_poly: &SignPoly<O, I, C, P>,
         idx: u32,
-        basis: &[Box<SignPoly<O, I, C, P>>],
+        basis: &KnownBasis<O, I, C, P>,
     ) -> Option<Self> {
-        let other = basis[idx as usize].as_ref();
+        let other = basis.polys[idx as usize].as_ref();
 
         // Find what polynomial to calculate the signature from.
         // It is the one with highest signature to LM ratio.
@@ -52,9 +83,12 @@ impl<O: Ordering, I: Id, P: SignedPower> HalfSPair<O, I, P> {
         // Calculate the S-pair signature.
         let signature = HalfSPair::calculate_signature(sign_base, sign_other);
 
-        // TODO: implement here signature criterion
-
-        Some(HalfSPair { signature, idx })
+        // Early test for signature criterion:
+        if contains_divisor(&signature, &basis.syzygies) {
+            None
+        } else {
+            Some(HalfSPair { signature, idx })
+        }
     }
 
     /// Creates a new S-pair without checking any elimination criteria.
@@ -243,14 +277,13 @@ impl<O: Ordering, I: Id + Display, P: SignedPower + Display> SPairTriangle<O, I,
     pub fn add_column<C: InvertibleCoefficient>(
         &mut self,
         sign_poly: &SignPoly<O, I, C, P>,
-        basis: &[Box<SignPoly<O, I, C, P>>],
+        basis: &KnownBasis<O, I, C, P>,
     ) {
         let mut new_spairs: Vec<_> = basis
+            .polys
             .iter()
             .enumerate()
-            .filter_map(|(idx, _)| {
-                HalfSPair::new_if_not_eliminated(sign_poly, idx as u32, basis)
-            })
+            .filter_map(|(idx, _)| HalfSPair::new_if_not_eliminated(sign_poly, idx as u32, basis))
             .collect();
 
         // Sort by signature in decreasing order, so we can pop the next element from the tail.
@@ -258,7 +291,7 @@ impl<O: Ordering, I: Id + Display, P: SignedPower + Display> SPairTriangle<O, I,
 
         if let Some(head_spair) = new_spairs.pop() {
             let column: Vec<u32> = new_spairs.into_iter().map(|spair| spair.idx).collect();
-            let origin_idx = basis.len() as u32;
+            let origin_idx = basis.polys.len() as u32;
 
             self.heads.push(SPairColumn {
                 head_spair,
@@ -296,12 +329,18 @@ impl<O: Ordering, I: Id + Display, P: SignedPower + Display> SPairTriangle<O, I,
     /// signature. Or None if there are no more S-pairs.
     pub fn get_next<C: InvertibleCoefficient>(
         &mut self,
-        basis: &[Box<SignPoly<O, I, C, P>>],
+        basis: &KnownBasis<O, I, C, P>,
     ) -> Option<(Signature<O, I, P>, Polynomial<O, I, C, P>)> {
         // Iterate until some S-pair remains that is not eliminated by one
         // of the late elimination criteria.
-        while let Some((signature, a_poly, b_poly)) = self.pop(basis) {
-            let mut chosen_spair = PartialSPair::new_if_not_eliminated(a_poly, b_poly);
+        while let Some((signature, a_poly, b_poly)) = self.pop(&basis.polys) {
+            // Late test for signature criterion:
+            let mut chosen_spair = if contains_divisor(&signature, &basis.syzygies) {
+                // Eliminated by signature criterion
+                None
+            } else {
+                PartialSPair::new_if_not_eliminated(a_poly, b_poly)
+            };
 
             // Duplicate signature criterion: only one of all S-pairs of the
             // same signature must be chosen, the one with the smallest
@@ -311,7 +350,7 @@ impl<O: Ordering, I: Id + Display, P: SignedPower + Display> SPairTriangle<O, I,
                     break;
                 }
 
-                let (_, a_poly, b_poly) = self.pop(basis).unwrap();
+                let (_, a_poly, b_poly) = self.pop(&basis.polys).unwrap();
 
                 // Only process the new S-pair if no other of same signature has been eliminated.
                 if let Some(spair) = &mut chosen_spair {
