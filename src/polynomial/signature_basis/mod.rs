@@ -518,13 +518,16 @@ pub fn grobner_basis<
     basis.sort_unstable_by(|a, b| b.cmp(a));
 
     // Limit the number of elements in the basis before restarting.
+    let mut limit = basis.len();
     loop {
-        let result = limited_grobner_basis(basis.len() * 10, basis);
+        limit *= 1000;
+        let result = limited_grobner_basis(limit, basis);
 
         basis = match result {
             Err(result) => result,
             Ok(result) => return result,
         };
+
         println!("## GB restarted!");
     }
 }
