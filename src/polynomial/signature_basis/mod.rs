@@ -13,6 +13,7 @@ use std::{
 
 use super::division::InvertibleCoefficient;
 use super::{monomial_ordering::Ordering, Id, Monomial, Polynomial, Power, Term};
+use itertools::Itertools;
 use num_traits::{One, Zero};
 
 use num_traits::Signed;
@@ -406,14 +407,12 @@ pub fn grobner_basis<
 ) -> Vec<Polynomial<O, I, C, P>> {
     // The algorithm performance might depend on the order the
     // elements are given in the input.
-    //
-    // TODO: if there is a way to reorder the input so that it
-    // runs faster, this is the place.
 
     let mut c = BasisCalculator::new();
 
-    // Insert all input polynomials in the basis
-    for polynomial in input {
+    // Insert all input polynomials in the basis.
+    // From my tests with a single input, sorting makes it run much faster.
+    for polynomial in input.sorted() {
         if polynomial.is_zero() {
             // Zero polynomial is implicitly part of every ideal, so it is
             // redundant.
@@ -446,9 +445,6 @@ pub fn grobner_basis<
                     c.basis.syzygies.len(),
                     reduced
                 );
-                if c.basis.polys.len() == 3000 {
-                    panic!("Limit reached!");
-                }
 
                 // Polynomial is a new valid member of the basis. Insert it into
                 // the basis.
@@ -480,7 +476,9 @@ pub fn grobner_basis<
         .map(|sign_poly| sign_poly.polynomial)
         .collect();
 
-    super::grobner_basis::autoreduce(gb)
+    //println!("Gröbner basis computed, reducing...");
+    //super::grobner_basis::autoreduce(gb)
+    gb
 }
 
 #[cfg(test)]
