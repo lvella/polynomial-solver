@@ -10,7 +10,7 @@ extern crate pest_derive;
 
 mod parser;
 
-type Poly = polynomial_solver::polynomial::Polynomial<Grevlex, u32, ThreadPrimeField, u32>;
+type Poly = polynomial_solver::polynomial::Polynomial<Grevlex, u32, ThreadPrimeField, i32>;
 
 fn main() -> Result<(), String> {
     ThreadPrimeField::set_prime(
@@ -53,7 +53,7 @@ fn main() -> Result<(), String> {
 
         println!("\nGröbner Basis:");
         let gb =
-            polynomial_solver::polynomial::grobner_basis::grobner_basis(&mut system.into_iter());
+            polynomial_solver::polynomial::signature_basis::grobner_basis(&mut system.into_iter());
         for p in gb {
             println!("  : {}", p);
         }
