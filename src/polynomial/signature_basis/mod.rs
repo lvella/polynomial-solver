@@ -9,7 +9,6 @@ use std::{
     collections::{BTreeMap, BinaryHeap, HashMap},
     fmt::Display,
     hash::Hash,
-    rc::Rc,
 };
 
 use super::division::InvertibleCoefficient;
@@ -387,36 +386,29 @@ fn regular_reduce<
     }
 }
 
-/// Calculates the Grobner Basis using the Signature Buchberger (SB) algorithm.
-pub fn grobner_basis<
+/// Calculates Gröbner Basis until a limited size, then autoreduce.
+///
+/// TODO: this is a very long shot, test if this is actually good once every
+/// elimination criteria and a proper multidimensional index have been
+/// implemented.
+fn limited_grobner_basis<
     O: Ordering,
     I: Id + Display,
     C: InvertibleCoefficient + Display,
     P: SignedPower + Display,
 >(
-    input: &mut dyn Iterator<Item = Polynomial<O, I, C, P>>,
-) -> Vec<Polynomial<O, I, C, P>> {
-    // The algorithm performance might depend on the order the
-    // elements are given in the input.
-    //
-    // TODO: if there is a way to reorder the input so that it
-    // runs faster, this is the place.
-
+    size_limit: usize,
+    mut input: Vec<Polynomial<O, I, C, P>>,
+) -> Result<Vec<Polynomial<O, I, C, P>>, Vec<Polynomial<O, I, C, P>>> {
     let mut c = BasisCalculator::new();
 
     // Insert all input polynomials in the basis
-    for polynomial in input {
-        if polynomial.is_zero() {
-            // Zero polynomial is implicitly part of every ideal, so it is
-            // redundant.
-            continue;
-        }
-
+    for polynomial in input.into_iter() {
         if polynomial.is_constant() {
             // Constant polynomial means the ideal is the full set of all
             // polynomials, for which any constant polynomial is a generator, so
             // we can stop.
-            return vec![polynomial];
+            return Ok(vec![polynomial]);
         }
 
         let signature = Signature {
@@ -429,6 +421,7 @@ pub fn grobner_basis<
     // Main loop, reduce every S-pair and insert in the basis until there are no
     // more S-pairs to be reduced. Since each newly inserted polynomials can
     // generate up to n-1 new S-pairs, this loop is exponential.
+    let mut finished = true;
     while let Some((signature, polynomial)) = c.next_spair() {
         match regular_reduce(signature, polynomial, &c) {
             RegularReductionResult::Reduced(reduced) => {
@@ -448,8 +441,13 @@ pub fn grobner_basis<
             RegularReductionResult::NonZeroConstant(polynomial) => {
                 // The new basis member is a constant, so it reduces everything
                 // to zero and we can stop.
-                return vec![polynomial];
+                return Ok(vec![polynomial]);
             }
+        }
+
+        if c.basis.len() >= size_limit {
+            finished = false;
+            break;
         }
     }
 
@@ -461,7 +459,54 @@ pub fn grobner_basis<
         .map(|sign_poly| sign_poly.polynomial)
         .collect();
 
-    super::grobner_basis::autoreduce(gb)
+    let result = super::grobner_basis::autoreduce(gb);
+
+    if finished {
+        Ok(result)
+    } else {
+        Err(result)
+    }
+}
+
+/// Calculates the Grobner Basis using the Signature Buchberger (SB) algorithm.
+pub fn grobner_basis<
+    O: Ordering,
+    I: Id + Display,
+    C: InvertibleCoefficient + Display,
+    P: SignedPower + Display,
+>(
+    input: &mut dyn Iterator<Item = Polynomial<O, I, C, P>>,
+) -> Vec<Polynomial<O, I, C, P>> {
+    // The algorithm performance might depend on the order the
+    // elements are given in the input.
+
+    let mut basis = Vec::new();
+
+    // Preprocess the input:
+    for polynomial in input {
+        // Zero polynomial is implicitly part of every ideal, so it is
+        // redundant.
+        if !polynomial.is_zero() {
+            basis.push(polynomial);
+        }
+    }
+
+    // I assuming that sorting the input will make it run faster.
+    //
+    // TODO: if there is a way to reorder the input so that it
+    // runs faster, this is the place.
+    basis.sort_unstable_by(|a, b| b.cmp(a));
+
+    // Limit the number of elements in the basis before restarting.
+    loop {
+        let result = limited_grobner_basis(basis.len() * 10, basis);
+
+        basis = match result {
+            Err(result) => result,
+            Ok(result) => return result,
+        };
+        println!("## GB restarted!");
+    }
 }
 
 #[cfg(test)]
