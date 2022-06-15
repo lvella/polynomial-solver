@@ -166,7 +166,7 @@ impl<O: Ordering, I: Id, P: SignedPower> Ord for SPairColumn<O, I, P> {
 }
 
 /// S-Pair where only the leading term has been evaluated.
-struct PartialSPair<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> {
+pub struct PartialSPair<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> {
     leading_term: Term<O, I, C, P>,
     iter_p: Box<(dyn Iterator<Item = Term<O, I, C, P>> + 'a)>,
     iter_q: Box<(dyn Iterator<Item = Term<O, I, C, P>> + 'a)>,
@@ -327,10 +327,10 @@ impl<O: Ordering, I: Id + Display, P: SignedPower + Display> SPairTriangle<O, I,
 
     /// Return the next S-pair to be reduced, which is the S-pair of minimal
     /// signature. Or None if there are no more S-pairs.
-    pub fn get_next<C: InvertibleCoefficient>(
+    pub fn get_next<'a, C: InvertibleCoefficient>(
         &mut self,
-        basis: &KnownBasis<O, I, C, P>,
-    ) -> Option<(Signature<O, I, P>, Polynomial<O, I, C, P>)> {
+        basis: &'a KnownBasis<O, I, C, P>,
+    ) -> Option<(Signature<O, I, P>, PartialSPair<'a, O, I, C, P>)> {
         // Iterate until some S-pair remains that is not eliminated by one
         // of the late elimination criteria.
         while let Some((signature, a_poly, b_poly)) = self.pop(&basis.polys) {
@@ -385,13 +385,10 @@ impl<O: Ordering, I: Id + Display, P: SignedPower + Display> SPairTriangle<O, I,
             };
 
             // TODO: perform all these elimination criteria:
-            // - late signature criterion
             // - Koszul criterion
             // not sure if here or before calculating all these lading terms.
 
-            // TODO: perform singular criterion elimination.
-
-            return Some((signature, spair.into()));
+            return Some((signature, spair));
         }
         None
     }

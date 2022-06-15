@@ -11,6 +11,8 @@ use std::{
     hash::Hash,
 };
 
+use self::s_pairs::PartialSPair;
+
 use super::division::InvertibleCoefficient;
 use super::{monomial_ordering::Ordering, Id, Monomial, Polynomial, Power, Term};
 use itertools::Itertools;
@@ -150,16 +152,6 @@ struct KnownBasis<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> 
     ///
     /// TODO: like the above, use a proper multidimensional index.
     syzygies: BTreeSet<Signature<O, I, P>>,
-}
-
-/// Hold together the structures that must be coherent during the algorithm execution
-struct BasisCalculator<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> {
-    /// The basis elements and syzygies.
-    basis: KnownBasis<O, I, C, P>,
-
-    /// Priority queue of the S-pairs pending to be processed.
-    /// Elements are represent as pair of indices in "basis" Vec.
-    spairs: s_pairs::SPairTriangle<O, I, P>,
 
     /// Basis ordered by signature to leading monomial ratio.
     ///
@@ -174,34 +166,8 @@ impl<
         I: Id + Display,
         C: InvertibleCoefficient + Display,
         P: SignedPower + Display,
-    > BasisCalculator<O, I, C, P>
+    > KnownBasis<O, I, C, P>
 {
-    fn new() -> Self {
-        BasisCalculator {
-            basis: KnownBasis {
-                polys: Vec::new(),
-                syzygies: BTreeSet::new(),
-            },
-            spairs: s_pairs::SPairTriangle::new(),
-            by_sign_lm_ratio: BTreeMap::new(),
-        }
-    }
-
-    /// Adds a new polynomial to the Gröbner Basis and calculates its S-pairs.
-    fn insert_poly_with_spairs(&mut self, sign_poly: SignPoly<O, I, C, P>) {
-        let rc = Box::new(sign_poly);
-
-        self.spairs.add_column(rc.as_ref(), &self.basis);
-        self.by_sign_lm_ratio
-            .insert(PointedCmp(&rc.sign_to_lm_ratio), rc.as_ref());
-
-        self.basis.polys.push(rc);
-    }
-
-    fn next_spair(&mut self) -> Option<(Signature<O, I, P>, Polynomial<O, I, C, P>)> {
-        self.spairs.get_next(&self.basis)
-    }
-
     fn find_a_regular_reducer(
         &self,
         ratio: &Signature<O, I, P>,
@@ -220,6 +186,47 @@ impl<
         }
 
         None
+    }
+}
+
+/// Hold together the structures that must be coherent during the algorithm execution
+struct BasisCalculator<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> {
+    /// The basis elements and syzygies.
+    basis: KnownBasis<O, I, C, P>,
+
+    /// Priority queue of the S-pairs pending to be processed.
+    /// Elements are represent as pair of indices in "basis" Vec.
+    spairs: s_pairs::SPairTriangle<O, I, P>,
+}
+
+impl<
+        O: Ordering,
+        I: Id + Display,
+        C: InvertibleCoefficient + Display,
+        P: SignedPower + Display,
+    > BasisCalculator<O, I, C, P>
+{
+    fn new() -> Self {
+        BasisCalculator {
+            basis: KnownBasis {
+                polys: Vec::new(),
+                syzygies: BTreeSet::new(),
+                by_sign_lm_ratio: BTreeMap::new(),
+            },
+            spairs: s_pairs::SPairTriangle::new(),
+        }
+    }
+
+    /// Adds a new polynomial to the Gröbner Basis and calculates its S-pairs.
+    fn insert_poly_with_spairs(&mut self, sign_poly: SignPoly<O, I, C, P>) {
+        let rc = Box::new(sign_poly);
+
+        self.spairs.add_column(rc.as_ref(), &self.basis);
+        self.basis
+            .by_sign_lm_ratio
+            .insert(PointedCmp(&rc.sign_to_lm_ratio), rc.as_ref());
+
+        self.basis.polys.push(rc);
     }
 
     fn add_syzygy_signature(&mut self, signature: Signature<O, I, P>) {
@@ -251,15 +258,17 @@ fn regular_reduce<
     P: SignedPower + Display,
 >(
     signature: Signature<O, I, P>,
-    polynomial: Polynomial<O, I, C, P>,
-    basis: &BasisCalculator<O, I, C, P>,
+    s_pair: PartialSPair<O, I, C, P>,
+    basis: &KnownBasis<O, I, C, P>,
 ) -> RegularReductionResult<O, I, C, P> {
+    // Perform rewrite and singular criteria:
+    let polynomial = Polynomial::from(s_pair);
+
     // The paper suggests splitting the reduced polynomial into a hash map of
     // monomial -> coefficient, so that we can efficiently sum the new terms,
     // and a priority queue, so that we know what is the next monomial to be
     // reduced. Tests have shown that this is actually better than simply using
     // a BTreeMap.
-
     let (mut to_reduce, mut remaining_terms): (
         BinaryHeap<Box<Monomial<O, I, P>>>,
         HashMap<PointedCmp<Monomial<O, I, P>>, C>,
@@ -396,7 +405,9 @@ fn regular_reduce<
     }
 }
 
-/// Calculates the Grobner Basis using the Signature Buchberger (SB) algorithm.
+/// Calculates a Grobner Basis using the Signature Buchberger (SB) algorithm.
+///
+/// The returned basis will not be reduced.
 pub fn grobner_basis<
     O: Ordering,
     I: Id + Display,
@@ -436,8 +447,14 @@ pub fn grobner_basis<
     // Main loop, reduce every S-pair and insert in the basis until there are no
     // more S-pairs to be reduced. Since each newly inserted polynomials can
     // generate up to n-1 new S-pairs, this loop is exponential.
-    while let Some((signature, polynomial)) = c.next_spair() {
-        match regular_reduce(signature, polynomial, &c) {
+    loop {
+        let (signature, s_pair) = if let Some(next_spair) = c.spairs.get_next(&c.basis) {
+            next_spair
+        } else {
+            break;
+        };
+
+        match regular_reduce(signature, s_pair, &c.basis) {
             RegularReductionResult::Reduced(reduced) => {
                 println!(
                     "#(p: {}, s: {}), {}",
@@ -467,18 +484,12 @@ pub fn grobner_basis<
         }
     }
 
-    // Take the polynomials from the basis and return and autoreduce them, so
-    // that we have a Reduced Gröbner Basis, which is unique.
-    let gb = c
-        .basis
+    // Return the polynomials from the basis.
+    c.basis
         .polys
         .into_iter()
         .map(|sign_poly| sign_poly.polynomial)
-        .collect();
-
-    //println!("Gröbner basis computed, reducing...");
-    //super::grobner_basis::autoreduce(gb)
-    gb
+        .collect()
 }
 
 #[cfg(test)]
