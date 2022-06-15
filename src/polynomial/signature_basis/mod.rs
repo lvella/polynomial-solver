@@ -150,15 +150,17 @@ struct KnownBasis<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> 
 
     /// Signatures of polynomials know to reduce to zero.
     ///
-    /// TODO: like the above, use a proper multidimensional index.
+    /// TODO: use a proper multidimensional index.
     syzygies: BTreeSet<Signature<O, I, P>>,
 
     /// Basis ordered by signature to leading monomial ratio.
     ///
-    /// TODO: to search for a reducer, maybe this should be a 2-D index (like
-    /// R*-tree), indexing both the leading monomial and the signature/leading
-    /// monomial ratio.
+    /// TODO: to search for a reducer, maybe this should be a n-D index (like
+    /// R*-tree), indexing both the leading monomial variables and the
+    /// signature/leading monomial ratio.
     by_sign_lm_ratio: BTreeMap<PointedCmp<Signature<O, I, P>>, *const SignPoly<O, I, C, P>>,
+    // TODO: create an n-D index specifically for rewrite criterion, indexing
+    // both signature/leading monomial ratio and signature monomial variables.
 }
 
 impl<
@@ -246,6 +248,55 @@ enum RegularReductionResult<O: Ordering, I: Id, C: InvertibleCoefficient, P: Sig
     Reduced(SignPoly<O, I, C, P>),
 }
 
+// Search for an basis member to rewrite, and return if not singular.
+fn rewrite_spair<
+    O: Ordering,
+    I: Id + Display,
+    C: InvertibleCoefficient + Display,
+    P: SignedPower + Display,
+>(
+    signature: &Signature<O, I, P>,
+    s_pair: PartialSPair<O, I, C, P>,
+    basis: &KnownBasis<O, I, C, P>,
+) -> Option<Polynomial<O, I, C, P>> {
+    // Limit search for rewrite candidate in elements whose signature/lm
+    // ratio are greater than the current candidate we have, in ascending
+    // order, so that the first match we find will be the one with the
+    // smallest leading monomial.
+    let sign_to_lm_ratio = sign_to_monomial_ratio(&signature, &s_pair.leading_term.monomial);
+    let search_range = basis
+        .by_sign_lm_ratio
+        .range(PointedCmp(&sign_to_lm_ratio)..);
+
+    for (_, rewriter) in search_range {
+        let rewriter = unsafe { &**rewriter };
+        if rewriter.signature.idx != signature.idx {
+            // No rewriter found that can divide s-pair signature.
+            break;
+        }
+
+        if rewriter.signature.monomial.divides(&signature.monomial) {
+            let factor = signature
+                .monomial
+                .clone()
+                .whole_division(&rewriter.signature.monomial)
+                .unwrap();
+
+            // Test singular criterion: if signatures are identical (which means
+            // the quotient is one), it is already reduced and present in the
+            // basis.
+            if factor.is_one() {
+                return None;
+            }
+
+            // We have a minimal leading monomial rewriter.
+            return Some(&factor * rewriter.polynomial.clone());
+        }
+    }
+
+    Some(s_pair.into())
+}
+
 /// Regular reduction, as defined in the paper.
 ///
 /// This is analogous to calculate the remainder on a multivariate polynomial
@@ -261,8 +312,13 @@ fn regular_reduce<
     s_pair: PartialSPair<O, I, C, P>,
     basis: &KnownBasis<O, I, C, P>,
 ) -> RegularReductionResult<O, I, C, P> {
-    // Perform rewrite and singular criteria:
-    let polynomial = Polynomial::from(s_pair);
+    // Perform rewrite and singular criterion:
+    let polynomial = match rewrite_spair(&signature, s_pair, basis) {
+        Some(p) => p,
+        None => {
+            return RegularReductionResult::Singular;
+        }
+    };
 
     // The paper suggests splitting the reduced polynomial into a hash map of
     // monomial -> coefficient, so that we can efficiently sum the new terms,

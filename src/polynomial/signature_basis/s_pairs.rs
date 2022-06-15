@@ -167,7 +167,7 @@ impl<O: Ordering, I: Id, P: SignedPower> Ord for SPairColumn<O, I, P> {
 
 /// S-Pair where only the leading term has been evaluated.
 pub struct PartialSPair<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> {
-    leading_term: Term<O, I, C, P>,
+    pub leading_term: Term<O, I, C, P>,
     iter_p: Box<(dyn Iterator<Item = Term<O, I, C, P>> + 'a)>,
     iter_q: Box<(dyn Iterator<Item = Term<O, I, C, P>> + 'a)>,
 }
@@ -342,6 +342,8 @@ impl<O: Ordering, I: Id + Display, P: SignedPower + Display> SPairTriangle<O, I,
                 PartialSPair::new_if_not_eliminated(a_poly, b_poly)
             };
 
+            // TODO: perform here Koszul criterion
+
             // Duplicate signature criterion: only one of all S-pairs of the
             // same signature must be chosen, the one with the smallest
             // leading monomial.
@@ -383,10 +385,6 @@ impl<O: Ordering, I: Id + Display, P: SignedPower + Display> SPairTriangle<O, I,
                     continue;
                 }
             };
-
-            // TODO: perform all these elimination criteria:
-            // - Koszul criterion
-            // not sure if here or before calculating all these lading terms.
 
             return Some((signature, spair));
         }

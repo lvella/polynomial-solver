@@ -9,8 +9,9 @@ use num_traits::{One, Signed};
 use std::{
     cmp::{Ordering as CmpOrd, Reverse},
     fmt::Write,
-    marker::PhantomData,
     hash::Hash,
+    marker::PhantomData,
+    ops::{Mul, MulAssign},
 };
 
 pub trait Id: core::fmt::Debug + Eq + Ord + Clone + Hash {}
@@ -21,7 +22,7 @@ pub trait Coefficient:
     + Clone
     + std::ops::AddAssign
     + std::ops::SubAssign
-    + for<'a> std::ops::MulAssign<&'a Self>
+    + for<'a> MulAssign<&'a Self>
     + num_traits::Zero
     + num_traits::One
 {
@@ -301,7 +302,7 @@ where
     }
 }
 
-impl<O, I, P> std::ops::Mul for Monomial<O, I, P>
+impl<O, I, P> Mul for Monomial<O, I, P>
 where
     O: Ordering,
     I: Id,
@@ -463,7 +464,7 @@ where
     }
 }
 
-impl<O, I, C, P> std::ops::Mul for Term<O, I, C, P>
+impl<O, I, C, P> Mul for Term<O, I, C, P>
 where
     O: Ordering,
     I: Id,
@@ -870,7 +871,25 @@ where
     }
 }
 
-impl<O, I, C, P> std::ops::Mul for &Polynomial<O, I, C, P>
+impl<O, I, C, P> Mul<Polynomial<O, I, C, P>> for &Monomial<O, I, P>
+where
+    O: Ordering,
+    I: Id,
+    C: Coefficient,
+    P: Power,
+{
+    type Output = Polynomial<O, I, C, P>;
+
+    fn mul(self, mut rhs: Polynomial<O, I, C, P>) -> Self::Output {
+        for term in rhs.terms.iter_mut() {
+            term.monomial = std::mem::replace(&mut term.monomial, Monomial::one()) * self.clone();
+        }
+
+        rhs
+    }
+}
+
+impl<O, I, C, P> Mul for &Polynomial<O, I, C, P>
 where
     O: Ordering,
     I: Id,
@@ -921,7 +940,7 @@ where
     }
 }
 
-impl<O, I, C, P> std::ops::Mul for Polynomial<O, I, C, P>
+impl<O, I, C, P> Mul for Polynomial<O, I, C, P>
 where
     O: Ordering,
     I: Id,
@@ -934,7 +953,7 @@ where
     }
 }
 
-impl<O, I, C, P> std::ops::Mul<C> for &Polynomial<O, I, C, P>
+impl<O, I, C, P> Mul<C> for &Polynomial<O, I, C, P>
 where
     O: Ordering,
     I: Id,
