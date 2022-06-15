@@ -9,12 +9,11 @@ use num_traits::{One, Signed};
 use std::{
     cmp::{Ordering as CmpOrd, Reverse},
     fmt::Write,
-    hash::Hash,
     marker::PhantomData,
     ops::{Mul, MulAssign},
 };
 
-pub trait Id: core::fmt::Debug + Eq + Ord + Clone + Hash {}
+pub trait Id: core::fmt::Debug + Eq + Ord + Clone {}
 
 pub trait Coefficient:
     core::fmt::Debug
@@ -38,11 +37,10 @@ pub trait Power:
     + for<'a> std::ops::SubAssign<&'a Self>
     + num_traits::Zero
     + num_traits::One
-    + Hash
 {
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Hash)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct VariablePower<I, P> {
     id: I,
     power: P,
@@ -62,7 +60,7 @@ where
     }
 }
 
-#[derive(Debug, Hash)]
+#[derive(Debug)]
 pub struct Monomial<O: ?Sized, I, P> {
     // Product is sorted in decreasing order of id:
     product: Vec<VariablePower<I, P>>,
