@@ -54,7 +54,7 @@ fn main() -> Result<(), String> {
         println!("\nGröbner Basis:");
         let gb = polynomial_solver::polynomial::signature_basis::grobner_basis(system);
         for p in gb {
-            println!("  : {}", p);
+            println!("  : {}", p.get_terms()[0].get_monomial());
         }
     }
 
