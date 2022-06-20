@@ -1,6 +1,7 @@
 #![feature(drain_filter)]
 #![feature(binary_heap_into_iter_sorted)]
 #![feature(map_first_last)]
+#![feature(is_some_with)]
 
 pub mod factorization;
 pub mod finite_field;

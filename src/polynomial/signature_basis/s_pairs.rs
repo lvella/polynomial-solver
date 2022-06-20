@@ -1,23 +1,31 @@
 //! S-pairs data structures.
 
 use std::{
+    cmp::max,
     collections::{BTreeSet, BinaryHeap},
     fmt::Display,
+    marker::PhantomData,
+    ops::{
+        Bound::{Excluded, Unbounded},
+        Index,
+    },
 };
 
+use bitvec::prelude::BitVec;
+use itertools::{zip, Itertools};
 use num_traits::One;
 
 use crate::{
     ordered_ops::partial_sum,
     polynomial::{
         division::InvertibleCoefficient, monomial_ordering::Ordering, Id, Monomial, Polynomial,
-        Term,
+        Term, VariablePower,
     },
 };
 
-use super::{KnownBasis, SignPoly, Signature, SignedPower};
+use super::{KnownBasis, PointedCmp, SignPoly, Signature, SignedPower};
 
-/// Tests in a set contains a divisor for a signature.
+/// Tests if a set contains a divisor for a signature.
 ///
 /// This is basically the implementation of signature criterion.
 fn contains_divisor<O: Ordering, I: Id, P: SignedPower>(
@@ -27,14 +35,9 @@ fn contains_divisor<O: Ordering, I: Id, P: SignedPower>(
     // Iterate over smaller signatures, testing if they are divisible
     let minimal = Signature {
         monomial: Monomial::one(),
-        ..*signature
+        idx: signature.idx,
     };
     for maybe_divisor in set.range(&minimal..=signature) {
-        if maybe_divisor.idx != signature.idx {
-            // Only signatures with the same idx can possible be divisors.
-            break;
-        }
-
         if maybe_divisor.monomial.divides(&signature.monomial) {
             return true;
         }
@@ -54,28 +57,53 @@ struct HalfSPair<O: Ordering, I: Id, P: SignedPower> {
 
 impl<O: Ordering, I: Id, P: SignedPower> HalfSPair<O, I, P> {
     /// Creates a new S-pair, if not eliminated by early elimination criteria.
+    ///
+    /// On error, tells if S-pair is known to reduce to zero.
     fn new_if_not_eliminated<C: InvertibleCoefficient>(
         sign_poly: &SignPoly<O, I, C, P>,
-        idx: u32,
-        basis: &KnownBasis<O, I, C, P>,
-    ) -> Option<Self> {
-        let other = basis.polys[idx as usize].as_ref();
-
+        other: &SignPoly<O, I, C, P>,
+        base_divisors: &BaseDivisors<O, I, C, P>,
+        syzygies: &BTreeSet<Signature<O, I, P>>,
+        triangle: &SyzygyTriangle,
+    ) -> Result<Self, bool> {
         // Find what polynomial to calculate the signature from.
         // It is the one with highest signature to LM ratio.
         let (sign_base, sign_other) = match sign_poly.sign_to_lm_ratio_cmp(&other) {
             std::cmp::Ordering::Equal => {
-                // Non-regular criterion: if the signature from both
-                // polynomials are the same, this S-pair is singular and can
-                // be eliminated immediately.
-                return None;
+                // Non-regular criterion: if the signature from both polynomials
+                // would be the same when each is multiplied by its
+                // complementary factor, then this S-pair is singular and can be
+                // eliminated immediately (I have no idea why, I don't know if
+                // it is redundant or a syzygy or whatever).
+                return Err(false);
             }
             std::cmp::Ordering::Less => {
-                // TODO: implement here high-ratio base divisor criterion
+                // Test for high-ratio base divisor criterion:
+                if let Some(bd) = &base_divisors.high {
+                    if bd.0.idx != other.idx
+                        && triangle[(bd.0.idx, other.idx)]
+                        && other.sign_to_lm_ratio > bd.0.sign_to_lm_ratio
+                    {
+                        return Err(true);
+                    }
+                }
+
                 (other, sign_poly)
             }
             std::cmp::Ordering::Greater => {
-                // TODO: implement here low-ratio base divisor criterion
+                // Test for low-ratio base divisor criterion:
+                if let Some(bd) = &base_divisors.low {
+                    if bd.divisor.idx != other.idx
+                        && triangle[(bd.divisor.idx, other.idx)]
+                        && other.sign_to_lm_ratio < bd.divisor.sign_to_lm_ratio
+                        && other.polynomial.terms[0]
+                            .monomial
+                            .divides(&bd.discriminator)
+                    {
+                        return Err(true);
+                    }
+                }
+
                 (sign_poly, other)
             }
         };
@@ -84,10 +112,13 @@ impl<O: Ordering, I: Id, P: SignedPower> HalfSPair<O, I, P> {
         let signature = HalfSPair::calculate_signature(sign_base, sign_other);
 
         // Early test for signature criterion:
-        if contains_divisor(&signature, &basis.syzygies) {
-            None
+        if contains_divisor(&signature, &syzygies) {
+            return Err(true);
         } else {
-            Some(HalfSPair { signature, idx })
+            Ok(HalfSPair {
+                signature,
+                idx: other.idx,
+            })
         }
     }
 
@@ -258,19 +289,295 @@ impl<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower>
     }
 }
 
+/// Base divisors used in the base divisor criterion.
+///
+/// TODO: Test without this criterion again when a proper multidimensional index
+/// have been implemented, because right now it makes things worse, not better.
+struct BaseDivisors<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> {
+    high: Option<HighBaseDivisor<'a, O, I, C, P>>,
+    low: Option<LowBaseDivisor<'a, O, I, C, P>>,
+}
+
+impl<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower>
+    BaseDivisors<'a, O, I, C, P>
+{
+    fn new(sign_poly: &SignPoly<O, I, C, P>, basis: &KnownBasis<O, I, C, P>) -> Self {
+        Self {
+            high: HighBaseDivisor::new(sign_poly, basis),
+            low: LowBaseDivisor::new(sign_poly, basis),
+        }
+    }
+}
+
+struct HighBaseDivisor<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower>(
+    &'a SignPoly<O, I, C, P>,
+);
+
+impl<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower>
+    HighBaseDivisor<'a, O, I, C, P>
+{
+    fn new(sign_poly: &SignPoly<O, I, C, P>, basis: &KnownBasis<O, I, C, P>) -> Option<Self> {
+        let lm = &sign_poly.polynomial.terms[0].monomial;
+
+        // Search for high base divisor only where sign/lm ratio is higher,
+        // otherwise this polynomial would have been reduced or eliminated already.
+        for (_, maybe_divisor) in basis
+            .by_sign_lm_ratio
+            .range((Excluded(PointedCmp(&sign_poly.sign_to_lm_ratio)), Unbounded))
+        {
+            let maybe_divisor = unsafe { &**maybe_divisor };
+            if maybe_divisor.polynomial.terms[0].monomial.divides(lm) {
+                return Some(HighBaseDivisor(maybe_divisor));
+            }
+        }
+
+        None
+    }
+}
+
+/// An iterator aggregating multiple VariablePower iterators, assumed to be in
+/// descending order of variable id.
+///
+/// Each element is a tuple (variable_id, vec_of_powers) for the power of
+/// variable_id for each iterator. If some variable is not present in some
+/// iterator, the value is set to zero. As long as a variable id is present in
+/// at least one iterator, it will be output.
+struct MultiVarWalk<'a, I: 'a + Id, P: 'a + SignedPower> {
+    iters: Vec<&'a mut dyn Iterator<Item = &'a VariablePower<I, P>>>,
+    current: Vec<Option<&'a VariablePower<I, P>>>,
+    next_id: Option<I>,
+}
+
+impl<'a, I: 'a + Id, P: 'a + SignedPower> MultiVarWalk<'a, I, P> {
+    fn new(mut iters: Vec<&'a mut dyn Iterator<Item = &'a VariablePower<I, P>>>) -> Self {
+        let mut next_id = None;
+
+        let current = iters
+            .iter_mut()
+            .map(|i| {
+                let var = i.next();
+                Self::update_next_id(&mut next_id, var);
+                var
+            })
+            .collect();
+
+        Self {
+            iters,
+            current,
+            next_id,
+        }
+    }
+
+    fn update_next_id(next_id: &mut Option<I>, var: Option<&VariablePower<I, P>>) {
+        if let Some(var) = var {
+            if let Some(id) = &next_id {
+                if var.id > *id {
+                    *next_id = Some(var.id.clone());
+                }
+            } else {
+                *next_id = Some(var.id.clone());
+            }
+        }
+    }
+}
+
+impl<'a, I: 'a + Id, P: 'a + SignedPower> Iterator for MultiVarWalk<'a, I, P> {
+    type Item = (I, Vec<P>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let id = self.next_id.as_ref()?.clone();
+        let mut values = Vec::new();
+        values.reserve(self.current.len());
+
+        self.next_id = None;
+
+        for (var, iter) in self.current.iter_mut().zip(self.iters.iter_mut()) {
+            // Decide what value to use for this iter:
+            values.push(if let Some(v) = var {
+                if v.id == id {
+                    let value = v.power.clone();
+                    *var = iter.next();
+                    value
+                } else {
+                    P::zero()
+                }
+            } else {
+                P::zero()
+            });
+
+            // Choose the highest of the IDs for next id to be output:
+            Self::update_next_id(&mut self.next_id, *var);
+        }
+
+        Some((id, values))
+    }
+}
+
+/// Low base divisor information
+struct LowBaseDivisor<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> {
+    divisor: &'a SignPoly<O, I, C, P>,
+    /// The x^v in the paper.
+    discriminator: Monomial<O, I, P>,
+}
+
+impl<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower>
+    LowBaseDivisor<'a, O, I, C, P>
+{
+    /// For low base divisor, find the polynomial with maximum sign/lm ratio
+    /// whose signature divides sign_poly.
+    fn new(sign_poly: &SignPoly<O, I, C, P>, basis: &KnownBasis<O, I, C, P>) -> Option<Self> {
+        // Creates a monomial where all variables have maximum power. This
+        // will be useful in querying the BTreeMap below, and will be the
+        // basis of the discriminator.
+        let max_monomial = Monomial {
+            product: basis
+                .seen_ids
+                .iter()
+                .map(|id| VariablePower {
+                    id: id.clone(),
+                    power: P::max_value(),
+                })
+                .collect(),
+            total_power: P::max_value(),
+            _phantom_ordering: PhantomData,
+        };
+
+        let mut divisor = None;
+
+        // Search for the divisor in the range where signatures have the
+        // same idx, from maximum signature/lm ratio to minimum. We use the
+        // fact that the stored sign/lm ratio has the same idx as the stored
+        // signature.
+        let range_max = Signature {
+            monomial: max_monomial,
+            idx: sign_poly.signature.idx,
+        };
+        for (_, maybe_divisor) in basis
+            .by_sign_lm_ratio
+            .range(..=PointedCmp(&range_max))
+            .rev()
+        {
+            let maybe_divisor = unsafe { &**maybe_divisor };
+            if maybe_divisor.signature.idx != sign_poly.signature.idx {
+                // We are out of the possible divisor range.
+                return None;
+            }
+
+            if maybe_divisor
+                .signature
+                .monomial
+                .divides(&sign_poly.signature.monomial)
+            {
+                divisor = Some(maybe_divisor);
+                break;
+            }
+        }
+
+        let divisor = divisor?;
+
+        // Calculate the discriminant:
+        let a = &divisor.polynomial.terms[0].monomial;
+        let b = &sign_poly.polynomial.terms[0].monomial;
+
+        let p = sign_poly
+            .signature
+            .monomial
+            .clone()
+            .whole_division(&divisor.signature.monomial)
+            .unwrap()
+            * a.clone();
+
+        // Reuse the maximum monomial so we don't have to reallocate it.
+        let mut v = range_max.monomial;
+
+        let mut ia = a.product.iter();
+        let mut ib = b.product.iter();
+        let mut ip = p.product.iter();
+
+        let mut multivar_iter = MultiVarWalk::new(vec![&mut ia, &mut ib, &mut ip]);
+        if let Some(mut multivar) = multivar_iter.next() {
+            for var in v.product.iter_mut() {
+                // b == p, so v is infinity (unchanged)
+                if var.id != multivar.0 {
+                    continue;
+                }
+
+                // We have a, b and p, do the comparison:
+                let (a, b, p) = multivar.1.into_iter().next_tuple().unwrap();
+                if b > p {
+                    var.power = max(p, a);
+                }
+
+                multivar = match multivar_iter.next() {
+                    Some(x) => x,
+                    None => break,
+                }
+            }
+        }
+
+        Some(LowBaseDivisor {
+            divisor,
+            discriminator: v,
+        })
+    }
+}
+
+/// Stores one bit for every S-pair ever generated, saying if it reduces to
+/// zero. This is used in base divisor criterion.
+///
+/// TODO: there may be possible to use a single BitVec, but I don't know how.
+pub struct SyzygyTriangle(Vec<BitVec>);
+
+impl SyzygyTriangle {
+    fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    fn syzygy_triangle_idx(idx: (u32, u32)) -> (usize, usize) {
+        if idx.0 < idx.1 {
+            (idx.0 as usize, idx.1 as usize)
+        } else {
+            (idx.1 as usize, idx.0 as usize)
+        }
+    }
+
+    fn set(&mut self, idx: (u32, u32), val: bool) {
+        let (min, max) = Self::syzygy_triangle_idx(idx);
+        self.0[max].set(min, val);
+    }
+
+    fn add_column(&mut self, column: BitVec) {
+        self.0.push(column);
+    }
+}
+
+impl Index<(u32, u32)> for SyzygyTriangle {
+    type Output = <BitVec as Index<usize>>::Output;
+
+    fn index(&self, idx: (u32, u32)) -> &Self::Output {
+        let (min, max) = Self::syzygy_triangle_idx(idx);
+        &self.0[max][min]
+    }
+}
+
 /// Efficient priority queue to store S-pairs.
 ///
 /// Data structure defined in the paper to efficiently store and quickly
 /// retrieve the S-pair with minimal signature. This is basically a
 /// heap of ordered vectors.
 pub struct SPairTriangle<O: Ordering, I: Id, P: SignedPower> {
+    /// Stores the S-pairs to be reduced.
     heads: BinaryHeap<SPairColumn<O, I, P>>,
+
+    /// Tells if an S-pair is a syzygy.
+    reduces_to_zero: SyzygyTriangle,
 }
 
 impl<O: Ordering, I: Id + Display, P: SignedPower + Display> SPairTriangle<O, I, P> {
     pub fn new() -> Self {
         SPairTriangle {
             heads: BinaryHeap::new(),
+            reduces_to_zero: SyzygyTriangle::new(),
         }
     }
 
@@ -279,12 +586,30 @@ impl<O: Ordering, I: Id + Display, P: SignedPower + Display> SPairTriangle<O, I,
         sign_poly: &SignPoly<O, I, C, P>,
         basis: &KnownBasis<O, I, C, P>,
     ) {
-        let mut new_spairs: Vec<_> = basis
-            .polys
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, _)| HalfSPair::new_if_not_eliminated(sign_poly, idx as u32, basis))
-            .collect();
+        // Base divisors are used in a elimination criterion. We must calculate
+        // them beforehand as they are used in every S-pair added in this new
+        // column.
+        let base_divisors = BaseDivisors::new(sign_poly, basis);
+
+        let mut new_spairs = Vec::new();
+        let mut reduces_to_zero = BitVec::with_capacity(basis.polys.len());
+        for other_poly in basis.polys.iter() {
+            let red_to_zero = match HalfSPair::new_if_not_eliminated(
+                sign_poly,
+                other_poly.as_ref(),
+                &base_divisors,
+                &basis.syzygies,
+                &self.reduces_to_zero,
+            ) {
+                Ok(spair) => {
+                    new_spairs.push(spair);
+                    false
+                }
+                Err(red_to_zero) => red_to_zero,
+            };
+            reduces_to_zero.push(red_to_zero);
+        }
+        self.reduces_to_zero.add_column(reduces_to_zero);
 
         // Sort by signature in decreasing order, so we can pop the next element from the tail.
         new_spairs.sort_unstable_by(|a, b| b.signature.cmp(&a.signature));
@@ -314,7 +639,9 @@ impl<O: Ordering, I: Id + Display, P: SignedPower + Display> SPairTriangle<O, I,
         let mut head = self.heads.pop()?;
         let ret = head.head_spair;
         let a_poly = basis[head.origin_idx as usize].as_ref();
+        assert!(a_poly.idx == head.origin_idx);
         let b_poly = basis[ret.idx as usize].as_ref();
+        assert!(b_poly.idx == ret.idx);
 
         // Update the column's head and insert it back into the heap
         if let Some(next_head_idx) = head.column.pop() {
@@ -330,10 +657,19 @@ impl<O: Ordering, I: Id + Display, P: SignedPower + Display> SPairTriangle<O, I,
     pub fn get_next<'a, C: InvertibleCoefficient>(
         &mut self,
         basis: &'a KnownBasis<O, I, C, P>,
-    ) -> Option<(Signature<O, I, P>, PartialSPair<'a, O, I, C, P>)> {
+    ) -> Option<(
+        Signature<O, I, P>,
+        PartialSPair<'a, O, I, C, P>,
+        Vec<(u32, u32)>,
+    )> {
+        let mut same_sign_spairs = Vec::new();
+
         // Iterate until some S-pair remains that is not eliminated by one
         // of the late elimination criteria.
         while let Some((signature, a_poly, b_poly)) = self.pop(&basis.polys) {
+            same_sign_spairs.clear();
+            same_sign_spairs.push((a_poly.idx, b_poly.idx));
+
             // Late test for signature criterion:
             let mut chosen_spair = if contains_divisor(&signature, &basis.syzygies) {
                 // Eliminated by signature criterion
@@ -353,6 +689,7 @@ impl<O: Ordering, I: Id + Display, P: SignedPower + Display> SPairTriangle<O, I,
                 }
 
                 let (_, a_poly, b_poly) = self.pop(&basis.polys).unwrap();
+                same_sign_spairs.push((a_poly.idx, b_poly.idx));
 
                 // Only process the new S-pair if no other of same signature has been eliminated.
                 if let Some(spair) = &mut chosen_spair {
@@ -380,14 +717,23 @@ impl<O: Ordering, I: Id + Display, P: SignedPower + Display> SPairTriangle<O, I,
             let spair = match chosen_spair {
                 Some(spair) => spair,
                 None => {
-                    // The current S-pair has been eliminated.
-                    // Try another one.
+                    // The current S-pair has been eliminated. Mark every popped
+                    // S-pair as reducing to zero.
+                    self.mark_as_syzygy(&same_sign_spairs[..]);
+
+                    // Now try another S-pair.
                     continue;
                 }
             };
 
-            return Some((signature, spair));
+            return Some((signature, spair, same_sign_spairs));
         }
         None
+    }
+
+    pub fn mark_as_syzygy(&mut self, indices: &[(u32, u32)]) {
+        for idx in indices {
+            self.reduces_to_zero.set(*idx, true);
+        }
     }
 }

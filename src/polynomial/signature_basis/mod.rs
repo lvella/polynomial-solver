@@ -14,7 +14,6 @@ use self::s_pairs::PartialSPair;
 
 use super::division::InvertibleCoefficient;
 use super::{monomial_ordering::Ordering, Id, Monomial, Polynomial, Power, Term};
-use itertools::Itertools;
 use num_traits::{One, Zero};
 
 use num_traits::Signed;
@@ -71,6 +70,9 @@ struct SignPoly<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> {
     signature: Signature<O, I, P>,
     polynomial: Polynomial<O, I, C, P>,
 
+    /// Own index inside the basis.
+    idx: u32,
+
     /// The signature to leading monomial ratio allows us to quickly find
     /// out what is the signature of a new S-pair calculated.
     ///
@@ -97,12 +99,13 @@ impl<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> SignPoly<O, I
     /// Creates a new Signature Polynomial.
     ///
     /// Polynomial can not be zero, otherwise this will panic.
-    fn new(signature: Signature<O, I, P>, polynomial: Polynomial<O, I, C, P>) -> Self {
+    fn new(idx: u32, signature: Signature<O, I, P>, polynomial: Polynomial<O, I, C, P>) -> Self {
         let sign_to_lm_ratio = sign_to_monomial_ratio(&signature, &polynomial.terms[0].monomial);
 
         Self {
             signature,
             polynomial,
+            idx,
             sign_to_lm_ratio,
         }
     }
@@ -137,6 +140,9 @@ impl<T: Ord> Ord for PointedCmp<T> {
 
 /// Stores all the basis elements known and processed so far,
 struct KnownBasis<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> {
+    /// Every id used by polynomials, in descending order
+    seen_ids: Vec<I>,
+
     /// Owns the basis polynomials, ordered by insertion order (which is
     /// important to the spair triangle).
     polys: Vec<Box<SignPoly<O, I, C, P>>>,
@@ -148,12 +154,13 @@ struct KnownBasis<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> 
 
     /// Basis ordered by signature to leading monomial ratio.
     ///
-    /// TODO: to search for a reducer, maybe this should be a n-D index (like
-    /// R*-tree), indexing both the leading monomial variables and the
-    /// signature/leading monomial ratio.
+    /// TODO: to search for a reducer and for a high base divisor, maybe this
+    /// should be a n-D index (like R*-tree), indexing both the leading monomial
+    /// variables and the signature/leading monomial ratio.
     by_sign_lm_ratio: BTreeMap<PointedCmp<Signature<O, I, P>>, *const SignPoly<O, I, C, P>>,
-    // TODO: create an n-D index specifically for rewrite criterion, indexing
-    // both signature/leading monomial ratio and signature monomial variables.
+    // TODO: create an n-D index specifically for rewrite criterion and low base
+    // divisor, indexing both signature/leading monomial ratio and signature
+    // monomial variables.
 }
 
 impl<
@@ -204,6 +211,7 @@ impl<
     fn new() -> Self {
         BasisCalculator {
             basis: KnownBasis {
+                seen_ids: Vec::new(),
                 polys: Vec::new(),
                 syzygies: BTreeSet::new(),
                 by_sign_lm_ratio: BTreeMap::new(),
@@ -224,8 +232,9 @@ impl<
         self.basis.polys.push(rc);
     }
 
-    fn add_syzygy_signature(&mut self, signature: Signature<O, I, P>) {
+    fn add_syzygy(&mut self, signature: Signature<O, I, P>, indices: &[(u32, u32)]) {
         self.basis.syzygies.insert(signature);
+        self.spairs.mark_as_syzygy(indices);
     }
 }
 
@@ -301,6 +310,7 @@ fn regular_reduce<
     C: InvertibleCoefficient + Display,
     P: SignedPower + Display,
 >(
+    idx: u32,
     signature: Signature<O, I, P>,
     s_pair: PartialSPair<O, I, C, P>,
     basis: &KnownBasis<O, I, C, P>,
@@ -426,6 +436,7 @@ fn regular_reduce<
         Some(sign_to_lm_ratio) => RegularReductionResult::Reduced(SignPoly {
             signature,
             polynomial,
+            idx,
             sign_to_lm_ratio,
         }),
         None => {
@@ -452,16 +463,17 @@ pub fn grobner_basis<
     C: InvertibleCoefficient + Display,
     P: SignedPower + Display,
 >(
-    input: &mut dyn Iterator<Item = Polynomial<O, I, C, P>>,
+    mut input: Vec<Polynomial<O, I, C, P>>,
 ) -> Vec<Polynomial<O, I, C, P>> {
-    // The algorithm performance might depend on the order the
-    // elements are given in the input.
+    // The algorithm performance might depend on the order the elements are
+    // given in the input. From my tests with a single input, sorting makes it
+    // run much faster.
+    input.sort_unstable();
 
     let mut c = BasisCalculator::new();
 
     // Insert all input polynomials in the basis.
-    // From my tests with a single input, sorting makes it run much faster.
-    for polynomial in input.sorted() {
+    for polynomial in input {
         if polynomial.is_zero() {
             // Zero polynomial is implicitly part of every ideal, so it is
             // redundant.
@@ -475,24 +487,36 @@ pub fn grobner_basis<
             return vec![polynomial];
         }
 
+        // Store a list of all variable ids used.
+        for term in polynomial.terms.iter() {
+            c.basis
+                .seen_ids
+                .extend(term.monomial.product.iter().map(|var| var.id.clone()));
+        }
+
         let signature = Signature {
             idx: c.basis.polys.len() as u32,
             monomial: Monomial::one(),
         };
-        c.insert_poly_with_spairs(SignPoly::new(signature, polynomial));
+        c.insert_poly_with_spairs(SignPoly::new(signature.idx, signature, polynomial));
     }
+
+    // Make seen_ids unique and sorted in descending order, like the monomials:
+    c.basis.seen_ids.sort_unstable_by(|a, b| b.cmp(a));
+    c.basis.seen_ids.dedup();
+    c.basis.seen_ids.shrink_to_fit();
 
     // Main loop, reduce every S-pair and insert in the basis until there are no
     // more S-pairs to be reduced. Since each newly inserted polynomials can
     // generate up to n-1 new S-pairs, this loop is exponential.
     loop {
-        let (signature, s_pair) = if let Some(next_spair) = c.spairs.get_next(&c.basis) {
+        let (signature, s_pair, indices) = if let Some(next_spair) = c.spairs.get_next(&c.basis) {
             next_spair
         } else {
             break;
         };
 
-        match regular_reduce(signature, s_pair, &c.basis) {
+        match regular_reduce(c.basis.polys.len() as u32, signature, s_pair, &c.basis) {
             RegularReductionResult::Reduced(reduced) => {
                 println!(
                     "#(p: {}, s: {}), {}",
@@ -508,7 +532,7 @@ pub fn grobner_basis<
             RegularReductionResult::Zero(signature) => {
                 // Polynomial reduces to zero, so we keep the signature to
                 // eliminate S-pairs before reduction.
-                c.add_syzygy_signature(signature);
+                c.add_syzygy(signature, &indices[..]);
             }
             RegularReductionResult::Singular => (
                 // Polynomial was singular top reducible, so it was redundant
@@ -545,7 +569,7 @@ mod tests {
             x.clone() - z.clone(),
         ];
 
-        let grobner_basis = grobner_basis(&mut eqs.into_iter());
+        let grobner_basis = grobner_basis(eqs.into());
         println!("Gröbner Basis:");
         for p in grobner_basis.iter() {
             println!("{}", p);

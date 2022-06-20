@@ -165,8 +165,7 @@ fn solve<T: Field, I: Iterator<Item = ir::Statement<T>>>(ir_prog: ir::ProgIterat
 
     println!("\nGröbner Basis:");
 
-    let gb =
-        polynomial_solver::polynomial::signature_basis::grobner_basis(&mut poly_set.into_iter());
+    let gb = polynomial_solver::polynomial::signature_basis::grobner_basis(poly_set);
     for p in gb.iter() {
         println!("  {}", p);
     }

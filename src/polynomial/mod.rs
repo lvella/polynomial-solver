@@ -37,6 +37,7 @@ pub trait Power:
     + for<'a> std::ops::SubAssign<&'a Self>
     + num_traits::Zero
     + num_traits::One
+    + num_traits::Bounded
 {
 }
 

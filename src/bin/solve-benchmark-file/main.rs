@@ -52,8 +52,7 @@ fn main() -> Result<(), String> {
         }
 
         println!("\nGröbner Basis:");
-        let gb =
-            polynomial_solver::polynomial::signature_basis::grobner_basis(&mut system.into_iter());
+        let gb = polynomial_solver::polynomial::signature_basis::grobner_basis(system);
         for p in gb {
             println!("  : {}", p);
         }
