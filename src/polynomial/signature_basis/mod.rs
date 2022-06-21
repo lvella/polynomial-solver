@@ -150,6 +150,9 @@ struct KnownBasis<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> 
     /// Signatures of polynomials know to reduce to zero.
     ///
     /// TODO: use a proper multidimensional index.
+    ///
+    /// TODO: maybe periodically remove elements that are divisible by other
+    /// elements
     syzygies: BTreeSet<Signature<O, I, P>>,
 
     /// Basis ordered by signature to leading monomial ratio.
@@ -235,6 +238,35 @@ impl<
     fn add_syzygy(&mut self, signature: Signature<O, I, P>, indices: &[(u32, u32)]) {
         self.basis.syzygies.insert(signature);
         self.spairs.mark_as_syzygy(indices);
+    }
+
+    fn add_koszul_syzygies(&mut self, indices: &[(u32, u32)]) {
+        for (p, q) in indices {
+            let p = self.basis.polys[*p as usize].as_ref();
+            let q = self.basis.polys[*q as usize].as_ref();
+
+            // Choose q to be the basis of the signature:
+            let (sign_basis, lm_basis) = match p.sign_to_lm_ratio_cmp(q) {
+                std::cmp::Ordering::Less => (q, p),
+                std::cmp::Ordering::Equal => {
+                    // Non-regular Koszul syzygy, skip,
+                    continue;
+                }
+                std::cmp::Ordering::Greater => (p, q),
+            };
+
+            let mut koszul_signature = sign_basis.signature.clone();
+            koszul_signature.monomial =
+                koszul_signature.monomial * lm_basis.polynomial.terms[0].monomial.clone();
+
+            // TODO: maybe we should check if this signature is not divisible by some known syzygy before inserting.
+            // Without proper multidimensional indexing, this might be more expensive than it is worth.
+            self.basis.syzygies.insert(koszul_signature);
+            // DO NOT mark the original S-pair as syzygy, because it is not!
+            // Except in special cases that have already been handled,
+            // Koszul(a,b) != S-pair(a,b)
+            // I.e. the S-pair itself is not a syzygy.
+        }
     }
 }
 
@@ -510,11 +542,12 @@ pub fn grobner_basis<
     // more S-pairs to be reduced. Since each newly inserted polynomials can
     // generate up to n-1 new S-pairs, this loop is exponential.
     loop {
-        let (signature, s_pair, indices) = if let Some(next_spair) = c.spairs.get_next(&c.basis) {
-            next_spair
-        } else {
-            break;
-        };
+        let (signature, s_pair, indices) =
+            if let Some(next_spair) = c.spairs.get_next(&c.basis.polys, &mut c.basis.syzygies) {
+                next_spair
+            } else {
+                break;
+            };
 
         match regular_reduce(c.basis.polys.len() as u32, signature, s_pair, &c.basis) {
             RegularReductionResult::Reduced(reduced) => {
@@ -528,6 +561,10 @@ pub fn grobner_basis<
                 // Polynomial is a new valid member of the basis. Insert it into
                 // the basis.
                 c.insert_poly_with_spairs(reduced);
+
+                // Generate the corresponding Koszul syzygy to help eliminating
+                // future S-pairs.
+                c.add_koszul_syzygies(&indices[..]);
             }
             RegularReductionResult::Zero(signature) => {
                 // Polynomial reduces to zero, so we keep the signature to

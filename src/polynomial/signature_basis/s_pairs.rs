@@ -12,7 +12,7 @@ use std::{
 };
 
 use bitvec::prelude::BitVec;
-use itertools::{zip, Itertools};
+use itertools::Itertools;
 use num_traits::One;
 
 use crate::{
@@ -656,7 +656,8 @@ impl<O: Ordering, I: Id + Display, P: SignedPower + Display> SPairTriangle<O, I,
     /// signature. Or None if there are no more S-pairs.
     pub fn get_next<'a, C: InvertibleCoefficient>(
         &mut self,
-        basis: &'a KnownBasis<O, I, C, P>,
+        basis: &'a Vec<Box<SignPoly<O, I, C, P>>>,
+        syzygies: &mut BTreeSet<Signature<O, I, P>>,
     ) -> Option<(
         Signature<O, I, P>,
         PartialSPair<'a, O, I, C, P>,
@@ -666,19 +667,18 @@ impl<O: Ordering, I: Id + Display, P: SignedPower + Display> SPairTriangle<O, I,
 
         // Iterate until some S-pair remains that is not eliminated by one
         // of the late elimination criteria.
-        while let Some((signature, a_poly, b_poly)) = self.pop(&basis.polys) {
+        while let Some((signature, a_poly, b_poly)) = self.pop(basis) {
             same_sign_spairs.clear();
             same_sign_spairs.push((a_poly.idx, b_poly.idx));
 
             // Late test for signature criterion:
-            let mut chosen_spair = if contains_divisor(&signature, &basis.syzygies) {
+            let mut chosen_spair = if contains_divisor(&signature, &syzygies) {
                 // Eliminated by signature criterion
-                None
+                Err(true)
             } else {
-                PartialSPair::new_if_not_eliminated(a_poly, b_poly)
+                // Either we get a S-pair, or it was not eliminated by signature.
+                PartialSPair::new_if_not_eliminated(a_poly, b_poly).ok_or(false)
             };
-
-            // TODO: perform here Koszul criterion
 
             // Duplicate signature criterion: only one of all S-pairs of the
             // same signature must be chosen, the one with the smallest
@@ -688,11 +688,11 @@ impl<O: Ordering, I: Id + Display, P: SignedPower + Display> SPairTriangle<O, I,
                     break;
                 }
 
-                let (_, a_poly, b_poly) = self.pop(&basis.polys).unwrap();
+                let (_, a_poly, b_poly) = self.pop(basis).unwrap();
                 same_sign_spairs.push((a_poly.idx, b_poly.idx));
 
                 // Only process the new S-pair if no other of same signature has been eliminated.
-                if let Some(spair) = &mut chosen_spair {
+                if let Ok(spair) = &mut chosen_spair {
                     match PartialSPair::new_if_not_eliminated(a_poly, b_poly) {
                         Some(new_spair) => {
                             // There is a non-eliminated new S-pair,
@@ -703,10 +703,11 @@ impl<O: Ordering, I: Id + Display, P: SignedPower + Display> SPairTriangle<O, I,
                             }
                         }
                         None => {
-                            // The new S-pair was eliminated, so every
-                            // S-pair of same signature can be eliminated
+                            // The new S-pair was eliminated by relatively prime
+                            // criterion (or amazingly, reduced to zero), so
+                            // every S-pair of same signature can be eliminated
                             // as well.
-                            chosen_spair = None;
+                            chosen_spair = Err(false);
                         }
                     }
                 }
@@ -715,10 +716,21 @@ impl<O: Ordering, I: Id + Display, P: SignedPower + Display> SPairTriangle<O, I,
             // All S-pairs of this signature have been consumed, and there
             // is at most one remaining.
             let spair = match chosen_spair {
-                Some(spair) => spair,
-                None => {
-                    // The current S-pair has been eliminated. Mark every popped
-                    // S-pair as reducing to zero.
+                Ok(spair) => spair,
+                Err(eliminated_by_signature) => {
+                    // The current S-pair has been eliminated. If it was not
+                    // eliminated by signature, we stumbled upon a Koszul
+                    // sygyzy, so we add its signature to help eliminating
+                    // future cases.
+                    //
+                    // We don't need to add the Koszul signature for every
+                    // polynomial pair discarded because this signature we are
+                    // adding necessarily divides all of them.
+                    if !eliminated_by_signature {
+                        syzygies.insert(signature);
+                    }
+
+                    // Mark every popped S-pair as reducing to zero.
                     self.mark_as_syzygy(&same_sign_spairs[..]);
 
                     // Now try another S-pair.

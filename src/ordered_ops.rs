@@ -67,8 +67,8 @@ pub fn sum<T>(
 
 /// Like sum, but stops when the first element is calculated.
 pub fn partial_sum<T: Clone>(
-    mut a_iter: &mut Peekable<impl Iterator<Item = T>>,
-    mut b_iter: &mut Peekable<impl Iterator<Item = T>>,
+    a_iter: &mut Peekable<impl Iterator<Item = T>>,
+    b_iter: &mut Peekable<impl Iterator<Item = T>>,
     cmp: impl Fn(&T, &T) -> std::cmp::Ordering,
     op: impl Fn(T, T) -> Option<T>,
 ) -> Option<T> {
