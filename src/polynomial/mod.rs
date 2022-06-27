@@ -1,4 +1,5 @@
 pub mod division;
+pub mod divmask;
 pub mod grobner_basis;
 pub mod monomial_ordering;
 pub mod signature_basis;
@@ -35,9 +36,12 @@ pub trait Power:
     + std::ops::AddAssign
     + for<'a> std::ops::AddAssign<&'a Self>
     + for<'a> std::ops::SubAssign<&'a Self>
+    + for<'a> std::ops::Mul<&'a Self, Output = Self>
+    + for<'a> std::ops::Div<&'a Self, Output = Self>
     + num_traits::Zero
     + num_traits::One
     + num_traits::Bounded
+    + From<u8>
 {
 }
 
