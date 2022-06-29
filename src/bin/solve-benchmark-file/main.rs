@@ -25,7 +25,7 @@ fn main() -> Result<(), String> {
     let indices = args
         .map(|x| {
             x.parse::<usize>()
-                .map_err(|err| format!("Failed to parce index: {}", err))
+                .map_err(|err| format!("Failed to parse index: {}", err))
         })
         .collect::<Result<Vec<_>, _>>()?;
 
