@@ -5,6 +5,7 @@ pub mod monomial_ordering;
 pub mod signature_basis;
 
 use super::ordered_ops;
+use bitvec::macros::internal::funty::Unsigned;
 use monomial_ordering::Ordering;
 use num_traits::{One, Signed};
 use std::{
@@ -14,7 +15,37 @@ use std::{
     ops::{Mul, MulAssign},
 };
 
-pub trait Id: core::fmt::Debug + Eq + Ord + Clone {}
+/// The trait used to identify a variable.
+///
+/// The Id must be a bijection to usize from 0 up to the maximum used Id. The
+/// alternative would be to require Id to be hashable and use hash table where
+/// Id is used as index, but that would worsen the performance of Gröbner Basis
+/// algorithm.
+pub trait Id: core::fmt::Debug + Eq + Ord + Clone {
+    /// The forward side of the bijection with usize:
+    fn to_idx(&self) -> usize;
+
+    /// The reverse side of the bijection with usize. This will be called from 0
+    /// up to the maximum value returned by to_idx() in the set of all Ids seen.
+    fn from_idx(idx: usize) -> Self;
+}
+
+/// Implement Id for all basic unsigned types:
+impl<T> Id for T
+where
+    T: Unsigned + TryInto<usize>,
+    usize: TryInto<T>,
+    <T as TryInto<usize>>::Error: std::fmt::Debug,
+    <usize as TryInto<T>>::Error: std::fmt::Debug,
+{
+    fn to_idx(&self) -> usize {
+        (*self).try_into().unwrap()
+    }
+
+    fn from_idx(idx: usize) -> T {
+        idx.try_into().unwrap()
+    }
+}
 
 pub trait Coefficient:
     core::fmt::Debug
@@ -499,7 +530,22 @@ pub enum ExtendedId<I: Id> {
     Extra,
 }
 
-impl<I: Id> Id for ExtendedId<I> {}
+impl<I: Id> Id for ExtendedId<I> {
+    fn to_idx(&self) -> usize {
+        match self {
+            Self::Extra => 0,
+            Self::Original(id) => id.to_idx() + 1,
+        }
+    }
+
+    fn from_idx(idx: usize) -> Self {
+        if idx == 0 {
+            Self::Extra
+        } else {
+            Self::Original(I::from_idx(idx - 1))
+        }
+    }
+}
 
 // TODO optimization: implement term * polynomial multiplication
 impl<O, I, C, P> Polynomial<O, I, C, P>
@@ -1071,10 +1117,6 @@ where
     }
 }
 
-impl Id for usize {}
-impl Id for u32 {}
-impl Id for u16 {}
-impl Id for u8 {}
 impl Coefficient for i32 {}
 impl Power for u16 {}
 impl Power for i16 {}

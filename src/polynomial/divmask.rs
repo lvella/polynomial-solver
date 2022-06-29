@@ -57,10 +57,10 @@ impl<T: Unsigned, P: Power> DivMap<T, P> {
         }
     }
 
-    pub fn map<O, I: Into<usize> + Clone>(&self, monomial: &Monomial<O, I, P>) -> DivMask<T> {
+    pub fn map<O, I: super::Id>(&self, monomial: &Monomial<O, I, P>) -> DivMask<T> {
         let mut ret = T::ZERO;
         for var in monomial.product.iter() {
-            let (first_bit, cutoff_list) = &self.cutoffs[var.id.clone().into()];
+            let (first_bit, cutoff_list) = &self.cutoffs[var.id.to_idx()];
             for (idx, cutoff) in cutoff_list.iter().enumerate() {
                 if var.power > *cutoff {
                     ret |= T::ONE << (first_bit + idx as u8);
@@ -75,7 +75,7 @@ impl<T: Unsigned, P: Power> DivMap<T, P> {
 /// The divmask created by an specific divmap for an specific monomial. Can be
 /// used to definitely tell if the monomial for other divmask does not divides
 /// this one.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DivMask<T: Unsigned>(T);
 
 impl<T: Unsigned> DivMask<T> {

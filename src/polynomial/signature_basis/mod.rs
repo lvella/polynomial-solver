@@ -12,7 +12,10 @@ use std::{
 
 use self::s_pairs::PartialSPair;
 
-use super::division::InvertibleCoefficient;
+use super::{
+    division::InvertibleCoefficient,
+    divmask::{self, DivMaskTestResult},
+};
 use super::{monomial_ordering::Ordering, Id, Monomial, Polynomial, Power, Term};
 use num_traits::{One, Zero};
 
@@ -23,6 +26,29 @@ use num_traits::Signed;
 /// variable exponents can be negative.
 pub trait SignedPower: Power + Signed {}
 impl<T> SignedPower for T where T: Power + Signed {}
+
+type DivMaskSize = u32;
+type DivMap<P> = divmask::DivMap<DivMaskSize, P>;
+type DivMask = divmask::DivMask<DivMaskSize>;
+
+/// Wraps together a divmask and a (hopefully) corresponding monomial, wrapping
+/// the divisibility test.
+struct MaskedMonomialRef<'a, O: Ordering, I: Id, P: SignedPower>(
+    &'a DivMask,
+    &'a Monomial<O, I, P>,
+);
+
+impl<'a, O: Ordering, I: Id, P: SignedPower> MaskedMonomialRef<'a, O, I, P> {
+    /// Uses the fast divmask comparison, and if it fails, uses the slow direct
+    /// monomial comparison.
+    fn divides(&self, other: &Self) -> bool {
+        match self.0.divides(other.0) {
+            DivMaskTestResult::NotDivisible => false,
+            DivMaskTestResult::Unsure => self.1.divides(other.1),
+            DivMaskTestResult::Divisible => true,
+        }
+    }
+}
 
 /// The signature of a polynomial.
 ///
@@ -41,6 +67,18 @@ pub struct Signature<O: Ordering, I: Id, P: SignedPower> {
 impl<O: Ordering, I: Id + Display, P: SignedPower + Display> Display for Signature<O, I, P> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{{{}, {}}}", self.idx, self.monomial)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MaskedSignature<O: Ordering, I: Id, P: SignedPower> {
+    divmask: DivMask,
+    signature: Signature<O, I, P>,
+}
+
+impl<O: Ordering, I: Id, P: SignedPower> MaskedSignature<O, I, P> {
+    fn monomial(&self) -> MaskedMonomialRef<O, I, P> {
+        MaskedMonomialRef(&self.divmask, &self.signature.monomial)
     }
 }
 
@@ -67,8 +105,11 @@ fn sign_to_monomial_ratio<O: Ordering, I: Id, P: SignedPower>(
 /// pair (signature, polynomial) is sufficient for all the computations.
 /// Other fields are optimizations.
 struct SignPoly<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> {
-    signature: Signature<O, I, P>,
+    masked_signature: MaskedSignature<O, I, P>,
+
     polynomial: Polynomial<O, I, C, P>,
+    /// The divmask fot the leading monomial.
+    lm_divmask: DivMask,
 
     /// Own index inside the basis.
     idx: u32,
@@ -88,7 +129,7 @@ impl<O: Ordering, I: Id + Display, C: InvertibleCoefficient, P: SignedPower + Di
         write!(
             f,
             "{}: {} ...({})",
-            self.signature,
+            self.signature(),
             self.polynomial.terms[0].monomial,
             self.polynomial.terms.len() - 1
         )
@@ -99,11 +140,20 @@ impl<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> SignPoly<O, I
     /// Creates a new Signature Polynomial.
     ///
     /// Polynomial can not be zero, otherwise this will panic.
-    fn new(idx: u32, signature: Signature<O, I, P>, polynomial: Polynomial<O, I, C, P>) -> Self {
+    fn new(
+        div_map: &DivMap<P>,
+        idx: u32,
+        signature: Signature<O, I, P>,
+        polynomial: Polynomial<O, I, C, P>,
+    ) -> Self {
         let sign_to_lm_ratio = sign_to_monomial_ratio(&signature, &polynomial.terms[0].monomial);
 
         Self {
-            signature,
+            masked_signature: MaskedSignature {
+                divmask: div_map.map(&signature.monomial),
+                signature,
+            },
+            lm_divmask: div_map.map(&polynomial.terms[0].monomial),
             polynomial,
             idx,
             sign_to_lm_ratio,
@@ -113,6 +163,15 @@ impl<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> SignPoly<O, I
     /// Compare SigPolys by signature to leading monomial ratio.
     fn sign_to_lm_ratio_cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.sign_to_lm_ratio.cmp(&other.sign_to_lm_ratio)
+    }
+
+    /// Gets the leading monomial for division test.
+    fn leading_monomial(&self) -> MaskedMonomialRef<O, I, P> {
+        MaskedMonomialRef(&self.lm_divmask, &self.polynomial.terms[0].monomial)
+    }
+
+    fn signature(&self) -> &Signature<O, I, P> {
+        &self.masked_signature.signature
     }
 }
 
@@ -140,8 +199,14 @@ impl<T: Ord> Ord for PointedCmp<T> {
 
 /// Stores all the basis elements known and processed so far,
 struct KnownBasis<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> {
-    /// Every id used by polynomials, in descending order
-    seen_ids: Vec<I>,
+    /// The maximum exponent seen for each variable, indexed by variable id. It
+    /// is assumed every id up to max_id is used, so this is a dense enumeration
+    /// of all variables.
+    max_exp: Vec<P>,
+
+    /// Mapping between monomials and divmasks that is dependent on the current
+    /// distribution of the monomial.
+    div_map: DivMap<P>,
 
     /// Owns the basis polynomials, ordered by insertion order (which is
     /// important to the spair triangle).
@@ -153,7 +218,7 @@ struct KnownBasis<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> 
     ///
     /// TODO: maybe periodically remove elements that are divisible by other
     /// elements
-    syzygies: BTreeSet<Signature<O, I, P>>,
+    syzygies: BTreeMap<Signature<O, I, P>, DivMask>,
 
     /// Basis ordered by signature to leading monomial ratio.
     ///
@@ -176,7 +241,7 @@ impl<
     fn find_a_regular_reducer(
         &self,
         ratio: &Signature<O, I, P>,
-        term: &Term<O, I, C, P>,
+        monomial: MaskedMonomialRef<O, I, P>,
     ) -> Option<&SignPoly<O, I, C, P>> {
         // Filter out the unsuitable ratios:
         let suitable = self.by_sign_lm_ratio.range(..=PointedCmp(ratio));
@@ -185,7 +250,7 @@ impl<
         for (_, elem) in suitable {
             let next = unsafe { &**elem };
 
-            if next.polynomial.terms[0].monomial.divides(&term.monomial) {
+            if next.leading_monomial().divides(&monomial) {
                 return Some(next);
             }
         }
@@ -211,16 +276,79 @@ impl<
         P: SignedPower + Display,
     > BasisCalculator<O, I, C, P>
 {
-    fn new() -> Self {
-        BasisCalculator {
+    /// Creates a new basis calculator.
+    ///
+    /// May fail if the input contains a constant polynomial, in which case the
+    /// polynomial is returned as the error.
+    fn new(input: Vec<Polynomial<O, I, C, P>>) -> Result<Self, Polynomial<O, I, C, P>> {
+        let mut max_exp: Vec<P> = Vec::new();
+
+        let mut filtered_input: Vec<Polynomial<O, I, C, P>> = input
+            .into_iter()
+            .filter_map(|polynomial| {
+                if polynomial.is_zero() {
+                    // Zero polynomial is implicitly part of every ideal, so it is
+                    // redundant. Discarded by filter_map.
+                    return None;
+                }
+
+                if polynomial.is_constant() {
+                    // Constant polynomial means the ideal is the full set of all
+                    // polynomials, for which any constant polynomial is a generator, so
+                    // we can stop. Iteration is cut short by collect() into Option<Vec>
+                    return Some(Err(polynomial));
+                }
+
+                // Update the maximum exponent for each variable used.
+                for term in polynomial.terms.iter() {
+                    for var in term.monomial.product.iter() {
+                        let id = var.id.to_idx();
+                        if max_exp.len() <= id {
+                            max_exp.resize(id + 1, P::zero());
+                        } else if max_exp[id] >= var.power {
+                            continue;
+                        }
+                        max_exp[id] = var.power.clone();
+                    }
+                }
+
+                Some(Ok(polynomial))
+            })
+            .collect::<Result<_, _>>()?;
+
+        // The algorithm performance might depend on the order the elements are
+        // given in the input. From my tests with a single input, sorting makes it
+        // run much faster.
+        filtered_input.sort_unstable();
+
+        let mut c = BasisCalculator {
             basis: KnownBasis {
-                seen_ids: Vec::new(),
+                div_map: DivMap::new(&max_exp),
+                max_exp,
                 polys: Vec::new(),
-                syzygies: BTreeSet::new(),
+                syzygies: BTreeMap::new(),
                 by_sign_lm_ratio: BTreeMap::new(),
             },
             spairs: s_pairs::SPairTriangle::new(),
+        };
+
+        // Insert all input polynomials in the basis.
+        for polynomial in filtered_input {
+            let monomial = Monomial::one();
+
+            let signature = Signature {
+                idx: c.basis.polys.len() as u32,
+                monomial,
+            };
+            c.insert_poly_with_spairs(SignPoly::new(
+                &c.basis.div_map,
+                signature.idx,
+                signature,
+                polynomial,
+            ));
         }
+
+        Ok(c)
     }
 
     /// Adds a new polynomial to the Gröbner Basis and calculates its S-pairs.
@@ -233,11 +361,19 @@ impl<
             .insert(PointedCmp(&rc.sign_to_lm_ratio), rc.as_ref());
 
         self.basis.polys.push(rc);
+
+        // TODO: to be continued
+        // update max exponents, and possibly recalculate divmasks
     }
 
-    fn add_syzygy(&mut self, signature: Signature<O, I, P>, indices: &[(u32, u32)]) {
-        self.basis.syzygies.insert(signature);
+    fn add_syzygy(&mut self, signature: MaskedSignature<O, I, P>, indices: &[(u32, u32)]) {
+        self.basis
+            .syzygies
+            .insert(signature.signature, signature.divmask);
         self.spairs.mark_as_syzygy(indices);
+
+        // TODO: to be continued
+        // update max exponents, and possibly recalculate divmasks
     }
 
     fn add_koszul_syzygies(&mut self, indices: &[(u32, u32)]) {
@@ -255,13 +391,14 @@ impl<
                 std::cmp::Ordering::Greater => (p, q),
             };
 
-            let mut koszul_signature = sign_basis.signature.clone();
+            let mut koszul_signature = sign_basis.signature().clone();
             koszul_signature.monomial =
                 koszul_signature.monomial * lm_basis.polynomial.terms[0].monomial.clone();
+            let koszul_divmask = self.basis.div_map.map(&koszul_signature.monomial);
 
             // TODO: maybe we should check if this signature is not divisible by some known syzygy before inserting.
             // Without proper multidimensional indexing, this might be more expensive than it is worth.
-            self.basis.syzygies.insert(koszul_signature);
+            self.basis.syzygies.insert(koszul_signature, koszul_divmask);
             // DO NOT mark the original S-pair as syzygy, because it is not!
             // Except in special cases that have already been handled,
             // Koszul(a,b) != S-pair(a,b)
@@ -275,7 +412,7 @@ enum RegularReductionResult<O: Ordering, I: Id, C: InvertibleCoefficient, P: Sig
     /// Polynomial was singular top reducible
     Singular,
     /// Polynomial was reduced to zero.
-    Zero(Signature<O, I, P>),
+    Zero(MaskedSignature<O, I, P>),
     /// Polynomial was reduced to some non-zero constant.
     NonZeroConstant(Polynomial<O, I, C, P>),
     /// Polynomial was reduced to some non singular top reducible polynomial.
@@ -289,7 +426,7 @@ fn rewrite_spair<
     C: InvertibleCoefficient + Display,
     P: SignedPower + Display,
 >(
-    signature: &Signature<O, I, P>,
+    m_sign: &MaskedSignature<O, I, P>,
     s_pair: PartialSPair<O, I, C, P>,
     basis: &KnownBasis<O, I, C, P>,
 ) -> Option<Polynomial<O, I, C, P>> {
@@ -297,23 +434,30 @@ fn rewrite_spair<
     // ratio are greater than the current candidate we have, in ascending
     // order, so that the first match we find will be the one with the
     // smallest leading monomial.
-    let sign_to_lm_ratio = sign_to_monomial_ratio(&signature, &s_pair.leading_term.monomial);
+    let sign_to_lm_ratio = sign_to_monomial_ratio(&m_sign.signature, &s_pair.leading_term.monomial);
     let search_range = basis
         .by_sign_lm_ratio
         .range(PointedCmp(&sign_to_lm_ratio)..);
 
+    let masked_sig_monomial = m_sign.monomial();
+
     for (_, rewriter) in search_range {
         let rewriter = unsafe { &**rewriter };
-        if rewriter.signature.idx != signature.idx {
+        if rewriter.signature().idx != m_sign.signature.idx {
             // No rewriter found that can divide s-pair signature.
             break;
         }
 
-        if rewriter.signature.monomial.divides(&signature.monomial) {
-            let factor = signature
+        if rewriter
+            .masked_signature
+            .monomial()
+            .divides(&masked_sig_monomial)
+        {
+            let factor = m_sign
+                .signature
                 .monomial
                 .clone()
-                .whole_division(&rewriter.signature.monomial)
+                .whole_division(&rewriter.signature().monomial)
                 .unwrap();
 
             // Test singular criterion: if signatures are identical (which means
@@ -343,12 +487,12 @@ fn regular_reduce<
     P: SignedPower + Display,
 >(
     idx: u32,
-    signature: Signature<O, I, P>,
+    m_sign: MaskedSignature<O, I, P>,
     s_pair: PartialSPair<O, I, C, P>,
     basis: &KnownBasis<O, I, C, P>,
 ) -> RegularReductionResult<O, I, C, P> {
     // Perform rewrite and singular criterion:
-    let polynomial = match rewrite_spair(&signature, s_pair, basis) {
+    let polynomial = match rewrite_spair(&m_sign, s_pair, basis) {
         Some(p) => p,
         None => {
             return RegularReductionResult::Singular;
@@ -374,13 +518,16 @@ fn regular_reduce<
 
     // Reduce one term at a time.
     let mut reduced_terms = Vec::new();
-    let mut sign_to_lm_ratio = None;
+    let mut lm_properties = None;
     while let Some((m, c)) = to_reduce.pop_last() {
         // Reassemble the term
         let term = Term {
             coefficient: c,
             monomial: m,
         };
+
+        // Calculated the divmask for the term to be reduced:
+        let divmask = basis.div_map.map(&term.monomial);
 
         // Skip searching for a divisor for 1 and (maybe) save some time.
         if term.monomial.is_one() {
@@ -390,12 +537,15 @@ fn regular_reduce<
 
         // Calculate signature to monomial ratio, to search for a reducer,
         // and possibly store it as the ratio for the leading term.
-        let sign_to_term_ratio = sign_to_monomial_ratio(&signature, &term.monomial);
+        let sign_to_term_ratio = sign_to_monomial_ratio(&m_sign.signature, &term.monomial);
 
-        if let Some(reducer) = basis.find_a_regular_reducer(&sign_to_term_ratio, &term) {
+        if let Some(reducer) = basis.find_a_regular_reducer(
+            &sign_to_term_ratio,
+            MaskedMonomialRef(&divmask, &term.monomial),
+        ) {
             // Since the reduction is singular, we can stop if we are
             // reducing the leading term.
-            if reduced_terms.is_empty() && reducer.signature == signature {
+            if reduced_terms.is_empty() && reducer.masked_signature == m_sign {
                 return RegularReductionResult::Singular;
             }
 
@@ -450,9 +600,9 @@ fn regular_reduce<
 
         // The term could not be reduced. Store the ratio if this is the
         // leading term:
-        if let None = sign_to_lm_ratio {
+        if let None = lm_properties {
             assert!(reduced_terms.len() == 0);
-            sign_to_lm_ratio = Some(sign_to_term_ratio);
+            lm_properties = Some((sign_to_term_ratio, divmask));
         }
 
         // And insert it into the output. These terms are already in
@@ -464,18 +614,19 @@ fn regular_reduce<
         terms: reduced_terms,
     };
 
-    match sign_to_lm_ratio {
-        Some(sign_to_lm_ratio) => RegularReductionResult::Reduced(SignPoly {
-            signature,
+    match lm_properties {
+        Some((sign_to_lm_ratio, lm_divmask)) => RegularReductionResult::Reduced(SignPoly {
+            masked_signature: m_sign,
             polynomial,
+            lm_divmask,
             idx,
             sign_to_lm_ratio,
         }),
         None => {
-            // The only way for sign_to_lm_ratio to be None is when
+            // The only way for lm_properties to be None is when
             // reduced_terms is empty or constant.
             match polynomial.terms.len() {
-                0 => RegularReductionResult::Zero(signature),
+                0 => RegularReductionResult::Zero(m_sign),
                 1 => {
                     assert!(polynomial.is_constant());
                     RegularReductionResult::NonZeroConstant(polynomial)
@@ -495,61 +646,30 @@ pub fn grobner_basis<
     C: InvertibleCoefficient + Display,
     P: SignedPower + Display,
 >(
-    mut input: Vec<Polynomial<O, I, C, P>>,
+    input: Vec<Polynomial<O, I, C, P>>,
 ) -> Vec<Polynomial<O, I, C, P>> {
-    // The algorithm performance might depend on the order the elements are
-    // given in the input. From my tests with a single input, sorting makes it
-    // run much faster.
-    input.sort_unstable();
-
-    let mut c = BasisCalculator::new();
-
-    // Insert all input polynomials in the basis.
-    for polynomial in input {
-        if polynomial.is_zero() {
-            // Zero polynomial is implicitly part of every ideal, so it is
-            // redundant.
-            continue;
+    // Initiate the basis calculation with the input polynomials.
+    let mut c = match BasisCalculator::new(input) {
+        Ok(c) => c,
+        Err(const_polynomial) => {
+            return vec![const_polynomial];
         }
-
-        if polynomial.is_constant() {
-            // Constant polynomial means the ideal is the full set of all
-            // polynomials, for which any constant polynomial is a generator, so
-            // we can stop.
-            return vec![polynomial];
-        }
-
-        // Store a list of all variable ids used.
-        for term in polynomial.terms.iter() {
-            c.basis
-                .seen_ids
-                .extend(term.monomial.product.iter().map(|var| var.id.clone()));
-        }
-
-        let signature = Signature {
-            idx: c.basis.polys.len() as u32,
-            monomial: Monomial::one(),
-        };
-        c.insert_poly_with_spairs(SignPoly::new(signature.idx, signature, polynomial));
-    }
-
-    // Make seen_ids unique and sorted in descending order, like the monomials:
-    c.basis.seen_ids.sort_unstable_by(|a, b| b.cmp(a));
-    c.basis.seen_ids.dedup();
-    c.basis.seen_ids.shrink_to_fit();
+    };
 
     // Main loop, reduce every S-pair and insert in the basis until there are no
     // more S-pairs to be reduced. Since each newly inserted polynomials can
     // generate up to n-1 new S-pairs, this loop is exponential.
     loop {
-        let (signature, s_pair, indices) =
-            if let Some(next_spair) = c.spairs.get_next(&c.basis.polys, &mut c.basis.syzygies) {
-                next_spair
-            } else {
-                break;
-            };
+        let (m_sign, s_pair, indices) = if let Some(next_spair) =
+            c.spairs
+                .get_next(&c.basis.polys, &&c.basis.div_map, &mut c.basis.syzygies)
+        {
+            next_spair
+        } else {
+            break;
+        };
 
-        match regular_reduce(c.basis.polys.len() as u32, signature, s_pair, &c.basis) {
+        match regular_reduce(c.basis.polys.len() as u32, m_sign, s_pair, &c.basis) {
             RegularReductionResult::Reduced(reduced) => {
                 println!(
                     "#(p: {}, s: {}), {}",
