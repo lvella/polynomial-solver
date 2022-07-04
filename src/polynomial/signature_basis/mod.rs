@@ -5,16 +5,13 @@
 
 mod s_pairs;
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fmt::Display,
-};
+use std::{collections::BTreeMap, fmt::Display};
 
 use self::s_pairs::PartialSPair;
 
 use super::{
     division::InvertibleCoefficient,
-    divmask::{self, DivMaskTestResult},
+    divmask::{self, DivMaskTestResult, MaximumExponentsTracker},
 };
 use super::{monomial_ordering::Ordering, Id, Monomial, Polynomial, Power, Term};
 use num_traits::{One, Zero};
@@ -199,10 +196,8 @@ impl<T: Ord> Ord for PointedCmp<T> {
 
 /// Stores all the basis elements known and processed so far,
 struct KnownBasis<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> {
-    /// The maximum exponent seen for each variable, indexed by variable id. It
-    /// is assumed every id up to max_id is used, so this is a dense enumeration
-    /// of all variables.
-    max_exp: Vec<P>,
+    /// Tracks the maximum exponent seen for each variable, and the evolution.
+    max_exp: MaximumExponentsTracker<P>,
 
     /// Mapping between monomials and divmasks that is dependent on the current
     /// distribution of the monomial.
@@ -281,7 +276,7 @@ impl<
     /// May fail if the input contains a constant polynomial, in which case the
     /// polynomial is returned as the error.
     fn new(input: Vec<Polynomial<O, I, C, P>>) -> Result<Self, Polynomial<O, I, C, P>> {
-        let mut max_exp: Vec<P> = Vec::new();
+        let mut max_exp = MaximumExponentsTracker::new();
 
         let mut filtered_input: Vec<Polynomial<O, I, C, P>> = input
             .into_iter()
@@ -302,13 +297,7 @@ impl<
                 // Update the maximum exponent for each variable used.
                 for term in polynomial.terms.iter() {
                     for var in term.monomial.product.iter() {
-                        let id = var.id.to_idx();
-                        if max_exp.len() <= id {
-                            max_exp.resize(id + 1, P::zero());
-                        } else if max_exp[id] >= var.power {
-                            continue;
-                        }
-                        max_exp[id] = var.power.clone();
+                        max_exp.add_var(&var);
                     }
                 }
 
@@ -321,6 +310,7 @@ impl<
         // run much faster.
         filtered_input.sort_unstable();
 
+        max_exp.reset_tracking();
         let mut c = BasisCalculator {
             basis: KnownBasis {
                 div_map: DivMap::new(&max_exp),
@@ -353,27 +343,33 @@ impl<
 
     /// Adds a new polynomial to the Gröbner Basis and calculates its S-pairs.
     fn insert_poly_with_spairs(&mut self, sign_poly: SignPoly<O, I, C, P>) {
-        let rc = Box::new(sign_poly);
+        let sign_poly = Box::new(sign_poly);
 
-        self.spairs.add_column(rc.as_ref(), &self.basis);
+        self.update_max_exp(&sign_poly.masked_signature.signature.monomial);
+        for term in sign_poly.polynomial.terms.iter() {
+            self.update_max_exp(&term.monomial);
+        }
+
+        self.spairs.add_column(&sign_poly, &self.basis);
+
         self.basis
             .by_sign_lm_ratio
-            .insert(PointedCmp(&rc.sign_to_lm_ratio), rc.as_ref());
+            .insert(PointedCmp(&sign_poly.sign_to_lm_ratio), sign_poly.as_ref());
 
-        self.basis.polys.push(rc);
-
-        // TODO: to be continued
-        // update max exponents, and possibly recalculate divmasks
+        self.basis.polys.push(sign_poly);
     }
 
-    fn add_syzygy(&mut self, signature: MaskedSignature<O, I, P>, indices: &[(u32, u32)]) {
+    fn add_syzygy(&mut self, signature: MaskedSignature<O, I, P>) {
+        self.update_max_exp(&signature.signature.monomial);
+
         self.basis
             .syzygies
             .insert(signature.signature, signature.divmask);
-        self.spairs.mark_as_syzygy(indices);
+    }
 
-        // TODO: to be continued
-        // update max exponents, and possibly recalculate divmasks
+    fn add_spair_syzygy(&mut self, signature: MaskedSignature<O, I, P>, indices: &[(u32, u32)]) {
+        self.spairs.mark_as_syzygy(indices);
+        self.add_syzygy(signature);
     }
 
     fn add_koszul_syzygies(&mut self, indices: &[(u32, u32)]) {
@@ -391,18 +387,58 @@ impl<
                 std::cmp::Ordering::Greater => (p, q),
             };
 
-            let mut koszul_signature = sign_basis.signature().clone();
-            koszul_signature.monomial =
-                koszul_signature.monomial * lm_basis.polynomial.terms[0].monomial.clone();
-            let koszul_divmask = self.basis.div_map.map(&koszul_signature.monomial);
+            let mut signature = sign_basis.signature().clone();
+            signature.monomial = signature.monomial * lm_basis.polynomial.terms[0].monomial.clone();
+            let divmask = self.basis.div_map.map(&signature.monomial);
 
             // TODO: maybe we should check if this signature is not divisible by some known syzygy before inserting.
             // Without proper multidimensional indexing, this might be more expensive than it is worth.
-            self.basis.syzygies.insert(koszul_signature, koszul_divmask);
+            let masked_signature = MaskedSignature { divmask, signature };
+            self.add_syzygy(masked_signature);
             // DO NOT mark the original S-pair as syzygy, because it is not!
             // Except in special cases that have already been handled,
             // Koszul(a,b) != S-pair(a,b)
             // I.e. the S-pair itself is not a syzygy.
+        }
+    }
+
+    fn update_max_exp(&mut self, monomial: &Monomial<O, I, P>) {
+        for var in monomial.product.iter() {
+            self.basis.max_exp.add_var(var);
+        }
+    }
+
+    fn maybe_recalculate_divmasks(&mut self) {
+        const RECALC_PERCENTAGE: u8 = 20;
+
+        // If changes are smaller then the give percerntage, do nothing.
+        if !self
+            .basis
+            .max_exp
+            .has_grown_beyond_percentage(RECALC_PERCENTAGE)
+        {
+            return;
+        }
+
+        println!("Recalculating divmasks.");
+
+        // Recreate the div map.
+        self.basis.max_exp.reset_tracking();
+        self.basis.div_map = DivMap::new(&self.basis.max_exp);
+        let div_map = &self.basis.div_map;
+
+        // Recalculate both masks of each polynomial.
+        for poly in self.basis.polys.iter_mut() {
+            let lm_divmask = div_map.map(&poly.polynomial.terms[0].monomial);
+            poly.as_mut().lm_divmask = lm_divmask;
+
+            let sign_divmask = div_map.map(&poly.signature().monomial);
+            poly.as_mut().masked_signature.divmask = sign_divmask;
+        }
+
+        // Recalculate the mask of each syzygy.
+        for (signature, divmask) in self.basis.syzygies.iter_mut() {
+            *divmask = div_map.map(&signature.monomial);
         }
     }
 }
@@ -689,18 +725,24 @@ pub fn grobner_basis<
             RegularReductionResult::Zero(signature) => {
                 // Polynomial reduces to zero, so we keep the signature to
                 // eliminate S-pairs before reduction.
-                c.add_syzygy(signature, &indices[..]);
+                c.add_spair_syzygy(signature, &indices[..]);
             }
-            RegularReductionResult::Singular => (
+            RegularReductionResult::Singular => {
                 // Polynomial was singular top reducible, so it was redundant
                 // and discarded.
-            ),
+                continue;
+            }
             RegularReductionResult::NonZeroConstant(polynomial) => {
                 // The new basis member is a constant, so it reduces everything
                 // to zero and we can stop.
                 return vec![polynomial];
             }
         }
+
+        // Something was added to the basis calculator, be it polynomial or
+        // syzygy, so the monomials might have changed enough to justify
+        // a recalculation of the divmasks.
+        c.maybe_recalculate_divmasks();
     }
 
     // Return the polynomials from the basis.

@@ -9,7 +9,7 @@
 use bitvec::macros::internal::funty::Unsigned;
 use std::marker::PhantomData;
 
-use super::{Monomial, Power};
+use super::{Id, Monomial, Power, VariablePower};
 
 /// Divmap is the function used to generate the divmask from a monomial.
 /// Divmasks are only compatible if generated from the same divmap. The
@@ -26,14 +26,15 @@ pub struct DivMap<T: Unsigned, P: Power> {
 }
 
 impl<T: Unsigned, P: Power> DivMap<T, P> {
-    pub fn new(maximum_exponents: &[P]) -> Self {
+    pub fn new(tracker: &MaximumExponentsTracker<P>) -> Self {
         // Every variable will have at least this many cutoffs...
-        let num_cutoffs = (T::BITS as usize / maximum_exponents.len()) as u8;
+        let num_cutoffs = (T::BITS as usize / tracker.len()) as u8;
         // ...but this many variables will have one more:
-        let extra_bits = T::BITS as usize % maximum_exponents.len();
+        let extra_bits = T::BITS as usize % tracker.len();
 
         let mut first_unused_bit = 0;
-        let cutoffs = maximum_exponents
+        let cutoffs = tracker
+            .max_exponents
             .iter()
             .enumerate()
             .map(|(var_idx, exp)| {
@@ -96,4 +97,59 @@ pub enum DivMaskTestResult {
     NotDivisible,
     Unsure,
     Divisible,
+}
+
+pub struct MaximumExponentsTracker<P: Power> {
+    max_exponents: Vec<P>,
+    total: P,
+    prev_total: P,
+}
+
+/// Tracks the maximum exponent seen for each variable.
+///
+/// Uses a vector indexed by variable id, so it is assumed that every id up to
+/// maximum id is used (i.e. ids are a dense enumeration of all variables).
+impl<P: Power> MaximumExponentsTracker<P> {
+    pub fn new() -> Self {
+        Self {
+            max_exponents: Vec::new(),
+            total: P::zero(),
+            prev_total: P::zero(),
+        }
+    }
+
+    /// Number of variables seen.
+    pub fn len(&self) -> usize {
+        self.max_exponents.len()
+    }
+
+    pub fn add_var<I: Id>(&mut self, var: &VariablePower<I, P>) {
+        let idx = var.id.to_idx();
+        if self.len() <= idx {
+            self.max_exponents.resize(idx + 1, P::zero());
+        } else if self.max_exponents[idx] >= var.power {
+            return;
+        }
+        let mut delta = var.power.clone();
+        delta -= &self.max_exponents[idx];
+        self.total += delta;
+
+        self.max_exponents[idx] = var.power.clone();
+    }
+
+    pub fn has_grown_beyond_percentage(&self, percentage: u8) -> bool {
+        if self.prev_total.is_zero() {
+            return !self.total.is_zero();
+        }
+
+        let mut delta = self.total.clone();
+        delta -= &self.prev_total;
+        let growth = delta * P::from(100) / &self.total;
+
+        growth > P::from(percentage)
+    }
+
+    pub fn reset_tracking(&mut self) {
+        self.prev_total = self.total.clone();
+    }
 }

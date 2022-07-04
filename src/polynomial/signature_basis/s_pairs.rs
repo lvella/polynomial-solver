@@ -2,7 +2,7 @@
 
 use std::{
     cmp::max,
-    collections::{BTreeMap, BTreeSet, BinaryHeap},
+    collections::{BTreeMap, BinaryHeap},
     fmt::Display,
     marker::PhantomData,
     ops::{
@@ -440,11 +440,8 @@ impl<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower>
         // will be useful in querying the BTreeMap below, and will be the
         // basis of the discriminator.
         let max_monomial = Monomial {
-            product: basis
-                .max_exp
-                .iter()
-                .enumerate()
-                .map(|(idx, _)| VariablePower {
+            product: (0..basis.max_exp.len())
+                .map(|idx| VariablePower {
                     id: I::from_idx(idx),
                     power: P::max_value(),
                 })
