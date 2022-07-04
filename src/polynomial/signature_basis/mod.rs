@@ -18,6 +18,31 @@ use num_traits::{One, Zero};
 
 use num_traits::Signed;
 
+/// Tests if a set contains a divisor for a signature.
+///
+/// This is basically the implementation of signature criterion.
+fn contains_divisor<O: Ordering, I: Id, P: SignedPower>(
+    msign: &MaskedSignature<O, I, P>,
+    set: &BTreeMap<Signature<O, I, P>, DivMask>,
+) -> bool {
+    // Iterate over smaller signatures, testing if they are divisible
+    let minimal = Signature {
+        monomial: Monomial::one(),
+        idx: msign.signature.idx,
+    };
+
+    let masked_dividend = &msign.monomial();
+
+    for maybe_divisor in set.range(&minimal..=&msign.signature) {
+        let masked_divisor = MaskedMonomialRef(maybe_divisor.1, &maybe_divisor.0.monomial);
+        if masked_divisor.divides(masked_dividend) {
+            return true;
+        }
+    }
+
+    false
+}
+
 /// The Power type must be signed for this algorithm to work,
 /// because we store the signature to leading monomial ratio, where
 /// variable exponents can be negative.
@@ -391,14 +416,14 @@ impl<
             signature.monomial = signature.monomial * lm_basis.polynomial.terms[0].monomial.clone();
             let divmask = self.basis.div_map.map(&signature.monomial);
 
-            // TODO: maybe we should check if this signature is not divisible by some known syzygy before inserting.
-            // Without proper multidimensional indexing, this might be more expensive than it is worth.
             let masked_signature = MaskedSignature { divmask, signature };
-            self.add_syzygy(masked_signature);
-            // DO NOT mark the original S-pair as syzygy, because it is not!
-            // Except in special cases that have already been handled,
-            // Koszul(a,b) != S-pair(a,b)
-            // I.e. the S-pair itself is not a syzygy.
+            if !contains_divisor(&masked_signature, &self.basis.syzygies) {
+                self.add_syzygy(masked_signature);
+                // DO NOT mark the original S-pair as syzygy, because it is not!
+                // Except in special cases that have already been handled,
+                // Koszul(a,b) != S-pair(a,b)
+                // I.e. the S-pair itself is not a syzygy.
+            }
         }
     }
 

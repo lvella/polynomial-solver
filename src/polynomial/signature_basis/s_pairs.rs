@@ -13,7 +13,6 @@ use std::{
 
 use bitvec::prelude::BitVec;
 use itertools::Itertools;
-use num_traits::One;
 
 use crate::{
     ordered_ops::partial_sum,
@@ -24,34 +23,9 @@ use crate::{
 };
 
 use super::{
-    DivMap, DivMask, KnownBasis, MaskedMonomialRef, MaskedSignature, PointedCmp, SignPoly,
-    Signature, SignedPower,
+    contains_divisor, DivMap, DivMask, KnownBasis, MaskedMonomialRef, MaskedSignature, PointedCmp,
+    SignPoly, Signature, SignedPower,
 };
-
-/// Tests if a set contains a divisor for a signature.
-///
-/// This is basically the implementation of signature criterion.
-fn contains_divisor<O: Ordering, I: Id, P: SignedPower>(
-    msign: &MaskedSignature<O, I, P>,
-    set: &BTreeMap<Signature<O, I, P>, DivMask>,
-) -> bool {
-    // Iterate over smaller signatures, testing if they are divisible
-    let minimal = Signature {
-        monomial: Monomial::one(),
-        idx: msign.signature.idx,
-    };
-
-    let masked_dividend = &msign.monomial();
-
-    for maybe_divisor in set.range(&minimal..=&msign.signature) {
-        let masked_divisor = MaskedMonomialRef(maybe_divisor.1, &maybe_divisor.0.monomial);
-        if masked_divisor.divides(masked_dividend) {
-            return true;
-        }
-    }
-
-    false
-}
 
 /// Half S-pair
 ///
