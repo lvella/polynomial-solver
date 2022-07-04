@@ -416,7 +416,7 @@ impl<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower>
         let max_monomial = Monomial {
             product: (0..basis.max_exp.len())
                 .map(|idx| VariablePower {
-                    id: I::from_idx(idx),
+                    id: I::from_idx(basis.max_exp.len() - 1 - idx),
                     power: P::max_value(),
                 })
                 .collect(),
