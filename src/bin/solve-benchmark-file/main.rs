@@ -2,7 +2,11 @@
 // https://web.archive.org/web/20201202185136/http://www.cecm.sfu.ca/~rpearcea/mgb.html
 // but it is easy enough to parse.
 
-use polynomial_solver::{finite_field::ThreadPrimeField, polynomial::monomial_ordering::Grevlex};
+use polynomial_solver::{
+    finite_field::{ThreadPrimeField, ZkFieldWrapper},
+    polynomial::monomial_ordering::Grevlex,
+};
+use zokrates_field::Bn128Field;
 
 extern crate pest;
 #[macro_use]
@@ -10,7 +14,8 @@ extern crate pest_derive;
 
 mod parser;
 
-type Poly = polynomial_solver::polynomial::Polynomial<Grevlex, u32, ThreadPrimeField, i32>;
+type Poly =
+    polynomial_solver::polynomial::Polynomial<Grevlex, u32, ZkFieldWrapper<Bn128Field>, i32>;
 
 fn main() -> Result<(), String> {
     ThreadPrimeField::set_prime(

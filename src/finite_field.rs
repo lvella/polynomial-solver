@@ -1,7 +1,8 @@
 use crate::polynomial::{self, division::InvertibleCoefficient};
 
-use rug;
+use rug::{self, Complete};
 use std::{cell::RefCell, fmt::Display, str::FromStr};
+use zokrates_field::Field as ZkField;
 
 use crate::polynomial::Coefficient;
 
@@ -189,6 +190,118 @@ impl num_traits::ops::inv::Inv for ThreadPrimeField {
 impl Coefficient for ThreadPrimeField {}
 
 impl InvertibleCoefficient for ThreadPrimeField {}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ZkFieldWrapper<T>(pub T);
+
+impl<T: ZkField> ZkFieldWrapper<T> {
+    pub fn get_prime() -> rug::Integer {
+        ZkFieldWrapper(T::max_value()).to_rug() + 1u8
+    }
+
+    pub fn to_rug(&self) -> rug::Integer {
+        rug::Integer::from_digits(&self.0.to_byte_vector()[..], rug::integer::Order::Lsf)
+    }
+}
+
+impl<T: ZkField> std::ops::Add for ZkFieldWrapper<T> {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self {
+        Self(self.0.add(rhs.0))
+    }
+}
+
+impl<T: ZkField> std::ops::Mul for ZkFieldWrapper<T> {
+    type Output = Self;
+
+    fn mul(self, rhs: Self) -> Self {
+        Self(self.0.mul(rhs.0))
+    }
+}
+
+impl<'a, T: ZkField> std::ops::Mul<&'a ZkFieldWrapper<T>> for ZkFieldWrapper<T> {
+    type Output = Self;
+
+    fn mul(self, rhs: &'a Self) -> Self {
+        Self(self.0.mul(&rhs.0))
+    }
+}
+
+impl<T: ZkField> std::ops::AddAssign for ZkFieldWrapper<T> {
+    fn add_assign(&mut self, rhs: Self) {
+        self.0 = std::mem::take(&mut self.0) + rhs.0;
+    }
+}
+
+impl<T: ZkField> std::ops::SubAssign for ZkFieldWrapper<T> {
+    fn sub_assign(&mut self, rhs: Self) {
+        self.0 = std::mem::take(&mut self.0) - rhs.0
+    }
+}
+
+impl<'a, T: ZkField> std::ops::MulAssign<&'a ZkFieldWrapper<T>> for ZkFieldWrapper<T> {
+    fn mul_assign(&mut self, rhs: &'a ZkFieldWrapper<T>) {
+        self.0 = std::mem::take(&mut self.0) * &rhs.0
+    }
+}
+
+impl<'a, T: ZkField> num_traits::Pow<u32> for ZkFieldWrapper<T> {
+    type Output = Self;
+
+    fn pow(self, rhs: u32) -> Self {
+        ZkFieldWrapper(self.0.pow(rhs as usize))
+    }
+}
+
+impl<T: ZkField> FromStr for ZkFieldWrapper<T> {
+    type Err = zokrates_field::FieldParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        T::try_from_dec_str(s).map(|v| ZkFieldWrapper(v))
+    }
+}
+
+impl<T: ZkField> std::fmt::Display for ZkFieldWrapper<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let prime = ZkFieldWrapper::<T>::get_prime();
+        let halfway = (&prime / 2u8).complete();
+        let val = self.to_rug();
+
+        if val > halfway {
+            std::fmt::Display::fmt(&(val - prime), f)
+        } else {
+            std::fmt::Display::fmt(&val, f)
+        }
+    }
+}
+
+impl<T: ZkField> num_traits::Inv for ZkFieldWrapper<T> {
+    type Output = Self;
+
+    fn inv(self) -> Self {
+        Self(self.0.inverse_mul().unwrap())
+    }
+}
+
+impl<T: ZkField> num_traits::One for ZkFieldWrapper<T> {
+    fn one() -> Self {
+        Self(T::one())
+    }
+}
+
+impl<T: ZkField> num_traits::Zero for ZkFieldWrapper<T> {
+    fn zero() -> Self {
+        Self(T::zero())
+    }
+
+    fn is_zero(&self) -> bool {
+        self.0.is_zero()
+    }
+}
+
+impl<T: ZkField> Coefficient for ZkFieldWrapper<T> {}
+impl<T: ZkField> InvertibleCoefficient for ZkFieldWrapper<T> {}
 
 #[cfg(test)]
 mod tests {
