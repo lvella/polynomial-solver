@@ -3,8 +3,7 @@
 //! even if the divmask test pass), but negatives are always correct.
 //!
 //! In some exceptionally rare cases, divmask can prove a positive, but it is so
-//! rare that probably it is not worth to handle it. TODO: test if it make a
-//! difference to handle definitely positive cases.
+//! rare that it does not seems worth to handle it, according to my tests.
 
 use bitvec::macros::internal::funty::Unsigned;
 use std::marker::PhantomData;
@@ -84,10 +83,14 @@ impl<T: Unsigned> DivMask<T> {
         let neg_other = !other.0;
         if self.0 & neg_other != T::ZERO {
             DivMaskTestResult::NotDivisible
-        } else if self.0 == T::ZERO && neg_other == T::ZERO {
-            // TODO: This is so rare that it is probably not worth checking.
-            DivMaskTestResult::Divisible
         } else {
+            // If self.0 == T::ZERO && neg_other == T::ZERO, it is certainly
+            // divisible, but according to tests I have run, checking such
+            // condition actually harms performance. Probably due to it being
+            // extremely rare, regardless of divisibility (i.e. even in
+            // divisible cases it is rare). So we would mostly just waste time
+            // doing this test. Instead we just return "unsure" and let the
+            // caller do the proper divisibility testing.
             DivMaskTestResult::Unsure
         }
     }
@@ -96,7 +99,6 @@ impl<T: Unsigned> DivMask<T> {
 pub enum DivMaskTestResult {
     NotDivisible,
     Unsure,
-    Divisible,
 }
 
 pub struct MaximumExponentsTracker<P: Power> {

@@ -514,7 +514,8 @@ impl<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower>
 /// Stores one bit for every S-pair ever generated, saying if it reduces to
 /// zero. This is used in base divisor criterion.
 ///
-/// TODO: there may be possible to use a single BitVec, but I don't know how.
+/// TODO: there may be possible to use a single BitVec, but I didn't think long
+/// and hard on how to do the indexing.
 pub struct SyzygyTriangle(Vec<BitVec>);
 
 impl SyzygyTriangle {

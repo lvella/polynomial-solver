@@ -67,7 +67,6 @@ impl<'a, O: Ordering, I: Id, P: SignedPower> MaskedMonomialRef<'a, O, I, P> {
         match self.0.divides(other.0) {
             DivMaskTestResult::NotDivisible => false,
             DivMaskTestResult::Unsure => self.1.divides(other.1),
-            DivMaskTestResult::Divisible => true,
         }
     }
 }
