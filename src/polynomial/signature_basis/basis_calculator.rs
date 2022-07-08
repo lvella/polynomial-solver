@@ -8,9 +8,57 @@ use crate::polynomial::{
 };
 
 use super::{
-    contains_divisor, s_pairs, DivMap, DivMask, MaskedMonomialRef, MaskedSignature, PointedCmp,
-    SignPoly, Signature, SignedPower,
+    contains_divisor, s_pairs, sign_to_monomial_ratio, CmpMap, DivMap, DivMask, MaskedMonomialRef,
+    MaskedSignature, PointedCmp, SignPoly, Signature, SignedPower,
 };
+
+/// Signature polynomial builder.
+///
+/// It is almost exactly a SignPoly, except that the comparator
+/// for the signature to leading monomial ratio have not been computed yet.
+///
+/// This is necessary because the comparator calculation is done only when
+/// the BasisCalculator is mutable, because every such ratio might have to
+/// be updated.
+pub struct SignPolyBuilder<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> {
+    pub masked_signature: MaskedSignature<O, I, P>,
+    pub polynomial: Polynomial<O, I, C, P>,
+    pub lm_divmask: DivMask,
+    pub idx: u32,
+
+    /// This is a plain signature, instead of a Ratio with the comparator.
+    pub sign_to_lm_ratio: Signature<O, I, P>,
+}
+
+impl<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> SignPolyBuilder<O, I, C, P> {
+    /// Creates a new Signature Polynomial Builder.
+    ///
+    /// Polynomial can not be zero, otherwise this will panic.
+    pub fn new(
+        div_map: &DivMap<P>,
+        idx: u32,
+        signature: Signature<O, I, P>,
+        polynomial: Polynomial<O, I, C, P>,
+    ) -> Self {
+        let sign_to_lm_ratio = sign_to_monomial_ratio(&signature, &polynomial.terms[0].monomial);
+
+        Self {
+            masked_signature: MaskedSignature {
+                divmask: div_map.map(&signature.monomial),
+                signature,
+            },
+            lm_divmask: div_map.map(&polynomial.terms[0].monomial),
+            polynomial,
+            idx,
+            sign_to_lm_ratio,
+        }
+    }
+
+    /// Creates an actual SignPoly from self.
+    pub fn into(self, basis: &mut BasisCalculator<O, I, C, P>) -> SignPoly<O, I, C, P> {
+        todo!();
+    }
+}
 
 /// Stores all the basis elements known and processed so far.
 ///
@@ -86,6 +134,9 @@ pub struct BasisCalculator<O: Ordering, I: Id, C: InvertibleCoefficient, P: Sign
     /// Priority queue of the S-pairs pending to be processed.
     /// Elements are represent as pair of indices in "basis" Vec.
     spairs: s_pairs::SPairTriangle<O, I, P>,
+
+    /// Maps signature/monomial ratios to numbers for fast comparison:
+    ratio_map: CmpMap<O, I, P>,
 }
 
 impl<
@@ -142,8 +193,9 @@ impl<
                 polys: Vec::new(),
                 by_sign_lm_ratio: BTreeMap::new(),
             },
-            syzygies: BTreeMap::new(),
+            syzygies: SyzygySet::new(),
             spairs: s_pairs::SPairTriangle::new(),
+            ratio_map: CmpMap::new(),
         };
 
         // Insert all input polynomials in the basis.
@@ -154,7 +206,8 @@ impl<
                 idx: c.basis.polys.len() as u32,
                 monomial,
             };
-            c.insert_poly_with_spairs(SignPoly::new(
+
+            c.insert_poly_with_spairs(SignPolyBuilder::new(
                 &c.basis.div_map,
                 signature.idx,
                 signature,
@@ -184,8 +237,8 @@ impl<
     }
 
     /// Adds a new polynomial to the Gröbner Basis and calculates its S-pairs.
-    pub fn insert_poly_with_spairs(&mut self, sign_poly: SignPoly<O, I, C, P>) {
-        let sign_poly = Box::new(sign_poly);
+    pub fn insert_poly_with_spairs(&mut self, sign_poly_builder: SignPolyBuilder<O, I, C, P>) {
+        let sign_poly = Box::new(sign_poly_builder.into(self));
 
         self.update_max_exp(&sign_poly.masked_signature.signature.monomial);
         for term in sign_poly.polynomial.terms.iter() {

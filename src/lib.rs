@@ -10,6 +10,7 @@ pub mod gcd;
 pub mod polynomial;
 pub mod prime_field_solvability;
 
+mod fast_compare;
 mod ordered_ops;
 
 use mimalloc::MiMalloc;
