@@ -23,8 +23,8 @@ use crate::{
 };
 
 use super::{
-    contains_divisor, DivMap, DivMask, KnownBasis, MaskedMonomialRef, MaskedSignature, PointedCmp,
-    SignPoly, Signature, SignedPower,
+    basis_calculator::SyzygySet, contains_divisor, rewrite_spair, DivMask, KnownBasis,
+    MaskedMonomialRef, MaskedSignature, PointedCmp, SignPoly, Signature, SignedPower,
 };
 
 /// Half S-pair
@@ -45,6 +45,7 @@ impl<O: Ordering, I: Id, P: SignedPower> HalfSPair<O, I, P> {
         other: &SignPoly<O, I, C, P>,
         base_divisors: &BaseDivisors<O, I, C, P>,
         basis: &KnownBasis<O, I, C, P>,
+        syzygies: &SyzygySet<O, I, P>,
         triangle: &SyzygyTriangle,
     ) -> Result<Self, bool> {
         // Find what polynomial to calculate the signature from.
@@ -95,7 +96,7 @@ impl<O: Ordering, I: Id, P: SignedPower> HalfSPair<O, I, P> {
         };
 
         // Early test for signature criterion:
-        if contains_divisor(&masked_signature, &basis.syzygies) {
+        if contains_divisor(&masked_signature, syzygies) {
             return Err(true);
         } else {
             Ok(HalfSPair {
@@ -575,6 +576,7 @@ impl<O: Ordering, I: Id + Display, P: SignedPower + Display> SPairTriangle<O, I,
         &mut self,
         sign_poly: &SignPoly<O, I, C, P>,
         basis: &KnownBasis<O, I, C, P>,
+        syzygies: &SyzygySet<O, I, P>,
     ) {
         // Base divisors are used in a elimination criterion. We must calculate
         // them beforehand as they are used in every S-pair added in this new
@@ -589,6 +591,7 @@ impl<O: Ordering, I: Id + Display, P: SignedPower + Display> SPairTriangle<O, I,
                 other_poly.as_ref(),
                 &base_divisors,
                 basis,
+                syzygies,
                 &self.reduces_to_zero,
             ) {
                 Ok(spair) => {
@@ -646,24 +649,23 @@ impl<O: Ordering, I: Id + Display, P: SignedPower + Display> SPairTriangle<O, I,
     /// signature. Or None if there are no more S-pairs.
     pub fn get_next<'a, C: InvertibleCoefficient>(
         &mut self,
-        basis: &'a [Box<SignPoly<O, I, C, P>>],
-        div_map: &DivMap<P>,
+        basis: &KnownBasis<O, I, C, P>,
         syzygies: &mut BTreeMap<Signature<O, I, P>, DivMask>,
     ) -> Option<(
         MaskedSignature<O, I, P>,
-        PartialSPair<'a, O, I, C, P>,
+        Polynomial<O, I, C, P>,
         Vec<(u32, u32)>,
     )> {
         let mut same_sign_spairs = Vec::new();
 
         // Iterate until some S-pair remains that is not eliminated by one
         // of the late elimination criteria.
-        while let Some((signature, a_poly, b_poly)) = self.pop(basis) {
+        while let Some((signature, a_poly, b_poly)) = self.pop(&basis.polys) {
             same_sign_spairs.clear();
             same_sign_spairs.push((a_poly.idx, b_poly.idx));
 
             let m_sign = MaskedSignature {
-                divmask: div_map.map(&signature.monomial),
+                divmask: basis.div_map.map(&signature.monomial),
                 signature,
             };
 
@@ -684,7 +686,7 @@ impl<O: Ordering, I: Id + Display, P: SignedPower + Display> SPairTriangle<O, I,
                     break;
                 }
 
-                let (_, a_poly, b_poly) = self.pop(basis).unwrap();
+                let (_, a_poly, b_poly) = self.pop(&basis.polys).unwrap();
                 same_sign_spairs.push((a_poly.idx, b_poly.idx));
 
                 // Only process the new S-pair if no other of same signature has been eliminated.
@@ -711,8 +713,14 @@ impl<O: Ordering, I: Id + Display, P: SignedPower + Display> SPairTriangle<O, I,
 
             // All S-pairs of this signature have been consumed, and there
             // is at most one remaining.
-            let spair = match chosen_spair {
-                Ok(spair) => spair,
+            match chosen_spair {
+                Ok(spair) => {
+                    // We found a potential S-pair. Apply rewrite criterion it
+                    // and return if not singular.
+                    if let Some(spair) = rewrite_spair(&m_sign, spair, basis) {
+                        return Some((m_sign, spair, same_sign_spairs));
+                    }
+                }
                 Err(eliminated_by_signature) => {
                     // The current S-pair has been eliminated. If it was not
                     // eliminated by signature, we stumbled upon a Koszul
@@ -728,14 +736,10 @@ impl<O: Ordering, I: Id + Display, P: SignedPower + Display> SPairTriangle<O, I,
 
                     // Mark every popped S-pair as reducing to zero.
                     self.mark_as_syzygy(&same_sign_spairs[..]);
-
-                    // Now try another S-pair.
-                    continue;
                 }
             };
-
-            return Some((m_sign, spair, same_sign_spairs));
         }
+        // No s-pair found, we are done.
         None
     }
 
