@@ -8,57 +8,9 @@ use crate::polynomial::{
 };
 
 use super::{
-    contains_divisor, s_pairs, sign_to_monomial_ratio, CmpMap, DivMap, DivMask, MaskedMonomialRef,
-    MaskedSignature, PointedCmp, SignPoly, Signature, SignedPower,
+    contains_divisor, s_pairs, CmpMap, DivMap, DivMask, MaskedMonomialRef, MaskedSignature,
+    PointedCmp, Ratio, SignPoly, Signature, SignedPower,
 };
-
-/// Signature polynomial builder.
-///
-/// It is almost exactly a SignPoly, except that the comparator
-/// for the signature to leading monomial ratio have not been computed yet.
-///
-/// This is necessary because the comparator calculation is done only when
-/// the BasisCalculator is mutable, because every such ratio might have to
-/// be updated.
-pub struct SignPolyBuilder<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> {
-    pub masked_signature: MaskedSignature<O, I, P>,
-    pub polynomial: Polynomial<O, I, C, P>,
-    pub lm_divmask: DivMask,
-    pub idx: u32,
-
-    /// This is a plain signature, instead of a Ratio with the comparator.
-    pub sign_to_lm_ratio: Signature<O, I, P>,
-}
-
-impl<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> SignPolyBuilder<O, I, C, P> {
-    /// Creates a new Signature Polynomial Builder.
-    ///
-    /// Polynomial can not be zero, otherwise this will panic.
-    pub fn new(
-        div_map: &DivMap<P>,
-        idx: u32,
-        signature: Signature<O, I, P>,
-        polynomial: Polynomial<O, I, C, P>,
-    ) -> Self {
-        let sign_to_lm_ratio = sign_to_monomial_ratio(&signature, &polynomial.terms[0].monomial);
-
-        Self {
-            masked_signature: MaskedSignature {
-                divmask: div_map.map(&signature.monomial),
-                signature,
-            },
-            lm_divmask: div_map.map(&polynomial.terms[0].monomial),
-            polynomial,
-            idx,
-            sign_to_lm_ratio,
-        }
-    }
-
-    /// Creates an actual SignPoly from self.
-    pub fn into(self, basis: &mut BasisCalculator<O, I, C, P>) -> SignPoly<O, I, C, P> {
-        todo!();
-    }
-}
 
 /// Stores all the basis elements known and processed so far.
 ///
@@ -81,8 +33,7 @@ pub struct KnownBasis<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPow
     /// TODO: to search for a reducer and for a high base divisor, maybe this
     /// should be a n-D index (like R*-tree), indexing both the leading monomial
     /// variables and the signature/leading monomial ratio.
-    pub(super) by_sign_lm_ratio:
-        BTreeMap<PointedCmp<Signature<O, I, P>>, *const SignPoly<O, I, C, P>>,
+    pub(super) by_sign_lm_ratio: BTreeMap<PointedCmp<Ratio<O, I, P>>, *const SignPoly<O, I, C, P>>,
     // TODO: create an n-D index specifically for rewrite criterion and low base
     // divisor, indexing both signature/leading monomial ratio and signature
     // monomial variables.
@@ -97,7 +48,7 @@ impl<
 {
     pub(super) fn find_a_regular_reducer(
         &self,
-        ratio: &Signature<O, I, P>,
+        ratio: &Ratio<O, I, P>,
         monomial: MaskedMonomialRef<O, I, P>,
     ) -> Option<&SignPoly<O, I, C, P>> {
         // Filter out the unsuitable ratios:
@@ -207,7 +158,7 @@ impl<
                 monomial,
             };
 
-            c.insert_poly_with_spairs(SignPolyBuilder::new(
+            c.insert_poly_with_spairs(SignPoly::new(
                 &c.basis.div_map,
                 signature.idx,
                 signature,
@@ -237,8 +188,36 @@ impl<
     }
 
     /// Adds a new polynomial to the Gröbner Basis and calculates its S-pairs.
-    pub fn insert_poly_with_spairs(&mut self, sign_poly_builder: SignPolyBuilder<O, I, C, P>) {
-        let sign_poly = Box::new(sign_poly_builder.into(self));
+    pub fn insert_poly_with_spairs(&mut self, mut sign_poly: SignPoly<O, I, C, P>) {
+        // Insert the new polynomial ratio to the ratio map, and we maybe have to
+        // rebuild the whole map.
+        if sign_poly
+            .sign_to_lm_ratio
+            .update(&mut self.ratio_map)
+            .is_err()
+        {
+            // The new ratio does not fit into the ratio_map, rebuid it to make room:
+            println!("Rebuilding the ratio map.");
+            self.ratio_map.rebuild();
+
+            // If it doesn't fit now, the map is too full so there is nothing we
+            // can do. We unwrap and let it panic.
+            sign_poly
+                .sign_to_lm_ratio
+                .update(&mut self.ratio_map)
+                .unwrap();
+
+            // Update every existing polynomial, this can't fail:
+            for p in self.basis.polys.iter_mut() {
+                // Since the elements were already in the map, this can't fail.
+                p.as_mut()
+                    .sign_to_lm_ratio
+                    .update(&mut self.ratio_map)
+                    .unwrap();
+            }
+        }
+
+        let sign_poly = Box::new(sign_poly);
 
         self.update_max_exp(&sign_poly.masked_signature.signature.monomial);
         for term in sign_poly.polynomial.terms.iter() {

@@ -121,6 +121,11 @@ impl<T: Ord + Clone> FastCompared<T> {
     pub fn as_ref(&self) -> &T {
         &self.value
     }
+
+    /// Return the stored value.
+    pub fn into_inner(self) -> T {
+        self.value
+    }
 }
 
 impl<T: Ord + Clone> PartialEq for FastCompared<T> {

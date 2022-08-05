@@ -9,7 +9,7 @@ mod s_pairs;
 use std::{collections::BTreeMap, fmt::Display};
 
 use self::{
-    basis_calculator::{BasisCalculator, KnownBasis, SignPolyBuilder, SyzygySet},
+    basis_calculator::{BasisCalculator, KnownBasis, SyzygySet},
     s_pairs::PartialSPair,
 };
 
@@ -117,13 +117,17 @@ impl<O: Ordering, I: Id, P: SignedPower> MaskedSignature<O, I, P> {
 fn sign_to_monomial_ratio<O: Ordering, I: Id, P: SignedPower>(
     signature: &Signature<O, I, P>,
     monomial: &Monomial<O, I, P>,
-) -> Signature<O, I, P> {
+) -> Ratio<O, I, P> {
     let monomial = signature.monomial.fraction_division(monomial);
 
-    Signature {
-        monomial,
-        ..*signature
-    }
+    Ratio::new(
+        None,
+        Signature {
+            monomial,
+            ..*signature
+        },
+    )
+    .unwrap()
 }
 
 /// Signature polynomial.
@@ -162,6 +166,29 @@ impl<O: Ordering, I: Id + Display, C: InvertibleCoefficient, P: SignedPower + Di
 }
 
 impl<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> SignPoly<O, I, C, P> {
+    /// Creates a new Signature Polynomial Builder.
+    ///
+    /// Polynomial can not be zero, otherwise this will panic.
+    pub fn new(
+        div_map: &DivMap<P>,
+        idx: u32,
+        signature: Signature<O, I, P>,
+        polynomial: Polynomial<O, I, C, P>,
+    ) -> Self {
+        let sign_to_lm_ratio = sign_to_monomial_ratio(&signature, &polynomial.terms[0].monomial);
+
+        Self {
+            masked_signature: MaskedSignature {
+                divmask: div_map.map(&signature.monomial),
+                signature,
+            },
+            lm_divmask: div_map.map(&polynomial.terms[0].monomial),
+            polynomial,
+            idx,
+            sign_to_lm_ratio,
+        }
+    }
+
     /// Compare SigPolys by signature to leading monomial ratio.
     fn sign_to_lm_ratio_cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.sign_to_lm_ratio.cmp(&other.sign_to_lm_ratio)
@@ -208,7 +235,7 @@ enum RegularReductionResult<O: Ordering, I: Id, C: InvertibleCoefficient, P: Sig
     /// Polynomial was reduced to some non-zero constant.
     NonZeroConstant(Polynomial<O, I, C, P>),
     /// Polynomial was reduced to some non singular top reducible polynomial.
-    Reduced(SignPolyBuilder<O, I, C, P>),
+    Reduced(SignPoly<O, I, C, P>),
 }
 
 // Search for an basis member to rewrite, and return if not singular.
@@ -394,7 +421,7 @@ fn regular_reduce<
     };
 
     match lm_properties {
-        Some((sign_to_lm_ratio, lm_divmask)) => RegularReductionResult::Reduced(SignPolyBuilder {
+        Some((sign_to_lm_ratio, lm_divmask)) => RegularReductionResult::Reduced(SignPoly {
             masked_signature: m_sign,
             polynomial,
             lm_divmask,
@@ -446,18 +473,18 @@ pub fn grobner_basis<
         };
 
         let b = c.get_basis();
-        match regular_reduce(b.polys.len() as u32, m_sign, s_pair, b) {
+        match regular_reduce(b.polys.len() as u32, m_sign, s_pair, c.get_basis()) {
             RegularReductionResult::Reduced(reduced) => {
-                // Polynomial is a new valid member of the basis. Insert it into
-                // the basis.
-                c.insert_poly_with_spairs(reduced);
-
                 println!(
                     "#(p: {}, s: {}), {}",
                     b.polys.len(),
                     c.get_num_syzygies(),
                     b.polys.last().unwrap()
                 );
+
+                // Polynomial is a new valid member of the basis. Insert it into
+                // the basis.
+                c.insert_poly_with_spairs(reduced);
 
                 // Generate the corresponding Koszul syzygy to help eliminating
                 // future S-pairs.

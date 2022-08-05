@@ -24,7 +24,7 @@ use crate::{
 
 use super::{
     basis_calculator::SyzygySet, contains_divisor, rewrite_spair, DivMask, KnownBasis,
-    MaskedMonomialRef, MaskedSignature, PointedCmp, SignPoly, Signature, SignedPower,
+    MaskedMonomialRef, MaskedSignature, PointedCmp, Ratio, SignPoly, Signature, SignedPower,
 };
 
 /// Half S-pair
@@ -431,10 +431,14 @@ impl<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower>
         // same idx, from maximum signature/lm ratio to minimum. We use the
         // fact that the stored sign/lm ratio has the same idx as the stored
         // signature.
-        let range_max = Signature {
-            monomial: max_monomial,
-            idx: sign_poly.signature().idx,
-        };
+        let range_max = Ratio::new(
+            None,
+            Signature {
+                monomial: max_monomial,
+                idx: sign_poly.signature().idx,
+            },
+        )
+        .unwrap();
 
         let sign_monomial = sign_poly.masked_signature.monomial();
         for (_, maybe_divisor) in basis
@@ -473,7 +477,7 @@ impl<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower>
             * a.clone();
 
         // Reuse the maximum monomial so we don't have to reallocate it.
-        let mut v = range_max.monomial;
+        let mut v = range_max.into_inner().monomial;
 
         let mut ia = a.product.iter();
         let mut ib = b.product.iter();
