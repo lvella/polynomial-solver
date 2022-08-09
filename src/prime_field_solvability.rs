@@ -27,7 +27,7 @@ pub fn schmidt_lower_bound<
     O: polynomial::monomial_ordering::Ordering,
     I: polynomial::Id + std::hash::Hash,
     C: finite_field::FiniteField,
-    P: polynomial::Power + Into<f64>,
+    P: polynomial::Exponent + Into<f64>,
 >(
     poly: Polynomial<O, I, C, P>,
     // TODO: maybe receive the number of variables as argument,
@@ -116,7 +116,7 @@ pub fn polynomial_system_solvability_test<
     O: polynomial::monomial_ordering::Ordering,
     I: polynomial::Id + std::hash::Hash,
     C: finite_field::PrimeField + From<P>,
-    P: polynomial::Power + Into<f64>,
+    P: polynomial::Exponent + Into<f64>,
 >(
     polys: Vec<Polynomial<O, I, C, P>>,
 ) -> Result<bool, &'static str> {
@@ -231,7 +231,7 @@ fn single_polynomial_case<
     O: polynomial::monomial_ordering::Ordering,
     I: polynomial::Id + std::hash::Hash,
     C: finite_field::PrimeField + From<P>,
-    P: polynomial::Power + Into<f64>,
+    P: polynomial::Exponent + Into<f64>,
 >(
     poly: Polynomial<O, I, C, P>,
 ) -> Result<bool, &'static str> {
@@ -263,7 +263,7 @@ fn multiple_polynomial_case<
     O: polynomial::monomial_ordering::Ordering,
     I: polynomial::Id + std::hash::Hash,
     C: finite_field::PrimeField + From<P>,
-    P: polynomial::Power + Into<f64>,
+    P: polynomial::Exponent + Into<f64>,
 >(
     polys: Vec<Polynomial<O, I, C, P>>,
     var_count: usize,

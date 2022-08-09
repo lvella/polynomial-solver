@@ -3,7 +3,7 @@
 //    - https://en.wikipedia.org/wiki/Faug%C3%A8re%27s_F4_and_F5_algorithms
 // - Use degrevlex ordering, and then transform to lex, which is cheaper than calculating in lex directly
 
-use crate::polynomial::{Id, Polynomial, Power, Term};
+use crate::polynomial::{Exponent, Id, Polynomial, Term};
 
 use num_traits::Zero;
 use std::{
@@ -13,9 +13,9 @@ use std::{
 };
 
 use super::{
-    division::{InvertibleCoefficient, TermAccumulator},
+    division::{Field, TermAccumulator},
     monomial_ordering::Ordering,
-    Coefficient,
+    CommutativeRing,
 };
 
 /// Replace polynomial variables so that they have an order that is
@@ -28,8 +28,8 @@ pub fn reorder_vars_for_easier_gb<O, C, P>(
 ) -> HashMap<usize, usize>
 where
     O: Ordering,
-    C: Coefficient,
-    P: Power,
+    C: CommutativeRing,
+    P: Exponent,
 {
     let mut var_map = HashMap::new();
 
@@ -77,8 +77,8 @@ fn lt_reduction_step<O, I, C, P>(
 where
     O: Ordering,
     I: Id,
-    C: InvertibleCoefficient,
-    P: Power,
+    C: Field,
+    P: Exponent,
 {
     let ini_p = p.terms.get(0);
 
@@ -138,8 +138,8 @@ impl<O, I, C, P> ReducedSet<O, I, C, P>
 where
     O: Ordering,
     I: Id,
-    C: InvertibleCoefficient,
-    P: Power,
+    C: Field,
+    P: Exponent,
 {
     fn new() -> Self {
         Self {
@@ -242,8 +242,8 @@ fn spar<O, I, C, P>(
 where
     O: Ordering,
     I: Id,
-    C: InvertibleCoefficient,
-    P: Power,
+    C: Field,
+    P: Exponent,
 {
     // Helper function used to calculate the complement of each polynomial
     let complement = |a: &Term<O, I, C, P>, b: &Term<O, I, C, P>| Term {
@@ -292,8 +292,8 @@ pub fn autoreduce<O, I, C, P>(input: Vec<Polynomial<O, I, C, P>>) -> Vec<Polynom
 where
     O: Ordering,
     I: Id,
-    C: InvertibleCoefficient,
-    P: Power,
+    C: Field,
+    P: Exponent,
 {
     let mut reduced_set = ReducedSet::new();
 
@@ -314,8 +314,8 @@ pub fn grobner_basis<O, I, C, P>(
 where
     O: Ordering,
     I: Id + std::fmt::Display,
-    C: InvertibleCoefficient + std::fmt::Display,
-    P: Power + std::fmt::Display,
+    C: Field + std::fmt::Display,
+    P: Exponent + std::fmt::Display,
 {
     let mut gb = ReducedSet::new();
 

@@ -14,10 +14,10 @@ use self::{
 };
 
 use super::{
-    division::InvertibleCoefficient,
+    division::Field,
     divmask::{self, DivMaskTestResult},
 };
-use super::{monomial_ordering::Ordering, Id, Monomial, Polynomial, Power, Term};
+use super::{monomial_ordering::Ordering, Exponent, Id, Monomial, Polynomial, Term};
 use num_traits::One;
 
 use num_traits::Signed;
@@ -53,8 +53,8 @@ fn contains_divisor<O: Ordering, I: Id, P: SignedPower>(
 /// The Power type must be signed for this algorithm to work,
 /// because we store the signature to leading monomial ratio, where
 /// variable exponents can be negative.
-pub trait SignedPower: Power + Signed {}
-impl<T> SignedPower for T where T: Power + Signed {}
+pub trait SignedPower: Exponent + Signed {}
+impl<T> SignedPower for T where T: Exponent + Signed {}
 
 type DivMaskSize = u32;
 type DivMap<P> = divmask::DivMap<DivMaskSize, P>;
@@ -136,7 +136,7 @@ fn sign_to_monomial_ratio<O: Ordering, I: Id, P: SignedPower>(
 /// polynomial module, but it turns out that representing this element as a pair
 /// (signature, polynomial) is sufficient for all the computations. Other fields
 /// are optimizations.
-pub struct SignPoly<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> {
+pub struct SignPoly<O: Ordering, I: Id, C: Field, P: SignedPower> {
     masked_signature: MaskedSignature<O, I, P>,
 
     polynomial: Polynomial<O, I, C, P>,
@@ -151,7 +151,7 @@ pub struct SignPoly<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower
     sign_to_lm_ratio: Ratio<O, I, P>,
 }
 
-impl<O: Ordering, I: Id + Display, C: InvertibleCoefficient, P: SignedPower + Display> Display
+impl<O: Ordering, I: Id + Display, C: Field, P: SignedPower + Display> Display
     for SignPoly<O, I, C, P>
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -165,7 +165,7 @@ impl<O: Ordering, I: Id + Display, C: InvertibleCoefficient, P: SignedPower + Di
     }
 }
 
-impl<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> SignPoly<O, I, C, P> {
+impl<O: Ordering, I: Id, C: Field, P: SignedPower> SignPoly<O, I, C, P> {
     /// Creates a new Signature Polynomial Builder.
     ///
     /// Polynomial can not be zero, otherwise this will panic.
@@ -227,7 +227,7 @@ impl<T: Ord> Ord for PointedCmp<T> {
 }
 
 /// The 3 possible results of a regular reduction.
-enum RegularReductionResult<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> {
+enum RegularReductionResult<O: Ordering, I: Id, C: Field, P: SignedPower> {
     /// Polynomial was singular top reducible
     Singular,
     /// Polynomial was reduced to zero.
@@ -239,7 +239,7 @@ enum RegularReductionResult<O: Ordering, I: Id, C: InvertibleCoefficient, P: Sig
 }
 
 // Search for an basis member to rewrite, and return if not singular.
-fn rewrite_spair<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower>(
+fn rewrite_spair<O: Ordering, I: Id, C: Field, P: SignedPower>(
     m_sign: &MaskedSignature<O, I, P>,
     s_pair: PartialSPair<O, I, C, P>,
     basis: &KnownBasis<O, I, C, P>,
@@ -294,12 +294,7 @@ fn rewrite_spair<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower>(
 /// This is analogous to calculate the remainder on a multivariate polynomial
 /// division, but with extra restrictions on what polynomials can be the divisor
 /// according to their signature.
-fn regular_reduce<
-    O: Ordering,
-    I: Id + Display,
-    C: InvertibleCoefficient + Display,
-    P: SignedPower + Display,
->(
+fn regular_reduce<O: Ordering, I: Id + Display, C: Field + Display, P: SignedPower + Display>(
     idx: u32,
     m_sign: MaskedSignature<O, I, P>,
     s_pair: Polynomial<O, I, C, P>,
@@ -446,12 +441,7 @@ fn regular_reduce<
 /// Calculates a Grobner Basis using the Signature Buchberger (SB) algorithm.
 ///
 /// The returned basis will not be reduced.
-pub fn grobner_basis<
-    O: Ordering,
-    I: Id + Display,
-    C: InvertibleCoefficient + Display,
-    P: SignedPower + Display,
->(
+pub fn grobner_basis<O: Ordering, I: Id + Display, C: Field + Display, P: SignedPower + Display>(
     input: Vec<Polynomial<O, I, C, P>>,
 ) -> Vec<Polynomial<O, I, C, P>> {
     // Initiate the basis calculation with the input polynomials.

@@ -1,8 +1,8 @@
-use super::{monomial_ordering::Ordering, Coefficient, Id, Polynomial, Power, Term};
+use super::{monomial_ordering::Ordering, CommutativeRing, Exponent, Id, Polynomial, Term};
 
-pub trait InvertibleCoefficient
+pub trait Field
 where
-    Self: Coefficient
+    Self: CommutativeRing
         + for<'a> std::ops::Mul<&'a Self, Output = Self>
         + num_traits::ops::inv::Inv<Output = Self>,
 {
@@ -22,8 +22,8 @@ impl<O, I, C, P> Polynomial<O, I, C, P>
 where
     O: Ordering,
     I: Id,
-    C: InvertibleCoefficient,
-    P: Power,
+    C: Field,
+    P: Exponent,
 {
     /// Test if one polynomial is divisible by another
     pub fn is_divisible_by(&self, divisor: &Self) -> bool {
@@ -171,8 +171,8 @@ impl<'a, O, I, C, P> std::ops::Div<&'a Self> for Polynomial<O, I, C, P>
 where
     O: Ordering,
     I: Id,
-    C: InvertibleCoefficient,
-    P: Power,
+    C: Field,
+    P: Exponent,
 {
     type Output = Self;
 
@@ -188,8 +188,8 @@ impl<'a, O, I, C, P> std::ops::Rem<&'a Self> for Polynomial<O, I, C, P>
 where
     O: Ordering,
     I: Id,
-    C: InvertibleCoefficient,
-    P: Power,
+    C: Field,
+    P: Exponent,
 {
     type Output = Self;
 
@@ -209,8 +209,8 @@ pub mod tests {
     use num::Rational32;
     use num_traits::{One, Pow, Zero};
 
-    impl Coefficient for Rational32 {}
-    impl InvertibleCoefficient for Rational32 {}
+    impl CommutativeRing for Rational32 {}
+    impl Field for Rational32 {}
     pub type QPoly = Polynomial<crate::polynomial::monomial_ordering::Lex, u8, Rational32, i16>;
 
     pub fn r<T>(v: T) -> Rational32

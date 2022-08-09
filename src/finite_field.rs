@@ -1,12 +1,12 @@
-use crate::polynomial::{self, division::InvertibleCoefficient};
+use crate::polynomial::{self, division::Field};
 
 use rug::{self, Complete};
 use std::{cell::RefCell, fmt::Display, str::FromStr};
 use zokrates_field::Field as ZkField;
 
-use crate::polynomial::Coefficient;
+use crate::polynomial::CommutativeRing;
 
-pub trait FiniteField: polynomial::division::InvertibleCoefficient {
+pub trait FiniteField: polynomial::division::Field {
     fn get_order() -> rug::Integer;
 }
 
@@ -187,9 +187,9 @@ impl num_traits::ops::inv::Inv for ThreadPrimeField {
     }
 }
 
-impl Coefficient for ThreadPrimeField {}
+impl CommutativeRing for ThreadPrimeField {}
 
-impl InvertibleCoefficient for ThreadPrimeField {}
+impl Field for ThreadPrimeField {}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ZkFieldWrapper<T>(pub T);
@@ -300,8 +300,8 @@ impl<T: ZkField> num_traits::Zero for ZkFieldWrapper<T> {
     }
 }
 
-impl<T: ZkField> Coefficient for ZkFieldWrapper<T> {}
-impl<T: ZkField> InvertibleCoefficient for ZkFieldWrapper<T> {}
+impl<T: ZkField> CommutativeRing for ZkFieldWrapper<T> {}
+impl<T: ZkField> Field for ZkFieldWrapper<T> {}
 
 #[cfg(test)]
 mod tests {

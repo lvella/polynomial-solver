@@ -8,7 +8,7 @@
 use bitvec::macros::internal::funty::Unsigned;
 use std::marker::PhantomData;
 
-use super::{Id, Monomial, Power, VariablePower};
+use super::{Exponent, Id, Monomial, VariablePower};
 
 /// Divmap is the function used to generate the divmask from a monomial.
 /// Divmasks are only compatible if generated from the same divmap. The
@@ -16,7 +16,7 @@ use super::{Id, Monomial, Power, VariablePower};
 /// useful in finding non-visibility, so the divmap should be regenerated if the
 /// statistics changes too much.
 #[derive(Debug, Clone)]
-pub struct DivMap<T: Unsigned, P: Power> {
+pub struct DivMap<T: Unsigned, P: Exponent> {
     // Vector indexed by variable id. Each entry has a bit index of the first
     // bit for the variable, and a vector with the cutoffs for that variable,
     // each uses one bit starting from the bit index.
@@ -24,7 +24,7 @@ pub struct DivMap<T: Unsigned, P: Power> {
     _basic_type: PhantomData<T>,
 }
 
-impl<T: Unsigned, P: Power> DivMap<T, P> {
+impl<T: Unsigned, P: Exponent> DivMap<T, P> {
     pub fn new(tracker: &MaximumExponentsTracker<P>) -> Self {
         // Every variable will have at least this many cutoffs...
         let num_cutoffs = (T::BITS as usize / tracker.len()) as u8;
@@ -101,7 +101,7 @@ pub enum DivMaskTestResult {
     Unsure,
 }
 
-pub struct MaximumExponentsTracker<P: Power> {
+pub struct MaximumExponentsTracker<P: Exponent> {
     max_exponents: Vec<P>,
     total: P,
     prev_total: P,
@@ -111,7 +111,7 @@ pub struct MaximumExponentsTracker<P: Power> {
 ///
 /// Uses a vector indexed by variable id, so it is assumed that every id up to
 /// maximum id is used (i.e. ids are a dense enumeration of all variables).
-impl<P: Power> MaximumExponentsTracker<P> {
+impl<P: Exponent> MaximumExponentsTracker<P> {
     pub fn new() -> Self {
         Self {
             max_exponents: Vec::new(),

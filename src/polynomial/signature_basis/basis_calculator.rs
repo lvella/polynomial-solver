@@ -3,8 +3,8 @@ use std::{collections::BTreeMap, fmt::Display};
 use num_traits::{One, Zero};
 
 use crate::polynomial::{
-    division::InvertibleCoefficient, divmask::MaximumExponentsTracker, monomial_ordering::Ordering,
-    Id, Monomial, Polynomial,
+    division::Field, divmask::MaximumExponentsTracker, monomial_ordering::Ordering, Id, Monomial,
+    Polynomial,
 };
 
 use super::{
@@ -16,7 +16,7 @@ use super::{
 ///
 /// Everything is public because all fields must be read by the user, and the
 /// user can only get an immutable reference.
-pub struct KnownBasis<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> {
+pub struct KnownBasis<O: Ordering, I: Id, C: Field, P: SignedPower> {
     /// Tracks the maximum exponent seen for each variable, and the evolution.
     pub max_exp: MaximumExponentsTracker<P>,
 
@@ -39,12 +39,8 @@ pub struct KnownBasis<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPow
     // monomial variables.
 }
 
-impl<
-        O: Ordering,
-        I: Id + Display,
-        C: InvertibleCoefficient + Display,
-        P: SignedPower + Display,
-    > KnownBasis<O, I, C, P>
+impl<O: Ordering, I: Id + Display, C: Field + Display, P: SignedPower + Display>
+    KnownBasis<O, I, C, P>
 {
     pub(super) fn find_a_regular_reducer(
         &self,
@@ -70,7 +66,7 @@ impl<
 pub type SyzygySet<O, I, P> = BTreeMap<Signature<O, I, P>, DivMask>;
 
 /// Hold together the structures that must be coherent during the algorithm execution
-pub struct BasisCalculator<O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> {
+pub struct BasisCalculator<O: Ordering, I: Id, C: Field, P: SignedPower> {
     /// The basis elements and syzygies.
     basis: KnownBasis<O, I, C, P>,
 
@@ -90,12 +86,8 @@ pub struct BasisCalculator<O: Ordering, I: Id, C: InvertibleCoefficient, P: Sign
     ratio_map: CmpMap<O, I, P>,
 }
 
-impl<
-        O: Ordering,
-        I: Id + Display,
-        C: InvertibleCoefficient + Display,
-        P: SignedPower + Display,
-    > BasisCalculator<O, I, C, P>
+impl<O: Ordering, I: Id + Display, C: Field + Display, P: SignedPower + Display>
+    BasisCalculator<O, I, C, P>
 {
     /// Creates a new basis calculator.
     ///
@@ -320,12 +312,8 @@ impl<
     }
 }
 
-impl<
-        O: Ordering,
-        I: Id + Display,
-        C: InvertibleCoefficient + Display,
-        P: SignedPower + Display,
-    > IntoIterator for BasisCalculator<O, I, C, P>
+impl<O: Ordering, I: Id + Display, C: Field + Display, P: SignedPower + Display> IntoIterator
+    for BasisCalculator<O, I, C, P>
 {
     type Item = Polynomial<O, I, C, P>;
     type IntoIter = impl Iterator<Item = Self::Item>;

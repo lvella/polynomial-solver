@@ -1,18 +1,18 @@
 use itertools::{EitherOrBoth, Itertools};
 
-use super::{Id, Monomial, Power};
+use super::{Exponent, Id, Monomial};
 use std::cmp::Ordering as CmpOrd;
 
 pub trait Ordering: core::fmt::Debug + Clone + Eq + Ord {
     fn ord<I, P>(a: &Monomial<Self, I, P>, b: &Monomial<Self, I, P>) -> CmpOrd
     where
         I: Id,
-        P: Power;
+        P: Exponent;
 }
 
 /// Compare two variables' power as if they where in the same position in the
 /// ordered monomial list, where zeros are omitted.
-fn power_cmp<P: Power>(id_cmp: CmpOrd, a: &P, b: &P) -> CmpOrd {
+fn power_cmp<P: Exponent>(id_cmp: CmpOrd, a: &P, b: &P) -> CmpOrd {
     match id_cmp {
         CmpOrd::Equal => a.cmp(b),
         // To accommodate for the possibility of exponent being negative, which
@@ -32,7 +32,7 @@ impl Ordering for Lex {
     fn ord<I, P>(a: &Monomial<Self, I, P>, b: &Monomial<Self, I, P>) -> CmpOrd
     where
         I: Id,
-        P: Power,
+        P: Exponent,
     {
         for pair in a.product.iter().zip_longest(b.product.iter()) {
             match pair {
@@ -59,7 +59,7 @@ impl Ordering for Grevlex {
     fn ord<I, P>(a: &Monomial<Self, I, P>, b: &Monomial<Self, I, P>) -> CmpOrd
     where
         I: Id,
-        P: Power,
+        P: Exponent,
     {
         match a.total_power.cmp(&b.total_power) {
             CmpOrd::Equal => (),

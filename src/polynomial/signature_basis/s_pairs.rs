@@ -17,8 +17,7 @@ use itertools::Itertools;
 use crate::{
     ordered_ops::partial_sum,
     polynomial::{
-        division::InvertibleCoefficient, monomial_ordering::Ordering, Id, Monomial, Polynomial,
-        Term, VariablePower,
+        division::Field, monomial_ordering::Ordering, Id, Monomial, Polynomial, Term, VariablePower,
     },
 };
 
@@ -40,7 +39,7 @@ impl<O: Ordering, I: Id, P: SignedPower> HalfSPair<O, I, P> {
     /// Creates a new S-pair, if not eliminated by early elimination criteria.
     ///
     /// On error, tells if S-pair is known to reduce to zero.
-    fn new_if_not_eliminated<C: InvertibleCoefficient>(
+    fn new_if_not_eliminated<C: Field>(
         sign_poly: &SignPoly<O, I, C, P>,
         other: &SignPoly<O, I, C, P>,
         base_divisors: &BaseDivisors<O, I, C, P>,
@@ -107,7 +106,7 @@ impl<O: Ordering, I: Id, P: SignedPower> HalfSPair<O, I, P> {
     }
 
     /// Creates a new S-pair without checking any elimination criteria.
-    fn new_unconditionally<C: InvertibleCoefficient>(
+    fn new_unconditionally<C: Field>(
         sign_poly: &SignPoly<O, I, C, P>,
         idx: u32,
         basis: &[Box<SignPoly<O, I, C, P>>],
@@ -128,7 +127,7 @@ impl<O: Ordering, I: Id, P: SignedPower> HalfSPair<O, I, P> {
     }
 
     /// Calculate the S-pair signature.
-    fn calculate_signature<C: InvertibleCoefficient>(
+    fn calculate_signature<C: Field>(
         base: &SignPoly<O, I, C, P>,
         other: &SignPoly<O, I, C, P>,
     ) -> Signature<O, I, P> {
@@ -181,14 +180,14 @@ impl<O: Ordering, I: Id, P: SignedPower> Ord for SPairColumn<O, I, P> {
 }
 
 /// S-Pair where only the leading term has been evaluated.
-pub struct PartialSPair<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> {
+pub struct PartialSPair<'a, O: Ordering, I: Id, C: Field, P: SignedPower> {
     pub leading_term: Term<O, I, C, P>,
     iter_p: Box<(dyn Iterator<Item = Term<O, I, C, P>> + 'a)>,
     iter_q: Box<(dyn Iterator<Item = Term<O, I, C, P>> + 'a)>,
 }
 
-impl<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower>
-    From<PartialSPair<'a, O, I, C, P>> for Polynomial<O, I, C, P>
+impl<'a, O: Ordering, I: Id, C: Field, P: SignedPower> From<PartialSPair<'a, O, I, C, P>>
+    for Polynomial<O, I, C, P>
 {
     /// Complete the calculation of PartialSPair into a SigPoly
     fn from(spair: PartialSPair<O, I, C, P>) -> Self {
@@ -198,9 +197,7 @@ impl<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower>
     }
 }
 
-impl<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower>
-    PartialSPair<'a, O, I, C, P>
-{
+impl<'a, O: Ordering, I: Id, C: Field, P: SignedPower> PartialSPair<'a, O, I, C, P> {
     /// Creates a partial S-pair with a leading term plus enough information
     /// to finish the computation. Performs relativelly prime elimination
     /// criterion, and return None if the S-pair was either eliminated or
@@ -277,14 +274,12 @@ impl<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower>
 ///
 /// TODO: Test without this criterion again when a proper multidimensional index
 /// have been implemented, because right now it makes things worse, not better.
-struct BaseDivisors<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> {
+struct BaseDivisors<'a, O: Ordering, I: Id, C: Field, P: SignedPower> {
     high: Option<HighBaseDivisor<'a, O, I, C, P>>,
     low: Option<LowBaseDivisor<'a, O, I, C, P>>,
 }
 
-impl<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower>
-    BaseDivisors<'a, O, I, C, P>
-{
+impl<'a, O: Ordering, I: Id, C: Field, P: SignedPower> BaseDivisors<'a, O, I, C, P> {
     fn new(sign_poly: &SignPoly<O, I, C, P>, basis: &KnownBasis<O, I, C, P>) -> Self {
         Self {
             high: HighBaseDivisor::new(sign_poly, basis),
@@ -293,13 +288,9 @@ impl<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower>
     }
 }
 
-struct HighBaseDivisor<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower>(
-    &'a SignPoly<O, I, C, P>,
-);
+struct HighBaseDivisor<'a, O: Ordering, I: Id, C: Field, P: SignedPower>(&'a SignPoly<O, I, C, P>);
 
-impl<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower>
-    HighBaseDivisor<'a, O, I, C, P>
-{
+impl<'a, O: Ordering, I: Id, C: Field, P: SignedPower> HighBaseDivisor<'a, O, I, C, P> {
     fn new(sign_poly: &SignPoly<O, I, C, P>, basis: &KnownBasis<O, I, C, P>) -> Option<Self> {
         let lm = &sign_poly.leading_monomial();
 
@@ -398,16 +389,14 @@ impl<'a, I: 'a + Id, P: 'a + SignedPower> Iterator for MultiVarWalk<'a, I, P> {
 }
 
 /// Low base divisor information
-struct LowBaseDivisor<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower> {
+struct LowBaseDivisor<'a, O: Ordering, I: Id, C: Field, P: SignedPower> {
     divisor: &'a SignPoly<O, I, C, P>,
     /// The x^v in the paper.
     discriminator: Monomial<O, I, P>,
     discriminator_mask: DivMask,
 }
 
-impl<'a, O: Ordering, I: Id, C: InvertibleCoefficient, P: SignedPower>
-    LowBaseDivisor<'a, O, I, C, P>
-{
+impl<'a, O: Ordering, I: Id, C: Field, P: SignedPower> LowBaseDivisor<'a, O, I, C, P> {
     /// For low base divisor, find the polynomial with maximum sign/lm ratio
     /// whose signature divides sign_poly.
     fn new(sign_poly: &SignPoly<O, I, C, P>, basis: &KnownBasis<O, I, C, P>) -> Option<Self> {
@@ -576,7 +565,7 @@ impl<O: Ordering, I: Id + Display, P: SignedPower + Display> SPairTriangle<O, I,
         }
     }
 
-    pub fn add_column<C: InvertibleCoefficient>(
+    pub fn add_column<C: Field>(
         &mut self,
         sign_poly: &SignPoly<O, I, C, P>,
         basis: &KnownBasis<O, I, C, P>,
@@ -624,7 +613,7 @@ impl<O: Ordering, I: Id + Display, P: SignedPower + Display> SPairTriangle<O, I,
     }
 
     /// Extract the one of the S-pairs with minimal signature. There can be multiple.
-    fn pop<'a, C: InvertibleCoefficient>(
+    fn pop<'a, C: Field>(
         &mut self,
         basis: &'a [Box<SignPoly<O, I, C, P>>],
     ) -> Option<(
@@ -651,7 +640,7 @@ impl<O: Ordering, I: Id + Display, P: SignedPower + Display> SPairTriangle<O, I,
 
     /// Return the next S-pair to be reduced, which is the S-pair of minimal
     /// signature. Or None if there are no more S-pairs.
-    pub fn get_next<'a, C: InvertibleCoefficient>(
+    pub fn get_next<'a, C: Field>(
         &mut self,
         basis: &KnownBasis<O, I, C, P>,
         syzygies: &mut BTreeMap<Signature<O, I, P>, DivMask>,

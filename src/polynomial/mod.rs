@@ -47,7 +47,7 @@ where
     }
 }
 
-pub trait Coefficient:
+pub trait CommutativeRing:
     core::fmt::Debug
     + PartialEq
     + Clone
@@ -59,7 +59,7 @@ pub trait Coefficient:
 {
 }
 
-pub trait Power:
+pub trait Exponent:
     core::fmt::Debug
     + Eq
     + Ord
@@ -85,7 +85,7 @@ pub struct VariablePower<I, P> {
 impl<I, P> VariablePower<I, P>
 where
     I: Id,
-    P: Power,
+    P: Exponent,
 {
     pub fn new(id: I, power: P) -> Self {
         VariablePower { id, power }
@@ -108,7 +108,7 @@ impl<O, I, P> Monomial<O, I, P>
 where
     O: Ordering,
     I: Id,
-    P: Power,
+    P: Exponent,
 {
     /// Whole division implementation. If self is not divisible by
     /// divisor, returns None.
@@ -252,7 +252,7 @@ impl<O, I, P> Monomial<O, I, P>
 where
     O: Ordering,
     I: Id,
-    P: Power + Signed,
+    P: Exponent + Signed,
 {
     /// Return the ratio between two monomials, allowing exponents to be
     /// negative.
@@ -308,13 +308,13 @@ impl<O, I: PartialEq, P: PartialEq> PartialEq for Monomial<O, I, P> {
 
 impl<O, I: Eq, P: Eq> Eq for Monomial<O, I, P> {}
 
-impl<O: Ordering, I: Id, P: Power> Ord for Monomial<O, I, P> {
+impl<O: Ordering, I: Id, P: Exponent> Ord for Monomial<O, I, P> {
     fn cmp(&self, other: &Self) -> CmpOrd {
         Ordering::ord(self, other)
     }
 }
 
-impl<O: Ordering, I: Id, P: Power> PartialOrd for Monomial<O, I, P> {
+impl<O: Ordering, I: Id, P: Exponent> PartialOrd for Monomial<O, I, P> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(Ordering::ord(self, other))
     }
@@ -324,7 +324,7 @@ impl<O, I, P> One for Monomial<O, I, P>
 where
     O: Ordering,
     I: Id,
-    P: Power,
+    P: Exponent,
 {
     fn one() -> Self {
         Monomial {
@@ -340,7 +340,7 @@ impl<O, I, P> Mul for Monomial<O, I, P>
 where
     O: Ordering,
     I: Id,
-    P: Power,
+    P: Exponent,
 {
     type Output = Self;
 
@@ -383,8 +383,8 @@ impl<O, I, C, P> Term<O, I, C, P>
 where
     O: Ordering,
     I: Id,
-    C: Coefficient,
-    P: Power,
+    C: CommutativeRing,
+    P: Exponent,
 {
     pub fn new(coefficient: C, id: I, power: P) -> Self {
         if power.is_zero() {
@@ -482,8 +482,8 @@ where
 impl<O, I, C, P> std::ops::Neg for Term<O, I, C, P>
 where
     I: Id,
-    C: Coefficient,
-    P: Power,
+    C: CommutativeRing,
+    P: Exponent,
 {
     type Output = Self;
 
@@ -502,8 +502,8 @@ impl<O, I, C, P> Mul for Term<O, I, C, P>
 where
     O: Ordering,
     I: Id,
-    C: Coefficient,
-    P: Power,
+    C: CommutativeRing,
+    P: Exponent,
 {
     type Output = Self;
 
@@ -552,8 +552,8 @@ impl<O, I, C, P> Polynomial<O, I, C, P>
 where
     O: Ordering,
     I: Id,
-    C: Coefficient,
-    P: Power,
+    C: CommutativeRing,
+    P: Exponent,
 {
     pub fn new_variables(var_ids: impl IntoIterator<Item = I>) -> Vec<Self> {
         var_ids
@@ -724,8 +724,8 @@ impl<O, I, C, P> Polynomial<O, I, C, P>
 where
     O: Ordering,
     I: Id,
-    C: Coefficient + From<P>,
-    P: Power,
+    C: CommutativeRing + From<P>,
+    P: Exponent,
 {
     pub fn derivative(mut self, variable: &I) -> Self {
         self.terms.retain_mut(|term| {
@@ -764,16 +764,16 @@ impl<O, I: Clone, C: Clone, P: Clone> Clone for Polynomial<O, I, C, P> {
 impl<O, I, C, P> Eq for Polynomial<O, I, C, P>
 where
     I: Id,
-    C: Coefficient,
-    P: Power,
+    C: CommutativeRing,
+    P: Exponent,
 {
 }
 
 impl<O, I, C, P> PartialEq for Polynomial<O, I, C, P>
 where
     I: Id,
-    C: Coefficient,
-    P: Power,
+    C: CommutativeRing,
+    P: Exponent,
 {
     fn eq(&self, rhs: &Self) -> bool {
         self.terms == rhs.terms
@@ -784,8 +784,8 @@ impl<O, I, C, P> Ord for Polynomial<O, I, C, P>
 where
     O: Ordering,
     I: Id,
-    C: Coefficient,
-    P: Power,
+    C: CommutativeRing,
+    P: Exponent,
 {
     /// Compare by leading monomials. Non-constant > non-zero constant > zero.
     fn cmp(&self, rhs: &Self) -> CmpOrd {
@@ -802,8 +802,8 @@ impl<O, I, C, P> PartialOrd for Polynomial<O, I, C, P>
 where
     O: Ordering,
     I: Id,
-    C: Coefficient,
-    P: Power,
+    C: CommutativeRing,
+    P: Exponent,
 {
     fn partial_cmp(&self, rhs: &Self) -> Option<CmpOrd> {
         Some(self.cmp(rhs))
@@ -814,8 +814,8 @@ impl<O, I, C, P> num_traits::Zero for Polynomial<O, I, C, P>
 where
     O: Ordering,
     I: Id,
-    C: Coefficient,
-    P: Power,
+    C: CommutativeRing,
+    P: Exponent,
 {
     fn zero() -> Self {
         Polynomial { terms: Vec::new() }
@@ -831,8 +831,8 @@ impl<O, I, C, P> std::ops::Add for Polynomial<O, I, C, P>
 where
     O: Ordering,
     I: Id,
-    C: Coefficient,
-    P: Power,
+    C: CommutativeRing,
+    P: Exponent,
 {
     type Output = Polynomial<O, I, C, P>;
 
@@ -847,8 +847,8 @@ impl<O, I, C, P> std::ops::Add<C> for Polynomial<O, I, C, P>
 where
     O: Ordering,
     I: Id,
-    C: Coefficient,
-    P: Power,
+    C: CommutativeRing,
+    P: Exponent,
 {
     type Output = Polynomial<O, I, C, P>;
 
@@ -868,8 +868,8 @@ where
 impl<O, I, C, P> std::ops::Neg for Polynomial<O, I, C, P>
 where
     I: Id,
-    C: Coefficient,
-    P: Power,
+    C: CommutativeRing,
+    P: Exponent,
 {
     type Output = Self;
 
@@ -886,8 +886,8 @@ impl<O, I, C, P> std::ops::Sub for Polynomial<O, I, C, P>
 where
     O: Ordering,
     I: Id,
-    C: Coefficient,
-    P: Power,
+    C: CommutativeRing,
+    P: Exponent,
 {
     type Output = Polynomial<O, I, C, P>;
 
@@ -900,8 +900,8 @@ impl<O, I, C, P> std::ops::Sub<C> for Polynomial<O, I, C, P>
 where
     O: Ordering,
     I: Id,
-    C: Coefficient,
-    P: Power,
+    C: CommutativeRing,
+    P: Exponent,
 {
     type Output = Polynomial<O, I, C, P>;
 
@@ -924,8 +924,8 @@ impl<O, I, C, P> Mul<Polynomial<O, I, C, P>> for &Monomial<O, I, P>
 where
     O: Ordering,
     I: Id,
-    C: Coefficient,
-    P: Power,
+    C: CommutativeRing,
+    P: Exponent,
 {
     type Output = Polynomial<O, I, C, P>;
 
@@ -942,8 +942,8 @@ impl<O, I, C, P> Mul for &Polynomial<O, I, C, P>
 where
     O: Ordering,
     I: Id,
-    C: Coefficient,
-    P: Power,
+    C: CommutativeRing,
+    P: Exponent,
 {
     type Output = Polynomial<O, I, C, P>;
 
@@ -993,8 +993,8 @@ impl<O, I, C, P> Mul for Polynomial<O, I, C, P>
 where
     O: Ordering,
     I: Id,
-    C: Coefficient,
-    P: Power,
+    C: CommutativeRing,
+    P: Exponent,
 {
     type Output = Polynomial<O, I, C, P>;
     fn mul(self, rhs: Polynomial<O, I, C, P>) -> Self::Output {
@@ -1006,8 +1006,8 @@ impl<O, I, C, P> Mul<C> for &Polynomial<O, I, C, P>
 where
     O: Ordering,
     I: Id,
-    C: Coefficient,
-    P: Power,
+    C: CommutativeRing,
+    P: Exponent,
 {
     type Output = Polynomial<O, I, C, P>;
 
@@ -1020,8 +1020,8 @@ impl<O, I, C, P, T> num_traits::pow::Pow<T> for Polynomial<O, I, C, P>
 where
     O: Ordering,
     I: Id,
-    C: Coefficient,
-    P: Power,
+    C: CommutativeRing,
+    P: Exponent,
     T: Clone + num_traits::Zero + std::ops::Rem + std::ops::DivAssign + std::convert::From<u8>,
     <T as std::ops::Rem>::Output: num_traits::One + PartialEq,
 {
@@ -1051,7 +1051,7 @@ where
 impl<O, I, P> std::fmt::Display for Monomial<O, I, P>
 where
     I: Id + std::fmt::Display,
-    P: Power + std::fmt::Display,
+    P: Exponent + std::fmt::Display,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut iter = self.product.iter();
@@ -1078,8 +1078,8 @@ where
 impl<O, I, C, P> std::fmt::Display for Term<O, I, C, P>
 where
     I: Id + std::fmt::Display,
-    C: Coefficient + std::fmt::Display,
-    P: Power + std::fmt::Display,
+    C: CommutativeRing + std::fmt::Display,
+    P: Exponent + std::fmt::Display,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match (self.coefficient.is_one(), self.monomial.product.is_empty()) {
@@ -1094,8 +1094,8 @@ where
 impl<O, I, C, P> std::fmt::Display for Polynomial<O, I, C, P>
 where
     I: Id + std::fmt::Display,
-    C: Coefficient + std::fmt::Display,
-    P: Power + std::fmt::Display,
+    C: CommutativeRing + std::fmt::Display,
+    P: Exponent + std::fmt::Display,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut iter = self.terms.iter();
@@ -1117,11 +1117,11 @@ where
     }
 }
 
-impl Coefficient for i32 {}
-impl Power for u16 {}
-impl Power for i16 {}
-impl Power for u32 {}
-impl Power for i32 {}
+impl CommutativeRing for i32 {}
+impl Exponent for u16 {}
+impl Exponent for i16 {}
+impl Exponent for u32 {}
+impl Exponent for i32 {}
 
 #[cfg(test)]
 mod tests {

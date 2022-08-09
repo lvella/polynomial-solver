@@ -2,7 +2,7 @@ use std::{collections::HashMap, fmt::Debug, str::FromStr};
 
 use pest::{iterators::Pair, Parser};
 use polynomial_solver::polynomial::{
-    monomial_ordering::Ordering, Coefficient, Polynomial, Term, VariablePower,
+    monomial_ordering::Ordering, CommutativeRing, Polynomial, Term, VariablePower,
 };
 
 #[derive(Parser)]
@@ -12,7 +12,7 @@ pub struct SystemsParser;
 pub fn parse<O, C>(unparsed_file: &str) -> Result<Vec<Vec<Polynomial<O, u32, C, i32>>>, String>
 where
     O: Ordering,
-    C: Coefficient + FromStr + num_traits::pow::Pow<u32, Output = C>,
+    C: CommutativeRing + FromStr + num_traits::pow::Pow<u32, Output = C>,
     <C as FromStr>::Err: Debug,
 {
     let file = SystemsParser::parse(Rule::file, unparsed_file)
@@ -29,7 +29,7 @@ where
 fn parse_system<O, C>(system: Pair<'_, Rule>) -> Result<Vec<Polynomial<O, u32, C, i32>>, String>
 where
     O: Ordering,
-    C: Coefficient + FromStr + num_traits::pow::Pow<u32, Output = C>,
+    C: CommutativeRing + FromStr + num_traits::pow::Pow<u32, Output = C>,
     <C as FromStr>::Err: Debug,
 {
     let mut iter = system.into_inner();
@@ -66,7 +66,7 @@ fn parse_polynomial<'a, O, C>(
 ) -> Result<Polynomial<O, u32, C, i32>, String>
 where
     O: Ordering,
-    C: Coefficient + FromStr + num_traits::pow::Pow<u32, Output = C>,
+    C: CommutativeRing + FromStr + num_traits::pow::Pow<u32, Output = C>,
     <C as FromStr>::Err: Debug,
 {
     polynomial
@@ -87,7 +87,7 @@ fn parse_terms<'a, O, C>(
 ) -> Result<Term<O, u32, C, i32>, String>
 where
     O: Ordering,
-    C: Coefficient + FromStr + num_traits::pow::Pow<u32, Output = C>,
+    C: CommutativeRing + FromStr + num_traits::pow::Pow<u32, Output = C>,
     <C as FromStr>::Err: Debug,
 {
     assert!(term.as_rule() == Rule::term);
