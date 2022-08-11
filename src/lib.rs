@@ -3,6 +3,7 @@
 #![feature(map_first_last)]
 #![feature(is_some_with)]
 #![feature(type_alias_impl_trait)]
+#![feature(associated_type_defaults)]
 
 pub mod factorization;
 pub mod finite_field;

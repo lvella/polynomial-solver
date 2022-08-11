@@ -1,13 +1,10 @@
 use itertools::{EitherOrBoth, Itertools};
 
-use super::{Exponent, Id, Monomial};
+use super::{Exponent, Id, Monomial, PolyTypes};
 use std::cmp::Ordering as CmpOrd;
 
 pub trait Ordering: core::fmt::Debug + Clone + Eq + Ord {
-    fn ord<I, P>(a: &Monomial<Self, I, P>, b: &Monomial<Self, I, P>) -> CmpOrd
-    where
-        I: Id,
-        P: Exponent;
+    fn ord<P: PolyTypes>(a: &Monomial<P>, b: &Monomial<P>) -> CmpOrd;
 }
 
 /// Compare two variables' power as if they where in the same position in the
@@ -29,11 +26,7 @@ fn power_cmp<P: Exponent>(id_cmp: CmpOrd, a: &P, b: &P) -> CmpOrd {
 pub struct Lex;
 
 impl Ordering for Lex {
-    fn ord<I, P>(a: &Monomial<Self, I, P>, b: &Monomial<Self, I, P>) -> CmpOrd
-    where
-        I: Id,
-        P: Exponent,
-    {
+    fn ord<P: PolyTypes>(a: &Monomial<P>, b: &Monomial<P>) -> CmpOrd {
         for pair in a.product.iter().zip_longest(b.product.iter()) {
             match pair {
                 EitherOrBoth::Both(a, b) => {
@@ -56,11 +49,7 @@ impl Ordering for Lex {
 pub struct Grevlex;
 
 impl Ordering for Grevlex {
-    fn ord<I, P>(a: &Monomial<Self, I, P>, b: &Monomial<Self, I, P>) -> CmpOrd
-    where
-        I: Id,
-        P: Exponent,
-    {
+    fn ord<P: PolyTypes>(a: &Monomial<P>, b: &Monomial<P>) -> CmpOrd {
         match a.total_power.cmp(&b.total_power) {
             CmpOrd::Equal => (),
             cmp => {
@@ -87,12 +76,12 @@ mod tests {
     use num_traits::Pow;
     use rand::prelude::SliceRandom;
 
-    use crate::polynomial::Polynomial;
+    use crate::polynomial::PolyTypesImpl;
 
     use super::*;
 
-    pub type LexPoly = Polynomial<Lex, u8, i32, u16>;
-    pub type GrevlexPoly = Polynomial<Grevlex, u8, i32, u16>;
+    pub type LexPoly = PolyTypesImpl<Lex, u8, i32, u16>;
+    pub type GrevlexPoly = PolyTypesImpl<Grevlex, u8, i32, u16>;
 
     #[test]
     fn test_lex_ordering() {

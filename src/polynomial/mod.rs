@@ -1,8 +1,4 @@
-pub mod division;
-pub mod divmask;
-pub mod grobner_basis;
 pub mod monomial_ordering;
-pub mod signature_basis;
 
 use super::ordered_ops;
 use bitvec::macros::internal::funty::Unsigned;
@@ -10,7 +6,7 @@ use monomial_ordering::Ordering;
 use num_traits::{One, Signed};
 use std::{
     cmp::{Ordering as CmpOrd, Reverse},
-    fmt::Write,
+    fmt::{Display, Write},
     marker::PhantomData,
     ops::{Mul, MulAssign},
 };
@@ -77,39 +73,30 @@ pub trait Exponent:
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct VariablePower<I, P> {
-    id: I,
-    power: P,
+pub struct VariablePower<P: PolyTypes> {
+    id: P::Id,
+    power: P::Exp,
 }
 
-impl<I, P> VariablePower<I, P>
-where
-    I: Id,
-    P: Exponent,
-{
-    pub fn new(id: I, power: P) -> Self {
+impl<P: PolyTypes> VariablePower<P> {
+    pub fn new(id: P::Id, power: P::Exp) -> Self {
         VariablePower { id, power }
     }
 
-    pub fn get_id(&self) -> &I {
+    pub fn get_id(&self) -> &P::Id {
         &self.id
     }
 }
 
 #[derive(Debug)]
-pub struct Monomial<O: ?Sized, I, P> {
+pub struct Monomial<P: PolyTypes> {
     // Product is sorted in decreasing order of id:
-    product: Vec<VariablePower<I, P>>,
+    product: Vec<P::VariablePower>,
     total_power: P,
-    _phantom_ordering: PhantomData<O>,
+    _phantom_ordering: PhantomData<P::Ordering>,
 }
 
-impl<O, I, P> Monomial<O, I, P>
-where
-    O: Ordering,
-    I: Id,
-    P: Exponent,
-{
+impl<P: PolyTypes> Monomial<P> {
     /// Whole division implementation. If self is not divisible by
     /// divisor, returns None.
     pub fn whole_division(mut self, divisor: &Self) -> Option<Self> {
@@ -239,7 +226,7 @@ where
         false
     }
 
-    pub fn get_product(&self) -> &[VariablePower<I, P>] {
+    pub fn get_product(&self) -> &[VariablePower<P>] {
         &self.product[..]
     }
 
@@ -248,11 +235,9 @@ where
     }
 }
 
-impl<O, I, P> Monomial<O, I, P>
+impl<P: PolyTypes> Monomial<P>
 where
-    O: Ordering,
-    I: Id,
-    P: Exponent + Signed,
+    P::Exp: Exponent + Signed,
 {
     /// Return the ratio between two monomials, allowing exponents to be
     /// negative.
@@ -288,7 +273,7 @@ where
     }
 }
 
-impl<O, I: Clone, P: Clone> Clone for Monomial<O, I, P> {
+impl<P: PolyTypes> Clone for Monomial<P> {
     fn clone(&self) -> Self {
         Self {
             product: self.product.clone(),
@@ -300,32 +285,27 @@ impl<O, I: Clone, P: Clone> Clone for Monomial<O, I, P> {
 
 // I did't use derive(PartialEq) because total_power
 // need not to be part of the comparison.
-impl<O, I: PartialEq, P: PartialEq> PartialEq for Monomial<O, I, P> {
+impl<P: PolyTypes> PartialEq for Monomial<P> {
     fn eq(&self, other: &Self) -> bool {
         self.product == other.product
     }
 }
 
-impl<O, I: Eq, P: Eq> Eq for Monomial<O, I, P> {}
+impl<P: PolyTypes> Eq for Monomial<P> {}
 
-impl<O: Ordering, I: Id, P: Exponent> Ord for Monomial<O, I, P> {
+impl<P: PolyTypes> Ord for Monomial<P> {
     fn cmp(&self, other: &Self) -> CmpOrd {
         Ordering::ord(self, other)
     }
 }
 
-impl<O: Ordering, I: Id, P: Exponent> PartialOrd for Monomial<O, I, P> {
+impl<P: PolyTypes> PartialOrd for Monomial<P> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(Ordering::ord(self, other))
     }
 }
 
-impl<O, I, P> One for Monomial<O, I, P>
-where
-    O: Ordering,
-    I: Id,
-    P: Exponent,
-{
+impl<P: PolyTypes> One for Monomial<P> {
     fn one() -> Self {
         Monomial {
             // Empty product means implicitly one
@@ -336,12 +316,7 @@ where
     }
 }
 
-impl<O, I, P> Mul for Monomial<O, I, P>
-where
-    O: Ordering,
-    I: Id,
-    P: Exponent,
-{
+impl<P: PolyTypes> Mul for Monomial<P> {
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self {
@@ -374,19 +349,13 @@ where
 }
 
 #[derive(Debug)]
-pub struct Term<O, I, C, P> {
-    coefficient: C,
-    monomial: Monomial<O, I, P>,
+pub struct Term<P: PolyTypes> {
+    coefficient: P::Ring,
+    monomial: P::Monomial,
 }
 
-impl<O, I, C, P> Term<O, I, C, P>
-where
-    O: Ordering,
-    I: Id,
-    C: CommutativeRing,
-    P: Exponent,
-{
-    pub fn new(coefficient: C, id: I, power: P) -> Self {
+impl<P: PolyTypes> Term<P> {
+    pub fn new(coefficient: P::Ring, id: P::Id, power: P::Exp) -> Self {
         if power.is_zero() {
             Self::new_constant(coefficient)
         } else {
@@ -404,7 +373,7 @@ where
         }
     }
 
-    pub fn new_multi_vars(coefficient: C, mut vars: Vec<VariablePower<I, P>>) -> Self {
+    pub fn new_multi_vars(coefficient: P::Ring, mut vars: Vec<P::VariablePower>) -> Self {
         // Order the variables by id:
         vars.sort_unstable_by(|x, y| y.id.cmp(&x.id));
 
@@ -435,23 +404,23 @@ where
         }
     }
 
-    pub fn new_constant(value: C) -> Self {
+    pub fn new_constant(value: P::Ring) -> Self {
         Term {
             coefficient: value,
-            monomial: Monomial::<O, I, P>::one(),
+            monomial: P::Monomial::one(),
         }
     }
 
-    pub fn get_coefficient(&self) -> &C {
+    pub fn get_coefficient(&self) -> &P::Ring {
         &self.coefficient
     }
 
-    pub fn get_monomial(&self) -> &Monomial<O, I, P> {
+    pub fn get_monomial(&self) -> &P::Monomial {
         &self.monomial
     }
 }
 
-impl<O, I: Clone, C: Clone, P: Clone> Clone for Term<O, I, C, P> {
+impl<P: PolyTypes> Clone for Term<P> {
     fn clone(&self) -> Self {
         Self {
             coefficient: self.coefficient.clone(),
@@ -460,35 +429,19 @@ impl<O, I: Clone, C: Clone, P: Clone> Clone for Term<O, I, C, P> {
     }
 }
 
-impl<O, I, C, P> PartialEq for Term<O, I, C, P>
-where
-    I: PartialEq,
-    C: PartialEq,
-    P: PartialEq,
-{
+impl<P: PolyTypes> PartialEq for Term<P> {
     fn eq(&self, other: &Self) -> bool {
         self.coefficient == other.coefficient && self.monomial == other.monomial
     }
 }
 
-impl<O, I, C, P> Eq for Term<O, I, C, P>
-where
-    I: Eq,
-    C: Eq,
-    P: Eq,
-{
-}
+impl<P: PolyTypes> Eq for Term<P> {}
 
-impl<O, I, C, P> std::ops::Neg for Term<O, I, C, P>
-where
-    I: Id,
-    C: CommutativeRing,
-    P: Exponent,
-{
+impl<P: PolyTypes> std::ops::Neg for Term<P> {
     type Output = Self;
 
     fn neg(self) -> Self {
-        let mut coefficient = C::zero();
+        let mut coefficient = P::Ring::zero();
         coefficient -= self.coefficient;
 
         Self {
@@ -498,13 +451,7 @@ where
     }
 }
 
-impl<O, I, C, P> Mul for Term<O, I, C, P>
-where
-    O: Ordering,
-    I: Id,
-    C: CommutativeRing,
-    P: Exponent,
-{
+impl<P: PolyTypes> Mul for Term<P> {
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self {
@@ -516,12 +463,6 @@ where
             monomial: self.monomial * rhs.monomial,
         }
     }
-}
-
-#[derive(Debug)]
-pub struct Polynomial<O, I, C, P> {
-    // Terms are sorted in decreasing order of monomials
-    terms: Vec<Term<O, I, C, P>>,
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Hash)]
@@ -547,28 +488,39 @@ impl<I: Id> Id for ExtendedId<I> {
     }
 }
 
+struct Homogeneous<P: PolyTypes> {
+    _poly_types: PhantomData<P>,
+}
+
+impl<P: PolyTypes> PolyTypes for Homogeneous<P> {
+    type Ordering = P::Ordering;
+    type Id = ExtendedId<P::Id>;
+    type Ring = P::Ring;
+    type Exp = P::Exp;
+}
+
+#[derive(Debug)]
+pub struct Polynomial<P: PolyTypes> {
+    // Terms are sorted in decreasing order of monomials
+    terms: Vec<P::Term>,
+}
+
 // TODO optimization: implement term * polynomial multiplication
-impl<O, I, C, P> Polynomial<O, I, C, P>
-where
-    O: Ordering,
-    I: Id,
-    C: CommutativeRing,
-    P: Exponent,
-{
-    pub fn new_variables(var_ids: impl IntoIterator<Item = I>) -> Vec<Self> {
+impl<P: PolyTypes> Polynomial<P> {
+    pub fn new_variables(var_ids: impl IntoIterator<Item = P::Id>) -> Vec<Self> {
         var_ids
             .into_iter()
-            .map(|id| Self::new_monomial_term(C::one(), id, P::one()))
+            .map(|id| Self::new_monomial_term(P::Ring::one(), id, P::Exp::one()))
             .collect()
     }
 
-    pub fn new_monomial_term(coefficient: C, id: I, power: P) -> Self {
+    pub fn new_monomial_term(coefficient: P::Ring, id: P::Id, power: P::Exp) -> Self {
         Self {
             terms: vec![Term::new(coefficient, id, power)],
         }
     }
 
-    pub fn new_constant(value: C) -> Self {
+    pub fn new_constant(value: P::Ring) -> Self {
         Self {
             terms: if value.is_zero() {
                 // No terms means zero implictly
@@ -579,21 +531,21 @@ where
         }
     }
 
-    pub fn from_terms(mut terms: Vec<Term<O, I, C, P>>) -> Self {
+    pub fn from_terms(mut terms: Vec<P::Term>) -> Self {
         terms.sort_unstable_by(|a, b| b.monomial.cmp(&a.monomial));
         terms.dedup_by(|from, to| {
             if from.monomial != to.monomial {
                 return false;
             }
 
-            to.coefficient += std::mem::replace(&mut from.coefficient, C::zero());
+            to.coefficient += std::mem::replace(&mut from.coefficient, P::Ring::zero());
             true
         });
         terms.retain(|e| !e.coefficient.is_zero());
         Self { terms }
     }
 
-    pub fn get_terms(&self) -> &[Term<O, I, C, P>] {
+    pub fn get_terms(&self) -> &[P::Term] {
         &self.terms[..]
     }
 
@@ -605,7 +557,7 @@ where
     }
 
     /// If the polynomial uses exactly one variable, returns the variable id.
-    pub fn try_get_univariate_id(&self) -> Option<I> {
+    pub fn try_get_univariate_id(&self) -> Option<P::Id> {
         let mut ret = None;
         for term in self.terms.iter() {
             for var in term.monomial.product.iter() {
@@ -627,7 +579,7 @@ where
 
     /// Make all terms of the polynomial the same given degree by introducing a new variable
     /// and multiplying it to each term the appropriate number of times.
-    pub fn homogenize(self) -> Polynomial<O, ExtendedId<I>, C, P> {
+    pub fn homogenize(self) -> Polynomial<Homogeneous<P>> {
         // Calculate the degree of the polynomial:
         let degree = self
             .terms
@@ -649,7 +601,7 @@ where
     pub fn homogenize_to_degree(
         self,
         degree: &P,
-    ) -> Result<Polynomial<O, ExtendedId<I>, C, P>, &'static str> {
+    ) -> Result<Polynomial<Homogeneous<P>>, &'static str> {
         let mut terms = Vec::new();
 
         // Process each term
@@ -699,9 +651,9 @@ where
     }
 
     fn sum_terms(
-        a: impl Iterator<Item = Term<O, I, C, P>>,
-        b: impl Iterator<Item = Term<O, I, C, P>>,
-        output: &mut Vec<Term<O, I, C, P>>,
+        a: impl Iterator<Item = P::Term>,
+        b: impl Iterator<Item = P::Term>,
+        output: &mut Vec<P::Term>,
     ) {
         ordered_ops::sum(
             a,
@@ -720,14 +672,11 @@ where
     }
 }
 
-impl<O, I, C, P> Polynomial<O, I, C, P>
+impl<P: PolyTypes> Polynomial<P>
 where
-    O: Ordering,
-    I: Id,
-    C: CommutativeRing + From<P>,
-    P: Exponent,
+    P::Ring: From<P::Exp>,
 {
-    pub fn derivative(mut self, variable: &I) -> Self {
+    pub fn derivative(mut self, variable: &P::Id) -> Self {
         self.terms.retain_mut(|term| {
             let idx = match term.monomial.product[..]
                 .binary_search_by_key(&Reverse(variable), |v| Reverse(&v.id))
@@ -740,7 +689,7 @@ where
             };
 
             let var = &mut term.monomial.product[idx];
-            term.coefficient *= &C::from(var.power.clone());
+            term.coefficient *= &P::Ring::from(var.power.clone());
             var.power -= &P::one();
             if var.power.is_zero() {
                 term.monomial.product.remove(idx);
@@ -753,7 +702,7 @@ where
     }
 }
 
-impl<O, I: Clone, C: Clone, P: Clone> Clone for Polynomial<O, I, C, P> {
+impl<P: PolyTypes> Clone for Polynomial<P> {
     fn clone(&self) -> Self {
         Self {
             terms: self.terms.clone(),
@@ -761,32 +710,15 @@ impl<O, I: Clone, C: Clone, P: Clone> Clone for Polynomial<O, I, C, P> {
     }
 }
 
-impl<O, I, C, P> Eq for Polynomial<O, I, C, P>
-where
-    I: Id,
-    C: CommutativeRing,
-    P: Exponent,
-{
-}
+impl<P: PolyTypes> Eq for Polynomial<P> {}
 
-impl<O, I, C, P> PartialEq for Polynomial<O, I, C, P>
-where
-    I: Id,
-    C: CommutativeRing,
-    P: Exponent,
-{
+impl<P: PolyTypes> PartialEq for Polynomial<P> {
     fn eq(&self, rhs: &Self) -> bool {
         self.terms == rhs.terms
     }
 }
 
-impl<O, I, C, P> Ord for Polynomial<O, I, C, P>
-where
-    O: Ordering,
-    I: Id,
-    C: CommutativeRing,
-    P: Exponent,
-{
+impl<P: PolyTypes> Ord for Polynomial<P> {
     /// Compare by leading monomials. Non-constant > non-zero constant > zero.
     fn cmp(&self, rhs: &Self) -> CmpOrd {
         match (self.terms.get(0), rhs.terms.get(0)) {
@@ -798,25 +730,13 @@ where
     }
 }
 
-impl<O, I, C, P> PartialOrd for Polynomial<O, I, C, P>
-where
-    O: Ordering,
-    I: Id,
-    C: CommutativeRing,
-    P: Exponent,
-{
+impl<P: PolyTypes> PartialOrd for Polynomial<P> {
     fn partial_cmp(&self, rhs: &Self) -> Option<CmpOrd> {
         Some(self.cmp(rhs))
     }
 }
 
-impl<O, I, C, P> num_traits::Zero for Polynomial<O, I, C, P>
-where
-    O: Ordering,
-    I: Id,
-    C: CommutativeRing,
-    P: Exponent,
-{
+impl<P: PolyTypes> num_traits::Zero for Polynomial<P> {
     fn zero() -> Self {
         Polynomial { terms: Vec::new() }
     }
@@ -827,32 +747,20 @@ where
     }
 }
 
-impl<O, I, C, P> std::ops::Add for Polynomial<O, I, C, P>
-where
-    O: Ordering,
-    I: Id,
-    C: CommutativeRing,
-    P: Exponent,
-{
-    type Output = Polynomial<O, I, C, P>;
+impl<P: PolyTypes> std::ops::Add for Polynomial<P> {
+    type Output = Self;
 
-    fn add(self, rhs: Polynomial<O, I, C, P>) -> Self::Output {
+    fn add(self, rhs: Self) -> Self::Output {
         let mut terms = Vec::new();
         Self::sum_terms(self.terms.into_iter(), rhs.terms.into_iter(), &mut terms);
         Self { terms }
     }
 }
 
-impl<O, I, C, P> std::ops::Add<C> for Polynomial<O, I, C, P>
-where
-    O: Ordering,
-    I: Id,
-    C: CommutativeRing,
-    P: Exponent,
-{
-    type Output = Polynomial<O, I, C, P>;
+impl<P: PolyTypes> std::ops::Add<P::Ring> for Polynomial<P> {
+    type Output = Self;
 
-    fn add(mut self, rhs: C) -> Self::Output {
+    fn add(mut self, rhs: P::Ring) -> Self::Output {
         let size = self.terms.len();
         let last = &mut self.terms[size - 1];
         if last.monomial.product.is_empty() {
@@ -865,53 +773,36 @@ where
     }
 }
 
-impl<O, I, C, P> std::ops::Neg for Polynomial<O, I, C, P>
-where
-    I: Id,
-    C: CommutativeRing,
-    P: Exponent,
-{
+impl<P: PolyTypes> std::ops::Neg for Polynomial<P> {
     type Output = Self;
 
     fn neg(mut self) -> Self {
         for term in self.terms.iter_mut() {
-            let tmp = std::mem::replace(&mut term.coefficient, C::zero());
+            let tmp = std::mem::replace(&mut term.coefficient, P::Ring::zero());
             term.coefficient -= tmp;
         }
         self
     }
 }
 
-impl<O, I, C, P> std::ops::Sub for Polynomial<O, I, C, P>
-where
-    O: Ordering,
-    I: Id,
-    C: CommutativeRing,
-    P: Exponent,
-{
-    type Output = Polynomial<O, I, C, P>;
+impl<P: PolyTypes> std::ops::Sub for Polynomial<P> {
+    type Output = Self;
 
-    fn sub(self, rhs: Polynomial<O, I, C, P>) -> Self::Output {
+    fn sub(self, rhs: Self) -> Self {
         self + (-rhs)
     }
 }
 
-impl<O, I, C, P> std::ops::Sub<C> for Polynomial<O, I, C, P>
-where
-    O: Ordering,
-    I: Id,
-    C: CommutativeRing,
-    P: Exponent,
-{
-    type Output = Polynomial<O, I, C, P>;
+impl<P: PolyTypes> std::ops::Sub<P::Ring> for Polynomial<P> {
+    type Output = Self;
 
-    fn sub(mut self, rhs: C) -> Self::Output {
+    fn sub(mut self, rhs: P::Ring) -> Self::Output {
         let size = self.terms.len();
         let last = &mut self.terms[size - 1];
         if last.monomial.product.is_empty() {
             last.coefficient -= rhs;
         } else {
-            let mut neg = C::zero();
+            let mut neg = P::Ring::zero();
             neg -= rhs;
             self.terms.push(Term::new_constant(neg));
         }
@@ -920,16 +811,10 @@ where
     }
 }
 
-impl<O, I, C, P> Mul<Polynomial<O, I, C, P>> for &Monomial<O, I, P>
-where
-    O: Ordering,
-    I: Id,
-    C: CommutativeRing,
-    P: Exponent,
-{
-    type Output = Polynomial<O, I, C, P>;
+impl<P: PolyTypes> Mul<Polynomial<P>> for &Monomial<P> {
+    type Output = Polynomial<P>;
 
-    fn mul(self, mut rhs: Polynomial<O, I, C, P>) -> Self::Output {
+    fn mul(self, mut rhs: Polynomial<P>) -> Self::Output {
         for term in rhs.terms.iter_mut() {
             term.monomial = std::mem::replace(&mut term.monomial, Monomial::one()) * self.clone();
         }
@@ -938,16 +823,10 @@ where
     }
 }
 
-impl<O, I, C, P> Mul for &Polynomial<O, I, C, P>
-where
-    O: Ordering,
-    I: Id,
-    C: CommutativeRing,
-    P: Exponent,
-{
-    type Output = Polynomial<O, I, C, P>;
+impl<P: PolyTypes> Mul for &Polynomial<P> {
+    type Output = Self;
 
-    fn mul(self, rhs: &Polynomial<O, I, C, P>) -> Self::Output {
+    fn mul(self, rhs: &Self) -> Self {
         let mut new_terms = std::collections::BTreeMap::new();
 
         let (outer, inner) = if self.terms.len() > rhs.terms.len() {
@@ -989,45 +868,30 @@ where
     }
 }
 
-impl<O, I, C, P> Mul for Polynomial<O, I, C, P>
-where
-    O: Ordering,
-    I: Id,
-    C: CommutativeRing,
-    P: Exponent,
-{
-    type Output = Polynomial<O, I, C, P>;
-    fn mul(self, rhs: Polynomial<O, I, C, P>) -> Self::Output {
+impl<P: PolyTypes> Mul for Polynomial<P> {
+    type Output = Self;
+    fn mul(self, rhs: Self) -> Self {
         &self * &rhs
     }
 }
 
-impl<O, I, C, P> Mul<C> for &Polynomial<O, I, C, P>
-where
-    O: Ordering,
-    I: Id,
-    C: CommutativeRing,
-    P: Exponent,
-{
-    type Output = Polynomial<O, I, C, P>;
+impl<P: PolyTypes> Mul<P::Ring> for &Polynomial<P> {
+    type Output = Self;
 
-    fn mul(self, rhs: C) -> Self::Output {
+    fn mul(self, rhs: P::Ring) -> Self {
         self * &Polynomial::new_constant(rhs)
     }
 }
 
-impl<O, I, C, P, T> num_traits::pow::Pow<T> for Polynomial<O, I, C, P>
+impl<P, T> num_traits::pow::Pow<T> for Polynomial<P>
 where
-    O: Ordering,
-    I: Id,
-    C: CommutativeRing,
-    P: Exponent,
+    P: PolyTypes,
     T: Clone + num_traits::Zero + std::ops::Rem + std::ops::DivAssign + std::convert::From<u8>,
     <T as std::ops::Rem>::Output: num_traits::One + PartialEq,
 {
-    type Output = Polynomial<O, I, C, P>;
+    type Output = Self;
     fn pow(mut self, mut rhs: T) -> Self {
-        let mut ret = Polynomial::new_constant(C::one());
+        let mut ret = Polynomial::new_constant(P::Ring::one());
 
         if !rhs.is_zero() {
             loop {
@@ -1048,10 +912,10 @@ where
     }
 }
 
-impl<O, I, P> std::fmt::Display for Monomial<O, I, P>
+impl<P: PolyTypes> Display for Monomial<P>
 where
-    I: Id + std::fmt::Display,
-    P: Exponent + std::fmt::Display,
+    P::Id: Display,
+    P::Exp: Display,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut iter = self.product.iter();
@@ -1075,27 +939,24 @@ where
     }
 }
 
-impl<O, I, C, P> std::fmt::Display for Term<O, I, C, P>
+impl<P: PolyTypes> Display for Term<P>
 where
-    I: Id + std::fmt::Display,
-    C: CommutativeRing + std::fmt::Display,
-    P: Exponent + std::fmt::Display,
+    P::Monomial: Display,
+    P::Ring: Display,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match (self.coefficient.is_one(), self.monomial.product.is_empty()) {
             (false, false) => write!(f, "{}*{}", self.coefficient, self.monomial),
-            (false, true) => std::fmt::Display::fmt(&self.coefficient, f),
-            (true, false) => std::fmt::Display::fmt(&self.monomial, f),
+            (false, true) => Display::fmt(&self.coefficient, f),
+            (true, false) => Display::fmt(&self.monomial, f),
             (true, true) => write!(f, "1"),
         }
     }
 }
 
-impl<O, I, C, P> std::fmt::Display for Polynomial<O, I, C, P>
+impl<P: PolyTypes> Display for Polynomial<P>
 where
-    I: Id + std::fmt::Display,
-    C: CommutativeRing + std::fmt::Display,
-    P: Exponent + std::fmt::Display,
+    P::Term: Display,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut iter = self.terms.iter();
@@ -1117,6 +978,48 @@ where
     }
 }
 
+/// Helper trait to keep all the types associated with concrete polynomial instantiation.
+pub trait PolyTypes {
+    /// Monomial ordering.
+    type Ordering: Ordering;
+
+    /// Type of the id of a variable.
+    type Id: Id;
+
+    /// Type of the ground ring.
+    type Ring: CommutativeRing;
+
+    /// Type of the exponent.
+    type Exp: Exponent;
+
+    /// Type of a variable to some power.
+    type VariablePower = VariablePower<Self>;
+
+    /// Type of the monomial.
+    type Monomial = Monomial<Self>;
+
+    /// Type of a term (coefficient times a monomial).
+    type Term = Term<Self>;
+
+    /// Type of the polynomial.
+    type Poly = Polynomial<Self>;
+}
+
+/// Helper struct to make it easy to instantiate a new polynomial type.
+pub struct PolyTypesImpl<O: Ordering, I: Id, R: CommutativeRing, E: Exponent> {
+    _ordering: PhantomData<O>,
+    _id: PhantomData<I>,
+    _ring: PhantomData<R>,
+    _exp: PhantomData<E>,
+}
+
+impl<O: Ordering, I: Id, R: CommutativeRing, E: Exponent> PolyTypes for PolyTypesImpl<O, I, R, E> {
+    type Ordering = O;
+    type Id = I;
+    type Ring = R;
+    type Exp = E;
+}
+
 impl CommutativeRing for i32 {}
 impl Exponent for u16 {}
 impl Exponent for i16 {}
@@ -1131,7 +1034,7 @@ mod tests {
 
     use super::*;
 
-    pub type SmallPoly = Polynomial<monomial_ordering::Lex, u8, i32, u16>;
+    type SmallPoly = PolyTypesImpl<monomial_ordering::Lex, u8, i32, u16>;
 
     #[test]
     fn map_build_time() {
