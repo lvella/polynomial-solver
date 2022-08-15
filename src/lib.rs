@@ -7,6 +7,7 @@
 pub mod factorization;
 pub mod finite_field;
 pub mod gcd;
+pub mod kd_tree;
 pub mod polynomial;
 pub mod prime_field_solvability;
 
