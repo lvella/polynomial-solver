@@ -22,6 +22,31 @@ impl<T: Entry> KDTree<T> {
             self.root.insert(&new_entry, self.num_dimensions, 0);
         }
     }
+
+    /// Perform a tree search, where the user must provide the function telling
+    /// which branch of the tree to search, and a function to process every
+    /// entry found (which returns true if the search must continue, false
+    /// otherwise).
+    pub fn search<D: Fn(&T::KeyElem) -> SearchPath, P: FnMut(&T) -> bool>(
+        &self,
+        discriminator: &D,
+        processor: &mut P,
+    ) {
+        match self.root {
+            Node::Empty => (),
+            _ => {
+                self.root.search(discriminator, processor);
+            }
+        }
+    }
+}
+
+/// What side of the branch a search must take.
+#[derive(PartialEq, Eq)]
+pub enum SearchPath {
+    LessThan,
+    GreaterOrEqualThan,
+    Both,
 }
 
 enum Node<T: Entry> {
@@ -44,7 +69,7 @@ impl<T: Entry> Node<T> {
         let mut sorted_by_dim = Vec::new();
         sorted_by_dim.resize(num_dimensions, elems);
         for (idx, s) in sorted_by_dim.iter_mut().enumerate() {
-            s.sort_unstable_by(|a, b| a.cmp(&b.get_key_elem(idx)));
+            s.sort_unstable_by(|a, b| a.cmp_dim(&b.get_key_elem(idx)));
         }
 
         // Recursively build the tree.
@@ -71,7 +96,7 @@ impl<T: Entry> Node<T> {
         if working_list
             .first()
             .unwrap()
-            .cmp(&working_list.last().unwrap().get_key_elem(dim))
+            .cmp_dim(&working_list.last().unwrap().get_key_elem(dim))
             == Ordering::Equal
         {
             // All the elements have the same key on this dimension, so there is
@@ -89,7 +114,7 @@ impl<T: Entry> Node<T> {
         // elements, and all the elements are equal except for the last.
         let mut split_idx = working_list.len() - 1;
         for (low, high) in (0..middle).rev().zip(middle..) {
-            match working_list[low].cmp(&middle_elem) {
+            match working_list[low].cmp_dim(&middle_elem) {
                 Ordering::Less => {
                     split_idx = low + 1;
                     break;
@@ -98,7 +123,7 @@ impl<T: Entry> Node<T> {
                 Ordering::Greater => unreachable!(),
             }
 
-            match working_list[high].cmp(&middle_elem) {
+            match working_list[high].cmp_dim(&middle_elem) {
                 Ordering::Less => unreachable!(),
                 Ordering::Equal => {}
                 Ordering::Greater => {
@@ -111,7 +136,7 @@ impl<T: Entry> Node<T> {
 
         let split_value = working_list[split_idx].get_key_elem(dim);
         assert!(
-            working_list[split_idx - 1].cmp(&split_value) == Ordering::Less,
+            working_list[split_idx - 1].cmp_dim(&split_value) == Ordering::Less,
             "bug: k-d tree splitting point is at the wrong place"
         );
 
@@ -119,7 +144,7 @@ impl<T: Entry> Node<T> {
         let (mut less, mut greater_or_equal): (Vec<_>, Vec<_>) = iter
             .map(|(sorted_dim, sorted_list)| {
                 let (less, greater_or_equal) =
-                    stable_partition(sorted_list, |e| e.cmp(&split_value) == Ordering::Less);
+                    stable_partition(sorted_list, |e| e.cmp_dim(&split_value) == Ordering::Less);
                 assert!(less.len() == split_idx);
                 ((sorted_dim, less), (sorted_dim, greater_or_equal))
             })
@@ -146,7 +171,7 @@ impl<T: Entry> Node<T> {
                 less_branch,
                 greater_or_equal_branch,
             } => {
-                let path = match new_elem.cmp(split_value) {
+                let path = match new_elem.cmp_dim(split_value) {
                     Ordering::Less => less_branch,
                     Ordering::Equal => greater_or_equal_branch,
                     Ordering::Greater => greater_or_equal_branch,
@@ -156,13 +181,14 @@ impl<T: Entry> Node<T> {
             Node::Entry(existing_elem) => {
                 for i in 0..num_dimensions {
                     let dim = (i + last_dim) % num_dimensions;
-                    let (l, ge): (&T, &T) = match existing_elem.cmp(&new_elem.get_key_elem(dim)) {
+                    let (l, ge): (&T, &T) = match existing_elem.cmp_dim(&new_elem.get_key_elem(dim))
+                    {
                         Ordering::Less => (existing_elem, new_elem),
+                        Ordering::Greater => (new_elem, existing_elem),
                         Ordering::Equal => {
                             // Can't distinguish the elements by this dimension.
                             continue;
                         }
-                        Ordering::Greater => (new_elem, existing_elem),
                     };
 
                     *self = Node::Bifurcation {
@@ -174,6 +200,31 @@ impl<T: Entry> Node<T> {
                 }
                 panic!("this k-d tree implementation does not support repeated elements");
             }
+        }
+    }
+
+    fn search<D: Fn(&T::KeyElem) -> SearchPath, P: FnMut(&T) -> bool>(
+        &self,
+        discriminator: &D,
+        processor: &mut P,
+    ) -> bool {
+        match self {
+            Node::Empty => unreachable!(),
+            Node::Bifurcation {
+                split_value,
+                less_branch,
+                greater_or_equal_branch,
+            } => match discriminator(split_value) {
+                SearchPath::LessThan => less_branch.search(discriminator, processor),
+                SearchPath::GreaterOrEqualThan => {
+                    greater_or_equal_branch.search(discriminator, processor)
+                }
+                SearchPath::Both => {
+                    less_branch.search(discriminator, processor)
+                        && greater_or_equal_branch.search(discriminator, processor)
+                }
+            },
+            Node::Entry(e) => processor(e),
         }
     }
 }
@@ -213,9 +264,9 @@ pub trait Entry: Copy {
 
     fn get_key_elem(&self, dim: usize) -> Self::KeyElem;
 
-    /// Returns an key element in dimension dim in the range (self, other], i.e.
-    /// at dimension dim it must be greater than self and less than or equal
-    /// other, preferably the average between the two.
+    /// Returns a key element in dimension dim in the range defined by
+    /// (self, other], i.e. at dimension dim it must be greater than self
+    /// and less than or equal other, preferably the average between the two.
     ///
     /// `other.get_key_elem(dim);` is always a valid implementation, but if
     /// averaging is possible between key elements, it will give a slightly more
@@ -224,11 +275,156 @@ pub trait Entry: Copy {
 
     /// Compares the corresponding key element inside this entry with the
     /// provided key element.
-    fn cmp(&self, other: &Self::KeyElem) -> Ordering;
+    fn cmp_dim(&self, other: &Self::KeyElem) -> Ordering;
 }
 
 /// One element of the k-dimensional key.
 pub trait KeyElem {
     /// The index of this key element inside the KDEntry.
     fn dim_index(&self) -> usize;
+}
+
+#[cfg(test)]
+mod tests {
+
+    use std::collections::HashSet;
+
+    use rand::{
+        distributions::{Alphanumeric, DistString},
+        rngs::StdRng,
+        Rng, SeedableRng,
+    };
+
+    use super::*;
+
+    /// Defines a 10 dimensional value with 1 string and 9 integers.
+    type TestValue = (String, [i8; 9]);
+
+    /// The entry actually inserted is a reference into the value.
+    type TestEntry<'a> = &'a TestValue;
+
+    /// The key element is either a pointer to the string or one of the integers.
+    pub enum TestKeyElement<'a> {
+        Str(&'a str),
+        Int { dim: u8, val: i8 },
+    }
+
+    impl<'a> Entry for TestEntry<'a> {
+        type KeyElem = TestKeyElement<'a>;
+
+        fn get_key_elem(&self, dim: usize) -> Self::KeyElem {
+            if dim == 0 {
+                TestKeyElement::Str(&self.0)
+            } else {
+                TestKeyElement::Int {
+                    dim: dim as u8,
+                    val: self.1[dim - 1],
+                }
+            }
+        }
+
+        fn average_key_elem(&self, other: &Self, dim: usize) -> Self::KeyElem {
+            if dim == 0 {
+                // Too hard to average two strings, just return the bigger one.
+                other.get_key_elem(0)
+            } else {
+                let lower = self.1[dim - 1];
+                let higher = other.1[dim - 1];
+
+                TestKeyElement::Int {
+                    dim: dim as u8,
+                    val: div_up(lower + higher, 2),
+                }
+            }
+        }
+
+        fn cmp_dim(&self, other: &Self::KeyElem) -> Ordering {
+            match other {
+                TestKeyElement::Str(other) => self.0.as_str().cmp(other),
+                TestKeyElement::Int { dim, val } => self.1[(dim - 1) as usize].cmp(val),
+            }
+        }
+    }
+
+    fn div_up(a: i8, b: i8) -> i8 {
+        (a + (b - 1)) / b
+    }
+
+    impl<'a> KeyElem for TestKeyElement<'a> {
+        fn dim_index(&self) -> usize {
+            match self {
+                TestKeyElement::Str(_) => 0,
+                TestKeyElement::Int { dim, val: _ } => *dim as usize,
+            }
+        }
+    }
+
+    fn rand_string<R: Rng>(rng: &mut R) -> String {
+        let size = rng.gen_range(2usize..=10);
+        Alphanumeric.sample_string(rng, size)
+    }
+
+    #[test]
+    fn build_and_query() {
+        let mut rng = StdRng::seed_from_u64(42);
+
+        // Generate 10000 distinct elements to be inserted into the k-d tree.
+        let mut elem_set = HashSet::new();
+        while elem_set.len() < 10000 {
+            let mut new_elem = (rand_string(&mut rng), [0i8; 9]);
+            for e in new_elem.1.iter_mut() {
+                *e = rng.gen_range(-50..=50);
+            }
+            elem_set.insert(new_elem);
+        }
+
+        let elem_vec: Vec<_> = elem_set.into_iter().collect();
+
+        // Build the k-d tree with only the first 8000 elements and run the
+        // query test.
+        let originals = &elem_vec[..8000];
+        let mut kdtree: KDTree<TestEntry> = KDTree::new(10, originals.iter().collect());
+        query_test(&kdtree, originals);
+
+        // Insert the remaining elements and redo the query test.
+        for e in elem_vec[8000..].iter() {
+            kdtree.insert(e);
+        }
+        query_test(&kdtree, &elem_vec);
+    }
+
+    fn query_test(kdtree: &KDTree<TestEntry>, elems: &[TestValue]) {
+        // Search all elements less than or equal the reference:
+        let reference: TestValue = ("Q".into(), [-12, 0, -7, 18, 40, -3, -39, 30, 30]);
+
+        let is_less_or_equal = |e: &TestEntry| {
+            (0usize..10).all(|dim| e.cmp_dim(&(&reference).get_key_elem(dim)) != Ordering::Greater)
+        };
+
+        let mut tree_found = Vec::new();
+        kdtree.search(
+            &|key| match (&reference).cmp_dim(key) {
+                Ordering::Less => SearchPath::LessThan,
+                Ordering::Equal => SearchPath::Both,
+                Ordering::Greater => SearchPath::Both,
+            },
+            &mut |e| {
+                if is_less_or_equal(e) {
+                    tree_found.push(*e);
+                }
+                true
+            },
+        );
+        tree_found.sort();
+
+        // Linearly filter from the total set of elements, for comparison:
+        let mut filtered_found: Vec<TestEntry> = elems.iter().filter(is_less_or_equal).collect();
+        filtered_found.sort();
+        assert!(tree_found == filtered_found);
+
+        for (a, b) in tree_found.iter().zip(filtered_found.iter()) {
+            println!("{:?}, {:?}", **a, **b);
+        }
+        println!("{}, {}", tree_found.len(), filtered_found.len());
+    }
 }
