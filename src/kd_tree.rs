@@ -2,24 +2,50 @@ use std::cmp::Ordering;
 
 /// Implementation of the classical data structure k-dimensional tree for
 /// multidimensional indexing.
-pub struct KDTree<T: Entry> {
+///
+/// Entry is the value stored in the leafs. Node data is some data built bottom
+/// up the user may store in each branch node to help in the search.
+pub struct KDTree<E: Entry, NodeData> {
     num_dimensions: usize,
-    root: Node<T>,
+    root: Node<E, NodeData>,
 }
 
-impl<T: Entry> KDTree<T> {
-    pub fn new(num_dimensions: usize, elems: Vec<T>) -> Self {
+impl<E: Entry, NodeData> KDTree<E, NodeData> {
+    pub fn new<T>(
+        num_dimensions: usize,
+        elems: Vec<E>,
+        map: &impl Fn(&E) -> T,
+        builder: &impl Fn(T, T) -> (NodeData, T),
+    ) -> Self {
         Self {
             num_dimensions,
-            root: Node::new(num_dimensions, elems),
+            root: Node::new(num_dimensions, elems, map, builder),
         }
     }
 
-    pub fn insert(&mut self, new_entry: T) {
+    /// Insert a new element and update all the node data up to the tree root.
+    ///
+    /// # Arguments
+    ///
+    /// * `new_entry` - The new entry to be inserted.
+    /// * `builder` - Function that takes a reference to two entries and builds
+    ///   the data for the node containing them, and the data to update the
+    ///   upper branch.
+    /// * `updater` - Takes a mutable reference to the data from the current
+    ///   node, the update data from the changed inner branch, and must update
+    ///   the node data and produce the update data for the upper node in the
+    ///   tree.
+    pub fn insert<T>(
+        &mut self,
+        new_entry: E,
+        builder: &impl Fn(&E, &E) -> (NodeData, T),
+        updater: &impl Fn(&mut NodeData, T) -> T,
+    ) {
         if let Node::Empty = self.root {
             self.root = Node::Entry(new_entry);
         } else {
-            self.root.insert(&new_entry, self.num_dimensions, 0);
+            self.root
+                .insert(&new_entry, self.num_dimensions, 0, builder, updater);
         }
     }
 
@@ -27,10 +53,10 @@ impl<T: Entry> KDTree<T> {
     /// which branch of the tree to search, and a function to process every
     /// entry found (which returns true if the search must continue, false
     /// otherwise).
-    pub fn search<D: Fn(&T::KeyElem) -> SearchPath, P: FnMut(&T) -> bool>(
+    pub fn search(
         &self,
-        discriminator: &D,
-        processor: &mut P,
+        discriminator: &impl Fn(&E::KeyElem, &NodeData) -> SearchPath,
+        processor: &mut impl FnMut(&E) -> bool,
     ) {
         match self.root {
             Node::Empty => (),
@@ -49,18 +75,24 @@ pub enum SearchPath {
     Both,
 }
 
-enum Node<T: Entry> {
+enum Node<E: Entry, NodeData> {
     Empty,
     Bifurcation {
-        split_value: T::KeyElem,
+        split_value: E::KeyElem,
+        node_data: NodeData,
         less_branch: Box<Self>,
         greater_or_equal_branch: Box<Self>,
     },
-    Entry(T),
+    Entry(E),
 }
 
-impl<T: Entry> Node<T> {
-    fn new(num_dimensions: usize, elems: Vec<T>) -> Self {
+impl<E: Entry, NodeData> Node<E, NodeData> {
+    fn new<T>(
+        num_dimensions: usize,
+        elems: Vec<E>,
+        map: &impl Fn(&E) -> T,
+        builder: &impl Fn(T, T) -> (NodeData, T),
+    ) -> Self {
         if elems.is_empty() {
             return Self::Empty;
         }
@@ -73,23 +105,28 @@ impl<T: Entry> Node<T> {
         }
 
         // Recursively build the tree.
-        let sorted_by_dim: Vec<(usize, &mut [T])> = sorted_by_dim
+        let sorted_by_dim: Vec<(usize, &mut [E])> = sorted_by_dim
             .iter_mut()
             .enumerate()
             .map(|(dim, v)| (dim, &mut v[..]))
             .collect();
-        Self::build_tree(sorted_by_dim)
+        Self::build_tree(sorted_by_dim, map, builder).0
     }
 
     /// Gets the set of elements to be inserted on the list sorted by each one
     /// of the key dimension and build the tree.
-    fn build_tree(sorted_by_dim: Vec<(usize, &mut [T])>) -> Self {
+    fn build_tree<T>(
+        sorted_by_dim: Vec<(usize, &mut [E])>,
+        map: &impl Fn(&E) -> T,
+        builder: &impl Fn(T, T) -> (NodeData, T),
+    ) -> (Self, T) {
         let mut iter = sorted_by_dim.into_iter();
         let (dim, working_list) = iter.next().unwrap();
 
         // Handle leaf case
         if working_list.len() == 1 {
-            return Node::Entry(working_list[0]);
+            let entry = working_list[0];
+            return (Node::Entry(entry), map(&entry));
         }
 
         // Maybe eliminate this dimension if the elements are all equal on it.
@@ -101,7 +138,7 @@ impl<T: Entry> Node<T> {
         {
             // All the elements have the same key on this dimension, so there is
             // no point indexing by it. Recurse with only the other dimensions.
-            return Self::build_tree(iter.collect());
+            return Self::build_tree(iter.collect(), map, builder);
         }
 
         // Find the splitting point. Start from the middle
@@ -156,32 +193,56 @@ impl<T: Entry> Node<T> {
         less.push((dim, l));
         greater_or_equal.push((dim, ge));
 
-        Node::Bifurcation {
-            split_value,
-            less_branch: Box::new(Self::build_tree(less)),
-            greater_or_equal_branch: Box::new(Self::build_tree(greater_or_equal)),
-        }
+        let (l_branch, l_data) = Self::build_tree(less, map, builder);
+        let (ge_branch, ge_data) = Self::build_tree(greater_or_equal, map, builder);
+        let (node_data, ret_data) = builder(l_data, ge_data);
+
+        (
+            Node::Bifurcation {
+                split_value,
+                less_branch: Box::new(l_branch),
+                greater_or_equal_branch: Box::new(ge_branch),
+                node_data,
+            },
+            ret_data,
+        )
     }
 
-    fn insert(&mut self, new_elem: &T, num_dimensions: usize, last_dim: usize) {
+    fn insert<T>(
+        &mut self,
+        new_elem: &E,
+        num_dimensions: usize,
+        last_dim: usize,
+        builder: &impl Fn(&E, &E) -> (NodeData, T),
+        updater: &impl Fn(&mut NodeData, T) -> T,
+    ) -> T {
         match self {
             Node::Empty => unreachable!(),
             Node::Bifurcation {
                 split_value,
                 less_branch,
                 greater_or_equal_branch,
+                node_data,
             } => {
                 let path = match new_elem.cmp_dim(split_value) {
                     Ordering::Less => less_branch,
                     Ordering::Equal => greater_or_equal_branch,
                     Ordering::Greater => greater_or_equal_branch,
                 };
-                path.insert(new_elem, num_dimensions, split_value.dim_index());
+                let update_data = path.insert(
+                    new_elem,
+                    num_dimensions,
+                    split_value.dim_index(),
+                    builder,
+                    updater,
+                );
+
+                updater(node_data, update_data)
             }
             Node::Entry(existing_elem) => {
                 for i in 0..num_dimensions {
                     let dim = (i + last_dim) % num_dimensions;
-                    let (l, ge): (&T, &T) = match existing_elem.cmp_dim(&new_elem.get_key_elem(dim))
+                    let (l, ge): (&E, &E) = match existing_elem.cmp_dim(&new_elem.get_key_elem(dim))
                     {
                         Ordering::Less => (existing_elem, new_elem),
                         Ordering::Greater => (new_elem, existing_elem),
@@ -191,22 +252,25 @@ impl<T: Entry> Node<T> {
                         }
                     };
 
+                    let (node_data, ret) = builder(l, ge);
+
                     *self = Node::Bifurcation {
                         split_value: l.average_key_elem(ge, dim),
                         less_branch: Box::new(Node::Entry(*l)),
                         greater_or_equal_branch: Box::new(Node::Entry(*ge)),
+                        node_data,
                     };
-                    return;
+                    return ret;
                 }
                 panic!("this k-d tree implementation does not support repeated elements");
             }
         }
     }
 
-    fn search<D: Fn(&T::KeyElem) -> SearchPath, P: FnMut(&T) -> bool>(
+    fn search(
         &self,
-        discriminator: &D,
-        processor: &mut P,
+        discriminator: &impl Fn(&E::KeyElem, &NodeData) -> SearchPath,
+        processor: &mut impl FnMut(&E) -> bool,
     ) -> bool {
         match self {
             Node::Empty => unreachable!(),
@@ -214,7 +278,8 @@ impl<T: Entry> Node<T> {
                 split_value,
                 less_branch,
                 greater_or_equal_branch,
-            } => match discriminator(split_value) {
+                node_data,
+            } => match discriminator(split_value, node_data) {
                 SearchPath::LessThan => less_branch.search(discriminator, processor),
                 SearchPath::GreaterOrEqualThan => {
                     greater_or_equal_branch.search(discriminator, processor)
@@ -287,8 +352,6 @@ pub trait KeyElem {
 #[cfg(test)]
 mod tests {
 
-    use std::collections::HashSet;
-
     use rand::{
         distributions::{Alphanumeric, DistString},
         rngs::StdRng,
@@ -308,6 +371,8 @@ mod tests {
         Str(&'a str),
         Int { dim: u8, val: i8 },
     }
+
+    type TestKDTree<'a> = KDTree<TestEntry<'a>, ()>;
 
     impl<'a> Entry for TestEntry<'a> {
         type KeyElem = TestKeyElement<'a>;
@@ -368,32 +433,31 @@ mod tests {
     fn build_and_query() {
         let mut rng = StdRng::seed_from_u64(42);
 
-        // Generate 10000 distinct elements to be inserted into the k-d tree.
-        let mut elem_set = HashSet::new();
-        while elem_set.len() < 10000 {
+        // Generate 10000 elements to be inserted into the k-d tree.
+        // Just hope they are distinct for the seed given.
+        let mut elem_vec = Vec::new();
+        while elem_vec.len() < 10000 {
             let mut new_elem = (rand_string(&mut rng), [0i8; 9]);
             for e in new_elem.1.iter_mut() {
                 *e = rng.gen_range(-50..=50);
             }
-            elem_set.insert(new_elem);
+            elem_vec.push(new_elem);
         }
-
-        let elem_vec: Vec<_> = elem_set.into_iter().collect();
 
         // Build the k-d tree with only the first 8000 elements and run the
         // query test.
         let originals = &elem_vec[..8000];
-        let mut kdtree: KDTree<TestEntry> = KDTree::new(10, originals.iter().collect());
+        let mut kdtree = TestKDTree::new(10, originals.iter().collect(), &|_| (), &|_, _| ((), ()));
         query_test(&kdtree, originals);
 
         // Insert the remaining elements and redo the query test.
         for e in elem_vec[8000..].iter() {
-            kdtree.insert(e);
+            kdtree.insert(e, &|_, _| ((), ()), &|_, _| ());
         }
         query_test(&kdtree, &elem_vec);
     }
 
-    fn query_test(kdtree: &KDTree<TestEntry>, elems: &[TestValue]) {
+    fn query_test(kdtree: &KDTree<TestEntry, ()>, elems: &[TestValue]) {
         // Search all elements less than or equal the reference:
         let reference: TestValue = ("Q".into(), [-12, 0, -7, 18, 40, -3, -39, 30, 30]);
 
@@ -403,7 +467,7 @@ mod tests {
 
         let mut tree_found = Vec::new();
         kdtree.search(
-            &|key| match (&reference).cmp_dim(key) {
+            &|key, _| match (&reference).cmp_dim(key) {
                 Ordering::Less => SearchPath::LessThan,
                 Ordering::Equal => SearchPath::Both,
                 Ordering::Greater => SearchPath::Both,
