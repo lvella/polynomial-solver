@@ -23,19 +23,19 @@ use crate::{
 
 use super::{
     basis_calculator::SyzygySet, contains_divisor, rewrite_spair, DivMask, KnownBasis,
-    MaskedMonomialRef, MaskedSignature, PointedCmp, Ratio, SignPoly, Signature, SignedPower,
+    MaskedMonomialRef, MaskedSignature, PointedCmp, Ratio, SignPoly, Signature, SignedExponent,
 };
 
 /// Half S-pair
 ///
 /// This contains only what is needed to classify the S-pair (the signature), and
 /// the index of the other polynomial needed to build the full S-pair.
-struct HalfSPair<O: Ordering, I: Id, P: SignedPower> {
+struct HalfSPair<O: Ordering, I: Id, P: SignedExponent> {
     signature: Signature<O, I, P>,
     idx: u32,
 }
 
-impl<O: Ordering, I: Id, P: SignedPower> HalfSPair<O, I, P> {
+impl<O: Ordering, I: Id, P: SignedExponent> HalfSPair<O, I, P> {
     /// Creates a new S-pair, if not eliminated by early elimination criteria.
     ///
     /// On error, tells if S-pair is known to reduce to zero.
@@ -144,7 +144,7 @@ impl<O: Ordering, I: Id, P: SignedPower> HalfSPair<O, I, P> {
 }
 
 /// Elements of the SPairTriangle, ordered by head_spair signature.
-struct SPairColumn<O: Ordering, I: Id, P: SignedPower> {
+struct SPairColumn<O: Ordering, I: Id, P: SignedExponent> {
     head_spair: HalfSPair<O, I, P>,
 
     /// The index of the polynomial S-pairing with the others in the colum.
@@ -157,21 +157,21 @@ struct SPairColumn<O: Ordering, I: Id, P: SignedPower> {
     column: Vec<u32>,
 }
 
-impl<O: Ordering, I: Id, P: SignedPower> PartialEq for SPairColumn<O, I, P> {
+impl<O: Ordering, I: Id, P: SignedExponent> PartialEq for SPairColumn<O, I, P> {
     fn eq(&self, other: &Self) -> bool {
         self.head_spair.signature.eq(&other.head_spair.signature)
     }
 }
 
-impl<O: Ordering, I: Id, P: SignedPower> Eq for SPairColumn<O, I, P> {}
+impl<O: Ordering, I: Id, P: SignedExponent> Eq for SPairColumn<O, I, P> {}
 
-impl<O: Ordering, I: Id, P: SignedPower> PartialOrd for SPairColumn<O, I, P> {
+impl<O: Ordering, I: Id, P: SignedExponent> PartialOrd for SPairColumn<O, I, P> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(&other))
     }
 }
 
-impl<O: Ordering, I: Id, P: SignedPower> Ord for SPairColumn<O, I, P> {
+impl<O: Ordering, I: Id, P: SignedExponent> Ord for SPairColumn<O, I, P> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // The elements are ordered in descending order so that
         // the binary heap will return the smallest element.
@@ -180,13 +180,13 @@ impl<O: Ordering, I: Id, P: SignedPower> Ord for SPairColumn<O, I, P> {
 }
 
 /// S-Pair where only the leading term has been evaluated.
-pub struct PartialSPair<'a, O: Ordering, I: Id, C: Field, P: SignedPower> {
+pub struct PartialSPair<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> {
     pub leading_term: Term<O, I, C, P>,
     iter_p: Box<(dyn Iterator<Item = Term<O, I, C, P>> + 'a)>,
     iter_q: Box<(dyn Iterator<Item = Term<O, I, C, P>> + 'a)>,
 }
 
-impl<'a, O: Ordering, I: Id, C: Field, P: SignedPower> From<PartialSPair<'a, O, I, C, P>>
+impl<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> From<PartialSPair<'a, O, I, C, P>>
     for Polynomial<O, I, C, P>
 {
     /// Complete the calculation of PartialSPair into a SigPoly
@@ -197,7 +197,7 @@ impl<'a, O: Ordering, I: Id, C: Field, P: SignedPower> From<PartialSPair<'a, O, 
     }
 }
 
-impl<'a, O: Ordering, I: Id, C: Field, P: SignedPower> PartialSPair<'a, O, I, C, P> {
+impl<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> PartialSPair<'a, O, I, C, P> {
     /// Creates a partial S-pair with a leading term plus enough information
     /// to finish the computation. Performs relativelly prime elimination
     /// criterion, and return None if the S-pair was either eliminated or
@@ -274,12 +274,12 @@ impl<'a, O: Ordering, I: Id, C: Field, P: SignedPower> PartialSPair<'a, O, I, C,
 ///
 /// TODO: Test without this criterion again when a proper multidimensional index
 /// have been implemented, because right now it makes things worse, not better.
-struct BaseDivisors<'a, O: Ordering, I: Id, C: Field, P: SignedPower> {
+struct BaseDivisors<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> {
     high: Option<HighBaseDivisor<'a, O, I, C, P>>,
     low: Option<LowBaseDivisor<'a, O, I, C, P>>,
 }
 
-impl<'a, O: Ordering, I: Id, C: Field, P: SignedPower> BaseDivisors<'a, O, I, C, P> {
+impl<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> BaseDivisors<'a, O, I, C, P> {
     fn new(sign_poly: &SignPoly<O, I, C, P>, basis: &KnownBasis<O, I, C, P>) -> Self {
         Self {
             high: HighBaseDivisor::new(sign_poly, basis),
@@ -288,9 +288,11 @@ impl<'a, O: Ordering, I: Id, C: Field, P: SignedPower> BaseDivisors<'a, O, I, C,
     }
 }
 
-struct HighBaseDivisor<'a, O: Ordering, I: Id, C: Field, P: SignedPower>(&'a SignPoly<O, I, C, P>);
+struct HighBaseDivisor<'a, O: Ordering, I: Id, C: Field, P: SignedExponent>(
+    &'a SignPoly<O, I, C, P>,
+);
 
-impl<'a, O: Ordering, I: Id, C: Field, P: SignedPower> HighBaseDivisor<'a, O, I, C, P> {
+impl<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> HighBaseDivisor<'a, O, I, C, P> {
     fn new(sign_poly: &SignPoly<O, I, C, P>, basis: &KnownBasis<O, I, C, P>) -> Option<Self> {
         let lm = &sign_poly.leading_monomial();
 
@@ -317,13 +319,13 @@ impl<'a, O: Ordering, I: Id, C: Field, P: SignedPower> HighBaseDivisor<'a, O, I,
 /// variable_id for each iterator. If some variable is not present in some
 /// iterator, the value is set to zero. As long as a variable id is present in
 /// at least one iterator, it will be output.
-struct MultiVarWalk<'a, I: 'a + Id, P: 'a + SignedPower> {
+struct MultiVarWalk<'a, I: 'a + Id, P: 'a + SignedExponent> {
     iters: Vec<&'a mut dyn Iterator<Item = &'a VariablePower<I, P>>>,
     current: Vec<Option<&'a VariablePower<I, P>>>,
     next_id: Option<I>,
 }
 
-impl<'a, I: 'a + Id, P: 'a + SignedPower> MultiVarWalk<'a, I, P> {
+impl<'a, I: 'a + Id, P: 'a + SignedExponent> MultiVarWalk<'a, I, P> {
     fn new(mut iters: Vec<&'a mut dyn Iterator<Item = &'a VariablePower<I, P>>>) -> Self {
         let mut next_id = None;
 
@@ -356,7 +358,7 @@ impl<'a, I: 'a + Id, P: 'a + SignedPower> MultiVarWalk<'a, I, P> {
     }
 }
 
-impl<'a, I: 'a + Id, P: 'a + SignedPower> Iterator for MultiVarWalk<'a, I, P> {
+impl<'a, I: 'a + Id, P: 'a + SignedExponent> Iterator for MultiVarWalk<'a, I, P> {
     type Item = (I, Vec<P>);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -389,14 +391,14 @@ impl<'a, I: 'a + Id, P: 'a + SignedPower> Iterator for MultiVarWalk<'a, I, P> {
 }
 
 /// Low base divisor information
-struct LowBaseDivisor<'a, O: Ordering, I: Id, C: Field, P: SignedPower> {
+struct LowBaseDivisor<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> {
     divisor: &'a SignPoly<O, I, C, P>,
     /// The x^v in the paper.
     discriminator: Monomial<O, I, P>,
     discriminator_mask: DivMask,
 }
 
-impl<'a, O: Ordering, I: Id, C: Field, P: SignedPower> LowBaseDivisor<'a, O, I, C, P> {
+impl<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> LowBaseDivisor<'a, O, I, C, P> {
     /// For low base divisor, find the polynomial with maximum sign/lm ratio
     /// whose signature divides sign_poly.
     fn new(sign_poly: &SignPoly<O, I, C, P>, basis: &KnownBasis<O, I, C, P>) -> Option<Self> {
@@ -549,7 +551,7 @@ impl Index<(u32, u32)> for SyzygyTriangle {
 /// Data structure defined in the paper to efficiently store and quickly
 /// retrieve the S-pair with minimal signature. This is basically a
 /// heap of ordered vectors.
-pub struct SPairTriangle<O: Ordering, I: Id, P: SignedPower> {
+pub struct SPairTriangle<O: Ordering, I: Id, P: SignedExponent> {
     /// Stores the S-pairs to be reduced.
     heads: BinaryHeap<SPairColumn<O, I, P>>,
 
@@ -557,7 +559,7 @@ pub struct SPairTriangle<O: Ordering, I: Id, P: SignedPower> {
     reduces_to_zero: SyzygyTriangle,
 }
 
-impl<O: Ordering, I: Id + Display, P: SignedPower + Display> SPairTriangle<O, I, P> {
+impl<O: Ordering, I: Id + Display, P: SignedExponent + Display> SPairTriangle<O, I, P> {
     pub fn new() -> Self {
         SPairTriangle {
             heads: BinaryHeap::new(),

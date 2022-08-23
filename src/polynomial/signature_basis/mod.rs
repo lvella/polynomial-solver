@@ -5,6 +5,7 @@
 
 mod basis_calculator;
 mod s_pairs;
+mod signature_monomial_index;
 
 use std::{collections::BTreeMap, fmt::Display};
 
@@ -28,7 +29,7 @@ type Ratio<O, I, P> = crate::fast_compare::FastCompared<Signature<O, I, P>>;
 /// Tests if a set contains a divisor for a signature.
 ///
 /// This is basically the implementation of signature criterion.
-fn contains_divisor<O: Ordering, I: Id, P: SignedPower>(
+fn contains_divisor<O: Ordering, I: Id, P: SignedExponent>(
     msign: &MaskedSignature<O, I, P>,
     set: &SyzygySet<O, I, P>,
 ) -> bool {
@@ -53,8 +54,8 @@ fn contains_divisor<O: Ordering, I: Id, P: SignedPower>(
 /// The Power type must be signed for this algorithm to work,
 /// because we store the signature to leading monomial ratio, where
 /// variable exponents can be negative.
-pub trait SignedPower: Exponent + Signed {}
-impl<T> SignedPower for T where T: Exponent + Signed {}
+pub trait SignedExponent: Exponent + Signed {}
+impl<T> SignedExponent for T where T: Exponent + Signed {}
 
 type DivMaskSize = u32;
 type DivMap<P> = divmask::DivMap<DivMaskSize, P>;
@@ -62,12 +63,12 @@ type DivMask = divmask::DivMask<DivMaskSize>;
 
 /// Wraps together a divmask and a (hopefully) corresponding monomial, wrapping
 /// the divisibility test.
-struct MaskedMonomialRef<'a, O: Ordering, I: Id, P: SignedPower>(
+struct MaskedMonomialRef<'a, O: Ordering, I: Id, P: SignedExponent>(
     &'a DivMask,
     &'a Monomial<O, I, P>,
 );
 
-impl<'a, O: Ordering, I: Id, P: SignedPower> MaskedMonomialRef<'a, O, I, P> {
+impl<'a, O: Ordering, I: Id, P: SignedExponent> MaskedMonomialRef<'a, O, I, P> {
     /// Uses the fast divmask comparison, and if it fails, uses the slow direct
     /// monomial comparison.
     fn divides(&self, other: &Self) -> bool {
@@ -87,24 +88,24 @@ impl<'a, O: Ordering, I: Id, P: SignedPower> MaskedMonomialRef<'a, O, I, P> {
 /// There is a total order among signatures that is related to the monomial
 /// ordering.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Signature<O: Ordering, I: Id, P: SignedPower> {
+pub struct Signature<O: Ordering, I: Id, P: SignedExponent> {
     idx: u32,
     monomial: Monomial<O, I, P>,
 }
 
-impl<O: Ordering, I: Id + Display, P: SignedPower + Display> Display for Signature<O, I, P> {
+impl<O: Ordering, I: Id + Display, P: SignedExponent + Display> Display for Signature<O, I, P> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{{{}, {}}}", self.idx, self.monomial)
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MaskedSignature<O: Ordering, I: Id, P: SignedPower> {
+pub struct MaskedSignature<O: Ordering, I: Id, P: SignedExponent> {
     divmask: DivMask,
     signature: Signature<O, I, P>,
 }
 
-impl<O: Ordering, I: Id, P: SignedPower> MaskedSignature<O, I, P> {
+impl<O: Ordering, I: Id, P: SignedExponent> MaskedSignature<O, I, P> {
     fn monomial(&self) -> MaskedMonomialRef<O, I, P> {
         MaskedMonomialRef(&self.divmask, &self.signature.monomial)
     }
@@ -114,7 +115,7 @@ impl<O: Ordering, I: Id, P: SignedPower> MaskedSignature<O, I, P> {
 ///
 /// By allowing negative exponents, we can calculate the ratio between
 /// a signature and a monomial, which is useful for comparison.
-fn sign_to_monomial_ratio<O: Ordering, I: Id, P: SignedPower>(
+fn sign_to_monomial_ratio<O: Ordering, I: Id, P: SignedExponent>(
     signature: &Signature<O, I, P>,
     monomial: &Monomial<O, I, P>,
 ) -> Ratio<O, I, P> {
@@ -136,7 +137,7 @@ fn sign_to_monomial_ratio<O: Ordering, I: Id, P: SignedPower>(
 /// polynomial module, but it turns out that representing this element as a pair
 /// (signature, polynomial) is sufficient for all the computations. Other fields
 /// are optimizations.
-pub struct SignPoly<O: Ordering, I: Id, C: Field, P: SignedPower> {
+pub struct SignPoly<O: Ordering, I: Id, C: Field, P: SignedExponent> {
     masked_signature: MaskedSignature<O, I, P>,
 
     polynomial: Polynomial<O, I, C, P>,
@@ -151,7 +152,7 @@ pub struct SignPoly<O: Ordering, I: Id, C: Field, P: SignedPower> {
     sign_to_lm_ratio: Ratio<O, I, P>,
 }
 
-impl<O: Ordering, I: Id + Display, C: Field, P: SignedPower + Display> Display
+impl<O: Ordering, I: Id + Display, C: Field, P: SignedExponent + Display> Display
     for SignPoly<O, I, C, P>
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -165,7 +166,7 @@ impl<O: Ordering, I: Id + Display, C: Field, P: SignedPower + Display> Display
     }
 }
 
-impl<O: Ordering, I: Id, C: Field, P: SignedPower> SignPoly<O, I, C, P> {
+impl<O: Ordering, I: Id, C: Field, P: SignedExponent> SignPoly<O, I, C, P> {
     /// Creates a new Signature Polynomial Builder.
     ///
     /// Polynomial can not be zero, otherwise this will panic.
@@ -227,7 +228,7 @@ impl<T: Ord> Ord for PointedCmp<T> {
 }
 
 /// The 3 possible results of a regular reduction.
-enum RegularReductionResult<O: Ordering, I: Id, C: Field, P: SignedPower> {
+enum RegularReductionResult<O: Ordering, I: Id, C: Field, P: SignedExponent> {
     /// Polynomial was singular top reducible
     Singular,
     /// Polynomial was reduced to zero.
@@ -239,7 +240,7 @@ enum RegularReductionResult<O: Ordering, I: Id, C: Field, P: SignedPower> {
 }
 
 // Search for an basis member to rewrite, and return if not singular.
-fn rewrite_spair<O: Ordering, I: Id, C: Field, P: SignedPower>(
+fn rewrite_spair<O: Ordering, I: Id, C: Field, P: SignedExponent>(
     m_sign: &MaskedSignature<O, I, P>,
     s_pair: PartialSPair<O, I, C, P>,
     basis: &KnownBasis<O, I, C, P>,
@@ -294,7 +295,7 @@ fn rewrite_spair<O: Ordering, I: Id, C: Field, P: SignedPower>(
 /// This is analogous to calculate the remainder on a multivariate polynomial
 /// division, but with extra restrictions on what polynomials can be the divisor
 /// according to their signature.
-fn regular_reduce<O: Ordering, I: Id + Display, C: Field + Display, P: SignedPower + Display>(
+fn regular_reduce<O: Ordering, I: Id + Display, C: Field + Display, P: SignedExponent + Display>(
     idx: u32,
     m_sign: MaskedSignature<O, I, P>,
     s_pair: Polynomial<O, I, C, P>,
@@ -441,7 +442,12 @@ fn regular_reduce<O: Ordering, I: Id + Display, C: Field + Display, P: SignedPow
 /// Calculates a Grobner Basis using the Signature Buchberger (SB) algorithm.
 ///
 /// The returned basis will not be reduced.
-pub fn grobner_basis<O: Ordering, I: Id + Display, C: Field + Display, P: SignedPower + Display>(
+pub fn grobner_basis<
+    O: Ordering,
+    I: Id + Display,
+    C: Field + Display,
+    P: SignedExponent + Display,
+>(
     input: Vec<Polynomial<O, I, C, P>>,
 ) -> Vec<Polynomial<O, I, C, P>> {
     // Initiate the basis calculation with the input polynomials.

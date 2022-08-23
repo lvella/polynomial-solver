@@ -70,6 +70,7 @@ impl<E: Entry, NodeData> KDTree<E, NodeData> {
 /// What side of the branch a search must take.
 #[derive(PartialEq, Eq)]
 pub enum SearchPath {
+    None,
     LessThan,
     GreaterOrEqualThan,
     Both,
@@ -280,6 +281,7 @@ impl<E: Entry, NodeData> Node<E, NodeData> {
                 greater_or_equal_branch,
                 node_data,
             } => match discriminator(split_value, node_data) {
+                SearchPath::None => true,
                 SearchPath::LessThan => less_branch.search(discriminator, processor),
                 SearchPath::GreaterOrEqualThan => {
                     greater_or_equal_branch.search(discriminator, processor)

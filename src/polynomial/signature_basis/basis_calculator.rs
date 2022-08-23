@@ -9,14 +9,14 @@ use crate::polynomial::{
 
 use super::{
     contains_divisor, s_pairs, CmpMap, DivMap, DivMask, MaskedMonomialRef, MaskedSignature,
-    PointedCmp, Ratio, SignPoly, Signature, SignedPower,
+    PointedCmp, Ratio, SignPoly, Signature, SignedExponent,
 };
 
 /// Stores all the basis elements known and processed so far.
 ///
 /// Everything is public because all fields must be read by the user, and the
 /// user can only get an immutable reference.
-pub struct KnownBasis<O: Ordering, I: Id, C: Field, P: SignedPower> {
+pub struct KnownBasis<O: Ordering, I: Id, C: Field, P: SignedExponent> {
     /// Tracks the maximum exponent seen for each variable, and the evolution.
     pub max_exp: MaximumExponentsTracker<P>,
 
@@ -39,7 +39,7 @@ pub struct KnownBasis<O: Ordering, I: Id, C: Field, P: SignedPower> {
     // monomial variables.
 }
 
-impl<O: Ordering, I: Id + Display, C: Field + Display, P: SignedPower + Display>
+impl<O: Ordering, I: Id + Display, C: Field + Display, P: SignedExponent + Display>
     KnownBasis<O, I, C, P>
 {
     pub(super) fn find_a_regular_reducer(
@@ -66,7 +66,7 @@ impl<O: Ordering, I: Id + Display, C: Field + Display, P: SignedPower + Display>
 pub type SyzygySet<O, I, P> = BTreeMap<Signature<O, I, P>, DivMask>;
 
 /// Hold together the structures that must be coherent during the algorithm execution
-pub struct BasisCalculator<O: Ordering, I: Id, C: Field, P: SignedPower> {
+pub struct BasisCalculator<O: Ordering, I: Id, C: Field, P: SignedExponent> {
     /// The basis elements and syzygies.
     basis: KnownBasis<O, I, C, P>,
 
@@ -86,7 +86,7 @@ pub struct BasisCalculator<O: Ordering, I: Id, C: Field, P: SignedPower> {
     ratio_map: CmpMap<O, I, P>,
 }
 
-impl<O: Ordering, I: Id + Display, C: Field + Display, P: SignedPower + Display>
+impl<O: Ordering, I: Id + Display, C: Field + Display, P: SignedExponent + Display>
     BasisCalculator<O, I, C, P>
 {
     /// Creates a new basis calculator.
@@ -312,7 +312,7 @@ impl<O: Ordering, I: Id + Display, C: Field + Display, P: SignedPower + Display>
     }
 }
 
-impl<O: Ordering, I: Id + Display, C: Field + Display, P: SignedPower + Display> IntoIterator
+impl<O: Ordering, I: Id + Display, C: Field + Display, P: SignedExponent + Display> IntoIterator
     for BasisCalculator<O, I, C, P>
 {
     type Item = Polynomial<O, I, C, P>;

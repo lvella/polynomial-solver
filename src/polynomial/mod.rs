@@ -110,6 +110,30 @@ where
     I: Id,
     P: Exponent,
 {
+    /// Greatest Common Divisor between two monomials.
+    pub fn gcd(mut self, other: &Self) -> Self {
+        let mut remover = other.product.iter().peekable();
+
+        self.total_power = P::zero();
+        self.product.retain_mut(|var| {
+            while let Some(r) = remover.peek() {
+                match r.id.cmp(&var.id) {
+                    CmpOrd::Greater => (),
+                    CmpOrd::Equal => {
+                        var.power = var.power.clone().min(r.power.clone());
+                        self.total_power += &var.power;
+                        return true;
+                    }
+                    CmpOrd::Less => break,
+                }
+                remover.next();
+            }
+            false
+        });
+
+        self
+    }
+
     /// Whole division implementation. If self is not divisible by
     /// divisor, returns None.
     pub fn whole_division(mut self, divisor: &Self) -> Option<Self> {
@@ -405,7 +429,7 @@ where
     }
 
     pub fn new_multi_vars(coefficient: C, mut vars: Vec<VariablePower<I, P>>) -> Self {
-        // Order the variables by id:
+        // Order the variables by id in reverse:
         vars.sort_unstable_by(|x, y| y.id.cmp(&x.id));
 
         let mut total_power = vars.first().map_or(P::zero(), |x| x.power.clone());
@@ -1127,6 +1151,7 @@ impl Exponent for i32 {}
 mod tests {
     use std::time::Duration;
 
+    use num::Zero;
     use num_traits::Pow;
 
     use super::*;
@@ -1389,5 +1414,46 @@ mod tests {
         assert!(p.terms[0]
             .monomial
             .has_shared_variables(&q.terms[0].monomial));
+    }
+
+    #[test]
+    fn monomial_gcd() {
+        let [w, z, y, x]: [SmallPoly; 4] =
+            SmallPoly::new_variables([0u8, 1, 2, 3]).try_into().unwrap();
+
+        let a = x.clone() * x.clone() * z.clone() * z.clone();
+        let b = y.clone() * y.clone() * w.clone() * w.clone();
+
+        // Coprimes:
+        let gcd1 = a.terms[0].monomial.clone().gcd(&b.terms[0].monomial);
+        let gcd2 = b.terms[0].monomial.clone().gcd(&a.terms[0].monomial);
+        assert!(gcd1 == gcd2);
+        assert!(gcd1.is_one());
+        assert!(gcd1.total_power.is_zero());
+
+        // GCD is y:
+        let c = x.clone() * y.clone() * z.clone();
+
+        let gcd1 = b.terms[0].monomial.clone().gcd(&c.terms[0].monomial);
+        let gcd2 = c.terms[0].monomial.clone().gcd(&b.terms[0].monomial);
+        assert!(gcd1 == gcd2);
+        assert!(gcd1 == y.terms[0].monomial);
+
+        // GCD is xz²
+        let d = c.clone() * z.clone();
+
+        let result = x.clone() * z.clone() * z.clone();
+
+        let gcd1 = a.terms[0].monomial.clone().gcd(&d.terms[0].monomial);
+        let gcd2 = d.terms[0].monomial.clone().gcd(&a.terms[0].monomial);
+        assert!(gcd1 == gcd2);
+        assert!(gcd1 == result.terms[0].monomial); // TODO: invert the assertion
+
+        // GCD is one of the inputs (xyz):
+        let e = a.clone() * b.clone();
+        let gcd1 = e.terms[0].monomial.clone().gcd(&c.terms[0].monomial);
+        let gcd2 = c.terms[0].monomial.clone().gcd(&e.terms[0].monomial);
+        assert!(gcd1 == gcd2);
+        assert!(gcd1 == c.terms[0].monomial);
     }
 }
