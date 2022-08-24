@@ -51,7 +51,7 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> kd_tree::Entry for Entry<O
         let poly = unsafe { &(*self.0) };
         match other {
             KeyElem::S2LMRatio(ratio) => poly.sign_to_lm_ratio.cmp(unsafe { &(**ratio) }),
-            KeyElem::MonomialVar(var) => var.power.cmp(&get_var_exp_from_lm(poly, &var.id)),
+            KeyElem::MonomialVar(var) => get_var_exp_from_lm(poly, &var.id).cmp(&var.power),
         }
     }
 }

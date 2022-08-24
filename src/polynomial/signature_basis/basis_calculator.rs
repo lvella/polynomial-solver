@@ -273,7 +273,7 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
             return;
         }
 
-        println!("Recalculating divmasks.");
+        println!("Rebuilding indexes.");
 
         // Recreate the div map.
         self.basis.max_exp.reset_tracking();

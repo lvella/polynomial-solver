@@ -188,7 +188,7 @@ impl<E: Entry, NodeData> Node<E, NodeData> {
             })
             .unzip();
 
-        // Insert current dimension split at the end, so to be thes last to be
+        // Insert current dimension split at the end, so to be the last to be
         // processed again.
         let (l, ge) = working_list.split_at_mut(split_idx);
         less.push((dim, l));
@@ -213,7 +213,7 @@ impl<E: Entry, NodeData> Node<E, NodeData> {
         &mut self,
         new_elem: &E,
         num_dimensions: usize,
-        last_dim: usize,
+        next_dim: usize,
         builder: &impl Fn(&E, &E) -> (NodeData, T),
         updater: &impl Fn(&mut NodeData, T) -> T,
     ) -> T {
@@ -233,7 +233,7 @@ impl<E: Entry, NodeData> Node<E, NodeData> {
                 let update_data = path.insert(
                     new_elem,
                     num_dimensions,
-                    split_value.dim_index(),
+                    split_value.dim_index() + 1,
                     builder,
                     updater,
                 );
@@ -242,7 +242,7 @@ impl<E: Entry, NodeData> Node<E, NodeData> {
             }
             Node::Entry(existing_elem) => {
                 for i in 0..num_dimensions {
-                    let dim = (i + last_dim) % num_dimensions;
+                    let dim = (i + next_dim) % num_dimensions;
                     let (l, ge): (&E, &E) = match existing_elem.cmp_dim(&new_elem.get_key_elem(dim))
                     {
                         Ordering::Less => (existing_elem, new_elem),
