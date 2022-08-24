@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fmt::Display};
+use std::{collections::BTreeMap, fmt::Display, ptr::addr_of};
 
 use num_traits::{One, Zero};
 
@@ -8,8 +8,8 @@ use crate::polynomial::{
 };
 
 use super::{
-    contains_divisor, s_pairs, CmpMap, DivMap, DivMask, MaskedMonomialRef, MaskedSignature,
-    PointedCmp, Ratio, SignPoly, Signature, SignedExponent,
+    contains_divisor, ratio_monomial_index::RatioMonomialIndex, s_pairs, CmpMap, DivMap, DivMask,
+    MaskedMonomialRef, MaskedSignature, PointedCmp, Ratio, SignPoly, Signature, SignedExponent,
 };
 
 /// Stores all the basis elements known and processed so far.
@@ -34,6 +34,7 @@ pub struct KnownBasis<O: Ordering, I: Id, C: Field, P: SignedExponent> {
     /// should be a n-D index (like R*-tree), indexing both the leading monomial
     /// variables and the signature/leading monomial ratio.
     pub(super) by_sign_lm_ratio: BTreeMap<PointedCmp<Ratio<O, I, P>>, *const SignPoly<O, I, C, P>>,
+    pub(super) by_sign_lm_ratio_new: RatioMonomialIndex<O, I, C, P>,
     // TODO: create an n-D index specifically for rewrite criterion and low base
     // divisor, indexing both signature/leading monomial ratio and signature
     // monomial variables.
@@ -45,19 +46,9 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display> KnownB
         ratio: &Ratio<O, I, P>,
         monomial: MaskedMonomialRef<O, I, P>,
     ) -> Option<&SignPoly<O, I, C, P>> {
-        // Filter out the unsuitable ratios:
-        let suitable = self.by_sign_lm_ratio.range(..=PointedCmp(ratio));
-
-        // Search all the suitable range for a divisor of term.
-        for (_, elem) in suitable {
-            let next = unsafe { &**elem };
-
-            if next.leading_monomial().divides(&monomial) {
-                return Some(next);
-            }
-        }
-
-        None
+        self.by_sign_lm_ratio_new
+            .find_regular_reducer(ratio, monomial)
+            .map(|ptr| unsafe { &*ptr })
     }
 }
 
@@ -122,17 +113,20 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
             .collect::<Result<_, _>>()?;
 
         // The algorithm performance might depend on the order the elements are
-        // given in the input. From my tests with a single input, sorting makes it
-        // run much faster.
+        // given in the input. It feels like sorting makes it run faster.
+        // TODO: test if it is actually true in a large benchmark
         filtered_input.sort_unstable();
 
         max_exp.reset_tracking();
+        let div_map = DivMap::new(&max_exp);
+        let by_sign_lm_ratio_new = RatioMonomialIndex::new(max_exp.len(), &div_map, Vec::new());
         let mut c = BasisCalculator {
             basis: KnownBasis {
-                div_map: DivMap::new(&max_exp),
+                div_map,
                 max_exp,
                 polys: Vec::new(),
                 by_sign_lm_ratio: BTreeMap::new(),
+                by_sign_lm_ratio_new,
             },
             syzygies: SyzygySet::new(),
             spairs: s_pairs::SPairTriangle::new(),
@@ -220,6 +214,9 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
         self.basis
             .by_sign_lm_ratio
             .insert(PointedCmp(&sign_poly.sign_to_lm_ratio), sign_poly.as_ref());
+        self.basis
+            .by_sign_lm_ratio_new
+            .insert(&self.basis.div_map, sign_poly.as_ref());
 
         self.basis.polys.push(sign_poly);
     }
@@ -263,7 +260,8 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
         }
     }
 
-    pub fn maybe_recalculate_divmasks(&mut self) {
+    /// Recalculate divmaps and rebalance indexes.
+    pub fn maybe_rebuild_structures(&mut self) {
         const RECALC_PERCENTAGE: u8 = 20;
 
         // If changes are smaller then the give percerntage, do nothing.
@@ -295,6 +293,13 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
         for (signature, divmask) in self.syzygies.iter_mut() {
             *divmask = div_map.map(&signature.monomial);
         }
+
+        // Recreate the index for reductions.
+        self.basis.by_sign_lm_ratio_new = RatioMonomialIndex::new(
+            self.basis.max_exp.len(),
+            div_map,
+            self.basis.polys.iter().map(|p| addr_of!(**p)).collect(),
+        );
     }
 
     fn add_syzygy(&mut self, signature: MaskedSignature<O, I, P>) {

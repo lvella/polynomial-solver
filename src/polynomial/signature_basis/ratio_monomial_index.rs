@@ -98,22 +98,13 @@ struct MaskedMonomial<O: Ordering, I: Id, E: SignedExponent> {
     monomial: Monomial<O, I, E>,
 }
 
-impl<O: Ordering, I: Id, E: SignedExponent> MaskedMonomial<O, I, E> {
-    fn from_ref(r: MaskedMonomialRef<O, I, E>) -> Self {
-        Self {
-            divmask: r.0.clone(),
-            monomial: r.1.clone(),
-        }
-    }
-}
-
 /// A k-dimensional tree index, indexed by the signatures/leading monomial ratio
 /// and the exponents of the leading monomial.
 ///
 /// The tree is accelerated by the having the divmask of the GCD between all
 /// contained elements, to quickly rule out the branch on search for a divisor,
 /// using the fact that if a divides b then GCD(a, c) also divides b, for any c.
-pub struct SignatureMonomialIndex<O: Ordering, I: Id, F: Field, E: SignedExponent>(
+pub struct RatioMonomialIndex<O: Ordering, I: Id, F: Field, E: SignedExponent>(
     KDTree<Entry<O, I, F, E>, MaskedMonomial<O, I, E>>,
 );
 
@@ -141,15 +132,15 @@ fn node_data_builder<O: Ordering, I: Id, E: SignedExponent>(
     (masked_gcd, gcd)
 }
 
-impl<O: Ordering, I: Id, F: Field, E: SignedExponent> SignatureMonomialIndex<O, I, F, E> {
+impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F, E> {
     pub fn new(
-        num_dimensions: usize,
+        num_variables: usize,
         div_map: &DivMap<E>,
         elems: Vec<*const SignPoly<O, I, F, E>>,
     ) -> Self {
         let entries = elems.into_iter().map(|e| Entry(e)).collect();
         Self(KDTree::new(
-            num_dimensions,
+            num_variables + 1,
             entries,
             &node_data_map,
             &|a, b| node_data_builder(div_map, a, b),
@@ -169,10 +160,67 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> SignatureMonomialIndex<O, 
         )
     }
 
+    pub(super) fn find_high_base_divisor(
+        &self,
+        s_lm_ratio: &Ratio<O, I, E>,
+        lm: MaskedMonomialRef<O, I, E>,
+    ) -> Option<*const SignPoly<O, I, F, E>> {
+        let mut best: Option<*const SignPoly<O, I, F, E>> = None;
+        self.0.search(
+            &|key, contained_gcd| {
+                if let DivMaskTestResult::NotDivisible = contained_gcd.divmask.divides(lm.0) {
+                    return SearchPath::None;
+                };
+
+                match key {
+                    KeyElem::S2LMRatio(ratio) => {
+                        if s_lm_ratio < (unsafe { &(**ratio) }) {
+                            SearchPath::Both
+                        } else {
+                            SearchPath::GreaterOrEqualThan
+                        }
+                    }
+                    KeyElem::MonomialVar(var) => {
+                        let exp = get_var_exp_from_monomial(lm.1, &var.id);
+                        if exp < var.power {
+                            SearchPath::LessThan
+                        } else {
+                            SearchPath::Both
+                        }
+                    }
+                }
+            },
+            &mut |Entry(poly_ptr)| {
+                let poly = unsafe { &**poly_ptr };
+                if poly.leading_monomial().divides(&lm) {
+                    match best {
+                        Some(best_poly) => {
+                            let best_poly = unsafe { &*best_poly };
+                            // The best high base divisor is the one that with
+                            // maximum signature/lead ratio.
+                            if poly.sign_to_lm_ratio > best_poly.sign_to_lm_ratio {
+                                best = Some(*poly_ptr);
+                            }
+                        }
+                        None => best = Some(*poly_ptr),
+                    }
+                }
+
+                true
+            },
+        );
+
+        assert!(best
+            .map(|pptr| unsafe { (*pptr).sign_to_lm_ratio >= *s_lm_ratio })
+            .unwrap_or(true));
+
+        best
+    }
+
     pub(super) fn find_regular_reducer(
         &self,
         s_lm_ratio: &Ratio<O, I, E>,
-        lm: &MaskedMonomialRef<O, I, E>,
+        lm: MaskedMonomialRef<O, I, E>,
     ) -> Option<*const SignPoly<O, I, F, E>> {
         let mut found = None;
         self.0.search(
@@ -201,7 +249,7 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> SignatureMonomialIndex<O, 
             },
             &mut |Entry(poly_ptr)| {
                 let poly = unsafe { &**poly_ptr };
-                if poly.sign_to_lm_ratio <= *s_lm_ratio && poly.leading_monomial().divides(lm) {
+                if poly.sign_to_lm_ratio <= *s_lm_ratio && poly.leading_monomial().divides(&lm) {
                     found = Some(*poly_ptr);
                     false
                 } else {

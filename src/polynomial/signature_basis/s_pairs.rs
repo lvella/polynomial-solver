@@ -5,10 +5,7 @@ use std::{
     collections::{BTreeMap, BinaryHeap},
     fmt::Display,
     marker::PhantomData,
-    ops::{
-        Bound::{Excluded, Unbounded},
-        Index,
-    },
+    ops::Index,
 };
 
 use bitvec::prelude::BitVec;
@@ -294,21 +291,12 @@ struct HighBaseDivisor<'a, O: Ordering, I: Id, C: Field, P: SignedExponent>(
 
 impl<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> HighBaseDivisor<'a, O, I, C, P> {
     fn new(sign_poly: &SignPoly<O, I, C, P>, basis: &KnownBasis<O, I, C, P>) -> Option<Self> {
-        let lm = &sign_poly.leading_monomial();
+        let lm = sign_poly.leading_monomial();
 
-        // Search for high base divisor only where sign/lm ratio is higher,
-        // otherwise this polynomial would have been reduced or eliminated already.
-        for (_, maybe_divisor) in basis
-            .by_sign_lm_ratio
-            .range((Excluded(PointedCmp(&sign_poly.sign_to_lm_ratio)), Unbounded))
-        {
-            let maybe_divisor = unsafe { &**maybe_divisor };
-            if maybe_divisor.leading_monomial().divides(lm) {
-                return Some(HighBaseDivisor(maybe_divisor));
-            }
-        }
-
-        None
+        basis
+            .by_sign_lm_ratio_new
+            .find_high_base_divisor(&sign_poly.sign_to_lm_ratio, lm)
+            .map(|ptr| Self(unsafe { &*ptr }))
     }
 }
 

@@ -4,8 +4,8 @@
 //! http://www.broune.com/papers/issac2012.html
 
 mod basis_calculator;
+mod ratio_monomial_index;
 mod s_pairs;
-mod signature_monomial_index;
 
 use std::{collections::BTreeMap, fmt::Display};
 
@@ -506,7 +506,7 @@ pub fn grobner_basis<
         // Something was added to the basis calculator, be it polynomial or
         // syzygy, so the monomials might have changed enough to justify
         // a recalculation of the divmasks.
-        c.maybe_recalculate_divmasks();
+        c.maybe_rebuild_structures();
     }
 
     // Return the polynomials from the basis.
