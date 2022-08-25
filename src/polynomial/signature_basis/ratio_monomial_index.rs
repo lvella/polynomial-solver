@@ -174,11 +174,16 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
 
                 match key {
                     KeyElem::S2LMRatio(ratio) => {
-                        if s_lm_ratio < (unsafe { &(**ratio) }) {
+                        // TODO: find why there are divisor with smaller ratios.
+                        // Maybe it is due to the input polynomials that are not reduced.
+                        // Maybe it is how it is supposed to be, and I am missing something.
+
+                        /*if s_lm_ratio < (unsafe { &(**ratio) }) {
                             SearchPath::Both
                         } else {
                             SearchPath::GreaterOrEqualThan
-                        }
+                        }*/
+                        SearchPath::Both
                     }
                     KeyElem::MonomialVar(var) => {
                         let exp = get_var_exp_from_monomial(lm.1, &var.id);
@@ -210,9 +215,11 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
             },
         );
 
+        /*
         assert!(best
             .map(|pptr| unsafe { (*pptr).sign_to_lm_ratio >= *s_lm_ratio })
             .unwrap_or(true));
+        */
 
         best
     }
