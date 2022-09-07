@@ -1,3 +1,4 @@
+pub mod cocoa_print;
 pub mod division;
 pub mod divmask;
 pub mod grobner_basis;
@@ -1074,14 +1075,14 @@ where
 
 impl<O, I, P> std::fmt::Display for Monomial<O, I, P>
 where
-    I: Id + std::fmt::Display,
+    I: Id,
     P: Exponent + std::fmt::Display,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut iter = self.product.iter();
         if let Some(mut v) = iter.next() {
             loop {
-                write!(f, "x{}", v.id)?;
+                write!(f, "x{}", v.id.to_idx())?;
                 if !v.power.is_one() {
                     write!(f, "^{}", v.power)?;
                 }
@@ -1101,7 +1102,7 @@ where
 
 impl<O, I, C, P> std::fmt::Display for Term<O, I, C, P>
 where
-    I: Id + std::fmt::Display,
+    I: Id,
     C: CommutativeRing + std::fmt::Display,
     P: Exponent + std::fmt::Display,
 {
@@ -1117,7 +1118,7 @@ where
 
 impl<O, I, C, P> std::fmt::Display for Polynomial<O, I, C, P>
 where
-    I: Id + std::fmt::Display,
+    I: Id,
     C: CommutativeRing + std::fmt::Display,
     P: Exponent + std::fmt::Display,
 {

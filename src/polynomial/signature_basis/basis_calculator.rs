@@ -39,9 +39,7 @@ pub struct KnownBasis<O: Ordering, I: Id, C: Field, P: SignedExponent> {
     // monomial variables.
 }
 
-impl<O: Ordering, I: Id + Display, C: Field + Display, P: SignedExponent + Display>
-    KnownBasis<O, I, C, P>
-{
+impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display> KnownBasis<O, I, C, P> {
     pub(super) fn find_a_regular_reducer(
         &self,
         ratio: &Ratio<O, I, P>,
@@ -86,7 +84,7 @@ pub struct BasisCalculator<O: Ordering, I: Id, C: Field, P: SignedExponent> {
     ratio_map: CmpMap<O, I, P>,
 }
 
-impl<O: Ordering, I: Id + Display, C: Field + Display, P: SignedExponent + Display>
+impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
     BasisCalculator<O, I, C, P>
 {
     /// Creates a new basis calculator.
@@ -312,7 +310,7 @@ impl<O: Ordering, I: Id + Display, C: Field + Display, P: SignedExponent + Displ
     }
 }
 
-impl<O: Ordering, I: Id + Display, C: Field + Display, P: SignedExponent + Display> IntoIterator
+impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display> IntoIterator
     for BasisCalculator<O, I, C, P>
 {
     type Item = Polynomial<O, I, C, P>;

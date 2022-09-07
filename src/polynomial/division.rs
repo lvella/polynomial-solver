@@ -127,7 +127,7 @@ where
             .map(|(quot, div)| (quot.polynomial, div.polynomial))
     }
 
-    // Divide all coefficients by the leading coefficients.
+    // Divide all coefficients by the leading coefficient.
     pub fn normalized_by_coefs(mut self) -> Self {
         let mut iter = self.terms.iter_mut();
         if let Some(lt) = iter.next() {

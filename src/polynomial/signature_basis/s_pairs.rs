@@ -559,7 +559,7 @@ pub struct SPairTriangle<O: Ordering, I: Id, P: SignedExponent> {
     reduces_to_zero: SyzygyTriangle,
 }
 
-impl<O: Ordering, I: Id + Display, P: SignedExponent + Display> SPairTriangle<O, I, P> {
+impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
     pub fn new() -> Self {
         SPairTriangle {
             heads: BinaryHeap::new(),

@@ -313,7 +313,7 @@ pub fn grobner_basis<O, I, C, P>(
 ) -> Vec<Polynomial<O, I, C, P>>
 where
     O: Ordering,
-    I: Id + std::fmt::Display,
+    I: Id,
     C: Field + std::fmt::Display,
     P: Exponent + std::fmt::Display,
 {

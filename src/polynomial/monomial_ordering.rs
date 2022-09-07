@@ -8,6 +8,8 @@ pub trait Ordering: core::fmt::Debug + Clone + Eq + Ord {
     where
         I: Id,
         P: Exponent;
+
+    fn cocoa_name() -> &'static str;
 }
 
 /// Compare two variables' power as if they where in the same position in the
@@ -49,6 +51,10 @@ impl Ordering for Lex {
 
         CmpOrd::Equal
     }
+
+    fn cocoa_name() -> &'static str {
+        "lex"
+    }
 }
 
 /// Graded reverse lexicographical ordering.
@@ -79,6 +85,10 @@ impl Ordering for Grevlex {
         // both must have the same number of variables because the total power
         // also matches, so they must be equal.
         CmpOrd::Equal
+    }
+
+    fn cocoa_name() -> &'static str {
+        "DegRevLex"
     }
 }
 

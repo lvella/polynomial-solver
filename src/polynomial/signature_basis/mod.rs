@@ -93,7 +93,7 @@ pub struct Signature<O: Ordering, I: Id, P: SignedExponent> {
     monomial: Monomial<O, I, P>,
 }
 
-impl<O: Ordering, I: Id + Display, P: SignedExponent + Display> Display for Signature<O, I, P> {
+impl<O: Ordering, I: Id, P: SignedExponent + Display> Display for Signature<O, I, P> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{{{}, {}}}", self.idx, self.monomial)
     }
@@ -152,9 +152,7 @@ pub struct SignPoly<O: Ordering, I: Id, C: Field, P: SignedExponent> {
     sign_to_lm_ratio: Ratio<O, I, P>,
 }
 
-impl<O: Ordering, I: Id + Display, C: Field, P: SignedExponent + Display> Display
-    for SignPoly<O, I, C, P>
-{
+impl<O: Ordering, I: Id, C: Field, P: SignedExponent + Display> Display for SignPoly<O, I, C, P> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -295,7 +293,7 @@ fn rewrite_spair<O: Ordering, I: Id, C: Field, P: SignedExponent>(
 /// This is analogous to calculate the remainder on a multivariate polynomial
 /// division, but with extra restrictions on what polynomials can be the divisor
 /// according to their signature.
-fn regular_reduce<O: Ordering, I: Id + Display, C: Field + Display, P: SignedExponent + Display>(
+fn regular_reduce<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>(
     idx: u32,
     m_sign: MaskedSignature<O, I, P>,
     s_pair: Polynomial<O, I, C, P>,
