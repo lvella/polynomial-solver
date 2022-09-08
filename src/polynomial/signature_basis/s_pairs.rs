@@ -474,26 +474,33 @@ impl<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> LowBaseDivisor<'a, O, 
         let mut ib = b.product.iter();
         let mut ip = p.product.iter();
 
-        let mut multivar_iter = MultiVarWalk::new(vec![&mut ia, &mut ib, &mut ip]);
-        if let Some(mut multivar) = multivar_iter.next() {
-            for var in v.product.iter_mut() {
-                // b == p, so v is infinity (unchanged)
-                if var.id != multivar.0 {
-                    continue;
-                }
+        let mut multivar_iter = MultiVarWalk::new(vec![&mut ia, &mut ib, &mut ip])
+            .fuse()
+            .peekable();
 
-                // We have a, b and p, do the comparison:
-                let (a, b, p) = multivar.1.into_iter().next_tuple().unwrap();
-                if b > p {
-                    var.power = max(p, a);
-                }
+        v.product.retain_mut(|var| {
+            let multivar = match multivar_iter.peek() {
+                Some(x) => x,
+                None => return true,
+            };
 
-                multivar = match multivar_iter.next() {
-                    Some(x) => x,
-                    None => break,
+            // b == p, so v is infinity (unchanged)
+            if var.id != multivar.0 {
+                return true;
+            }
+            let multivar = multivar_iter.next().unwrap();
+
+            // We have a, b and p, do the comparison:
+            let (a, b, p) = multivar.1.into_iter().next_tuple().unwrap();
+            if b > p {
+                var.power = max(p, a);
+                if var.power.is_zero() {
+                    return false;
                 }
             }
-        }
+
+            true
+        });
 
         Some(LowBaseDivisor {
             divisor,
