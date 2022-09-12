@@ -74,16 +74,19 @@ impl Ordering for Grevlex {
             }
         }
 
-        for (a, b) in a.product.iter().rev().zip(b.product.iter().rev()) {
-            let var_cmp = power_cmp(a.id.cmp(&b.id), &b.power, &a.power);
-            if var_cmp != CmpOrd::Equal {
-                return var_cmp;
+        for pair in a.product.iter().rev().zip_longest(b.product.iter().rev()) {
+            match pair {
+                EitherOrBoth::Both(a, b) => {
+                    let var_cmp = power_cmp(a.id.cmp(&b.id), &b.power, &a.power);
+                    if var_cmp != CmpOrd::Equal {
+                        return var_cmp;
+                    }
+                }
+                EitherOrBoth::Left(a) => return P::zero().cmp(&a.power),
+                EitherOrBoth::Right(b) => return b.power.cmp(&P::zero()),
             }
         }
 
-        // It can only get here if all tested variables and powers matches, and
-        // both must have the same number of variables because the total power
-        // also matches, so they must be equal.
         CmpOrd::Equal
     }
 
@@ -95,9 +98,10 @@ impl Ordering for Grevlex {
 #[cfg(test)]
 mod tests {
     use num_traits::Pow;
-    use rand::prelude::SliceRandom;
+    use rand::{prelude::SliceRandom, rngs::StdRng, Rng, SeedableRng};
+    use std::{iter::Sum, marker::PhantomData};
 
-    use crate::polynomial::Polynomial;
+    use crate::polynomial::{Polynomial, VariablePower};
 
     use super::*;
 
@@ -158,5 +162,92 @@ mod tests {
         for (orig_t, sort_t) in ordered.into_iter().zip(sorted.into_iter().rev()) {
             assert_eq!(orig_t, sort_t);
         }
+    }
+
+    trait DenseOrdering {
+        fn cmp<T: Sum<T> + Ord + Clone, const LEN: usize>(a: &[T; LEN], b: &[T; LEN]) -> CmpOrd;
+    }
+
+    impl DenseOrdering for Lex {
+        fn cmp<T: Sum<T> + Ord + Clone, const LEN: usize>(a: &[T; LEN], b: &[T; LEN]) -> CmpOrd {
+            a.cmp(b)
+        }
+    }
+
+    impl DenseOrdering for Grevlex {
+        fn cmp<T: Sum<T> + Ord + Clone, const LEN: usize>(a: &[T; LEN], b: &[T; LEN]) -> CmpOrd {
+            match a
+                .iter()
+                .cloned()
+                .sum::<T>()
+                .cmp(&b.iter().cloned().sum::<T>())
+            {
+                CmpOrd::Equal => {
+                    let rev_a: Vec<_> = a.iter().cloned().rev().collect();
+                    let rev_b: Vec<_> = b.iter().cloned().rev().collect();
+                    rev_b.cmp(&rev_a)
+                }
+                c => c,
+            }
+        }
+    }
+
+    fn dense_to_sparse<O: Ordering>(dense: &[i16]) -> Monomial<O, u8, i16> {
+        let mut total_power = 0i16;
+        let product = (0..dense.len() as u8)
+            .rev()
+            .zip(dense)
+            .filter_map(|(id, exp)| {
+                if *exp == 0 {
+                    None
+                } else {
+                    total_power += *exp;
+                    Some(VariablePower { id, power: *exp })
+                }
+            })
+            .collect();
+
+        Monomial {
+            product,
+            total_power,
+            _phantom_ordering: PhantomData,
+        }
+    }
+
+    fn impl_test_negative_exponent<O: Ordering + DenseOrdering>() {
+        let mut rng = StdRng::seed_from_u64(42);
+
+        // Generate 10000 10-elements vectors, with values ranging to -8 to 8,
+        // with 40% of chance of being zero. These are the exponents of the test
+        // monomials to be ordered.
+        let mut dense_vec = Vec::new();
+        let mut sparse_vec = Vec::new();
+        while dense_vec.len() < 10000 {
+            let mut new_elem = [0i16; 10];
+            for e in new_elem.iter_mut() {
+                if rng.gen_bool(1.0 - 0.4) {
+                    *e = rng.gen_range(1..=8);
+                    if rng.gen_bool(0.5) {
+                        *e = -*e;
+                    }
+                }
+            }
+            sparse_vec.push(dense_to_sparse::<O>(&new_elem[..]));
+            dense_vec.push(new_elem);
+        }
+
+        sparse_vec.sort_unstable_by(|a, b| <O as Ordering>::ord(a, b));
+        dense_vec.sort_unstable_by(|a, b| <O as DenseOrdering>::cmp(a, b));
+
+        assert!(sparse_vec.len() == dense_vec.len());
+        for (s, d) in sparse_vec.iter().zip(dense_vec.iter()) {
+            assert!(*s == dense_to_sparse::<O>(d));
+        }
+    }
+
+    #[test]
+    fn test_negative_exponent() {
+        impl_test_negative_exponent::<Lex>();
+        impl_test_negative_exponent::<Grevlex>();
     }
 }

@@ -598,7 +598,7 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
             ) {
                 Ok(spair) => {
                     new_spairs.push(spair);
-                    false
+                    false /* does not reduce to zero */
                 }
                 Err(red_to_zero) => red_to_zero,
             };
@@ -717,7 +717,7 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
             // is at most one remaining.
             match chosen_spair {
                 Ok(spair) => {
-                    // We found a potential S-pair. Apply rewrite criterion it
+                    // We found a potential S-pair. Apply rewrite criterion to it
                     // and return if not singular.
                     if let Some(spair) = rewrite_spair(&m_sign, spair, basis) {
                         return Some((m_sign, spair, same_sign_spairs));

@@ -117,11 +117,6 @@ impl<T: Ord + Clone> FastCompared<T> {
         Ok(())
     }
 
-    /// Returns a reference to the stored value.
-    pub fn as_ref(&self) -> &T {
-        &self.value
-    }
-
     /// Return the stored value.
     pub fn into_inner(self) -> T {
         self.value

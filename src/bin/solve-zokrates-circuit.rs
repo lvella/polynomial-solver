@@ -92,10 +92,10 @@ fn solve<T: Field, I: Iterator<Item = ir::Statement<T>>>(ir_prog: ir::ProgIterat
     cocoa_print::list_of_polys(&mut cocoa5_file, "original", poly_set.iter()).unwrap();
 
     println!("\nGröbner Basis:");
-
     let gb = polynomial_solver::polynomial::signature_basis::grobner_basis(poly_set);
 
     // Put Grobner Basis into reduced form:
+    println!("\nReducing and normalizing...");
     let gb: Vec<_> = autoreduce(gb)
         .into_iter()
         .map(|p| p.normalized_by_coefs())

@@ -156,7 +156,8 @@ impl<O: Ordering, I: Id, C: Field, P: SignedExponent + Display> Display for Sign
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{}: {} ...({})",
+            "idx {}, sign {}: {} ...({})",
+            self.idx,
             self.signature(),
             self.polynomial.terms[0].monomial,
             self.polynomial.terms.len() - 1
@@ -326,14 +327,14 @@ fn regular_reduce<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Di
             monomial: m,
         };
 
-        // Calculated the divmask for the term to be reduced:
-        let divmask = basis.div_map.map(&term.monomial);
-
         // Skip searching for a divisor for 1 and (maybe) save some time.
         if term.monomial.is_one() {
             reduced_terms.push(term);
             break;
         }
+
+        // Calculate the divmask for the term to be reduced:
+        let divmask = basis.div_map.map(&term.monomial);
 
         // Calculate signature to monomial ratio, to search for a reducer,
         // and possibly store it as the ratio for the leading term.
@@ -470,10 +471,11 @@ pub fn grobner_basis<
         match regular_reduce(b.polys.len() as u32, m_sign, s_pair, c.get_basis()) {
             RegularReductionResult::Reduced(reduced) => {
                 println!(
-                    "#(p: {}, s: {}), {}",
+                    "#(p: {}, s: {}), {:?} → {}",
                     b.polys.len(),
                     c.get_num_syzygies(),
-                    b.polys.last().unwrap()
+                    indices,
+                    reduced
                 );
 
                 // Polynomial is a new valid member of the basis. Insert it into

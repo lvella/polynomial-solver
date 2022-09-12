@@ -349,11 +349,6 @@ where
         }
         next_to_spar.set(partner.1 + 1);
 
-        println!(
-            "==================\n\nWorking on {} and {} ...",
-            elem.1, partner.1
-        );
-
         if partner.1 < elem.1 {
             let new_p = spar(&elem.0, &partner.0);
             println!("Sparred! Inserting ...");

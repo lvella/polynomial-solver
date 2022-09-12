@@ -272,13 +272,13 @@ fn multiple_polynomial_case<
     // We implement here the variety decomposition algorithm given by Huang and Wong.
 
     // Step 1: homogenize the polynomials:
-    let polys: Vec<_> = polys
+    let _polys: Vec<_> = polys
         .into_iter()
         .map(|p| p.homogenize_to_degree(&max_degree))
         .collect();
 
     // Step 2: repeat step 3 and 4 n times:
-    for s in 1..=var_count {
+    for _s in 1..=var_count {
         // Step 3: do 2*(m-1)*d^(s-1) + s samples of elements of F^n:
     }
 
