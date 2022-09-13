@@ -1,11 +1,7 @@
-use itertools::Itertools;
 use polynomial_solver::{
     finite_field::ZkFieldWrapper,
     polynomial::{
-        cocoa_print,
-        grobner_basis::{autoreduce, reorder_vars_for_easier_gb},
-        monomial_ordering::Grevlex,
-        Term,
+        cocoa_print, grobner_basis::reorder_vars_for_easier_gb, monomial_ordering::Grevlex, Term,
     },
 };
 use std::{
@@ -94,28 +90,17 @@ fn solve<T: Field, I: Iterator<Item = ir::Statement<T>>>(ir_prog: ir::ProgIterat
     println!("\nGröbner Basis:");
     let gb = polynomial_solver::polynomial::signature_basis::grobner_basis(poly_set);
 
-    // Put Grobner Basis into reduced form:
-    println!("\nReducing and normalizing...");
-    let gb: Vec<_> = autoreduce(gb)
-        .into_iter()
-        .map(|p| p.normalized_by_coefs())
-        .sorted_unstable()
-        .collect();
-
-    for p in gb.iter() {
-        println!("  {}", p);
-    }
     println!("Size of the Gröbner Basis: {} polynomials.", gb.len());
 
     cocoa_print::list_of_polys(&mut cocoa5_file, "gb", gb.iter()).unwrap();
 
     // Tests if the grobner basis are the same.
-    writeln!(
+    write!(
         cocoa5_file,
         concat!(
             "I_orig := ideal(original);\n",
-            "println I_orig = ideal(gb);\n",
-            "println EqSet(ReducedGBasis(I_orig), gb);"
+            "println \"Was the ideal preserved? \", I_orig = ideal(gb);\n",
+            "println \"Is the new set a Gröbner Basis? \", LT(I_orig) = ideal([LT(p) | p in gb]) ;\n"
         )
     )
     .unwrap();
