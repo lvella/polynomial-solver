@@ -298,10 +298,10 @@ impl<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> HighBaseDivisor<'a, O,
 
         // Search for high base divisor only where sign/lm ratio is higher,
         // otherwise this polynomial would have been reduced or eliminated already.
-        for (_, maybe_divisor) in basis
-            .by_sign_lm_ratio
-            .range((Excluded(PointedCmp(&sign_poly.sign_to_lm_ratio)), Unbounded))
-        {
+        for (_, maybe_divisor) in basis.by_sign_lm_ratio.range((
+            Excluded((PointedCmp(&sign_poly.sign_to_lm_ratio), 0)),
+            Unbounded,
+        )) {
             let maybe_divisor = unsafe { &**maybe_divisor };
             if maybe_divisor.leading_monomial().divides(lm) {
                 return Some(HighBaseDivisor(maybe_divisor));
@@ -434,7 +434,7 @@ impl<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> LowBaseDivisor<'a, O, 
         let sign_monomial = sign_poly.masked_signature.monomial();
         for (_, maybe_divisor) in basis
             .by_sign_lm_ratio
-            .range(..=PointedCmp(&range_max))
+            .range(..=(PointedCmp(&range_max), u32::MAX))
             .rev()
         {
             let maybe_divisor = unsafe { &**maybe_divisor };

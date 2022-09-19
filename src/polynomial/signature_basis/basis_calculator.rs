@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, fmt::Display};
 
 use num_traits::{One, Zero};
+use rand::{rngs::StdRng, seq::SliceRandom, thread_rng, SeedableRng};
 
 use crate::polynomial::{
     division::Field, divmask::MaximumExponentsTracker, monomial_ordering::Ordering, Id, Monomial,
@@ -33,7 +34,8 @@ pub struct KnownBasis<O: Ordering, I: Id, C: Field, P: SignedExponent> {
     /// TODO: to search for a reducer and for a high base divisor, maybe this
     /// should be a n-D index (like R*-tree), indexing both the leading monomial
     /// variables and the signature/leading monomial ratio.
-    pub(super) by_sign_lm_ratio: BTreeMap<PointedCmp<Ratio<O, I, P>>, *const SignPoly<O, I, C, P>>,
+    pub(super) by_sign_lm_ratio:
+        BTreeMap<(PointedCmp<Ratio<O, I, P>>, u32), *const SignPoly<O, I, C, P>>,
     // TODO: create an n-D index specifically for rewrite criterion and low base
     // divisor, indexing both signature/leading monomial ratio and signature
     // monomial variables.
@@ -46,7 +48,9 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display> KnownB
         monomial: MaskedMonomialRef<O, I, P>,
     ) -> Option<&SignPoly<O, I, C, P>> {
         // Filter out the unsuitable ratios:
-        let suitable = self.by_sign_lm_ratio.range(..=PointedCmp(ratio));
+        let suitable = self
+            .by_sign_lm_ratio
+            .range(..=(PointedCmp(ratio), u32::MAX));
 
         // Search all the suitable range for a divisor of term.
         for (_, elem) in suitable {
@@ -124,7 +128,11 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
         // The algorithm performance might depend on the order the elements are
         // given in the input. From my tests with a single input, sorting makes it
         // run much faster.
-        filtered_input.sort_unstable();
+        //filtered_input.sort_unstable();
+        let seed = 18170886122908572225; //rand::random();
+        println!("Rng seed: {}", seed);
+        let mut rng: StdRng = SeedableRng::seed_from_u64(seed);
+        filtered_input.shuffle(&mut rng);
 
         max_exp.reset_tracking();
         let mut c = BasisCalculator {
@@ -148,12 +156,15 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
                 monomial,
             };
 
-            c.insert_poly_with_spairs(SignPoly::new(
-                &c.basis.div_map,
-                signature.idx,
-                signature,
-                polynomial,
-            ));
+            let sign_poly = SignPoly::new(&c.basis.div_map, signature.idx, signature, polynomial);
+
+            println!(
+                "#(p: {}, s: {}), [] → {}",
+                c.basis.polys.len(),
+                c.get_num_syzygies(),
+                sign_poly
+            );
+            c.insert_poly_with_spairs(sign_poly);
         }
 
         Ok(c)
@@ -217,9 +228,10 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
         self.spairs
             .add_column(&sign_poly, &self.basis, &self.syzygies);
 
-        self.basis
-            .by_sign_lm_ratio
-            .insert(PointedCmp(&sign_poly.sign_to_lm_ratio), sign_poly.as_ref());
+        self.basis.by_sign_lm_ratio.insert(
+            (PointedCmp(&sign_poly.sign_to_lm_ratio), sign_poly.idx),
+            sign_poly.as_ref(),
+        );
 
         self.basis.polys.push(sign_poly);
     }

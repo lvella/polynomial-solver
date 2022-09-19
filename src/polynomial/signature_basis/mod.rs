@@ -251,7 +251,7 @@ fn rewrite_spair<O: Ordering, I: Id, C: Field, P: SignedExponent>(
     let sign_to_lm_ratio = sign_to_monomial_ratio(&m_sign.signature, &s_pair.leading_term.monomial);
     let search_range = basis
         .by_sign_lm_ratio
-        .range(PointedCmp(&sign_to_lm_ratio)..);
+        .range((PointedCmp(&sign_to_lm_ratio), 0)..);
 
     let masked_sig_monomial = m_sign.monomial();
 

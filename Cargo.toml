@@ -5,7 +5,6 @@ edition = "2021"
 
 [dev-dependencies]
 num = "0.4.0"
-rand = "0.8.4"
 
 [dependencies]
 mimalloc = { version = "*", default-features = false }
@@ -16,6 +15,7 @@ zokrates_field = { git = "https://github.com/Zokrates/ZoKrates.git" }
 pest = "2.0"
 pest_derive = "2.0"
 bitvec = "1"
+rand = "0.8.4"
 
 [dependencies.rug]
 version = "1.13"

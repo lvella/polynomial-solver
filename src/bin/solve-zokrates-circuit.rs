@@ -97,11 +97,32 @@ fn solve<T: Field, I: Iterator<Item = ir::Statement<T>>>(ir_prog: ir::ProgIterat
     // Tests if the grobner basis are the same.
     write!(
         cocoa5_file,
-        concat!(
-            "I_orig := ideal(original);\n",
-            "println \"Was the ideal preserved? \", I_orig = ideal(gb);\n",
-            "println \"Is the new set a Gröbner Basis? \", LT(I_orig) = ideal([LT(p) | p in gb]) ;\n"
-        )
+        r#"
+I_orig := ideal(original);
+
+LTI_orig := LT(I_orig);
+LTI_mine := ideal([LT(p) | p in gb]);
+is_a_gb := LTI_orig = LTI_mine;
+
+println "Was the ideal preserved? ", I_orig = ideal(gb);
+println "Is the new set a Gröbner Basis? ", is_a_gb;
+
+if not(is_a_gb) then
+	GBI_orig := ReducedGBasis(LTI_orig);
+	GBI_mine := ReducedGBasis(LTI_mine);
+	isect := intersection(GBI_orig, GBI_mine);
+
+	println "What they have I don't: ", diff(GBI_orig, isect);
+	println "What I have they don't: ", diff(GBI_mine, isect);
+endif;
+"#
     )
     .unwrap();
+
+    drop(cocoa5_file);
+    println!("CoCoA 5 verification file written.");
+
+    //println!("============ DEBUG =============");
+    //polynomial_solver::polynomial::grobner_basis::grobner_basis(&mut gb.into_iter());
+    //println!("================================");
 }

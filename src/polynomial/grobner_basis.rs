@@ -10,6 +10,7 @@ use std::{
     cell::Cell,
     cmp::Reverse,
     collections::{BTreeMap, HashMap},
+    fmt::Display,
 };
 
 use super::{
@@ -139,7 +140,7 @@ where
     O: Ordering,
     I: Id,
     C: Field,
-    P: Exponent,
+    P: Exponent + Display,
 {
     fn new() -> Self {
         Self {
@@ -181,7 +182,38 @@ where
         self.next_id += 1;
     }
 
-    fn insert(&mut self, p: Polynomial<O, I, C, P>) {
+    fn plain_insert(&mut self, p: Polynomial<O, I, C, P>, origin: Option<(usize, usize)>) {
+        if let Some((a, b)) = origin {
+            print!("({}, {}): ", a, b);
+        } else {
+            print!("*: ");
+        }
+
+        print!(
+            "{} → ",
+            p.terms
+                .first()
+                .map_or("0".to_string(), |t| format!("{}", t.monomial))
+        );
+        let orig = p.terms.first().map(|t| t.monomial.clone());
+        let p = self.reduce(p).1;
+
+        if p.is_constant() {
+            // p is either reduced to zero, so we do nothing, or is constant, so we
+            // can set self to p and return (because p divides everything there).
+            if !p.is_zero() {
+                self.set_one(p);
+            }
+            print!("*, 0");
+        } else {
+            print!("{}, {}", self.next_id, p.terms[0].monomial);
+            self.ordered_set.insert((p, self.next_id), Cell::new(0));
+            self.next_id += 1;
+        }
+        print!("\n");
+    }
+
+    fn reducing_insert(&mut self, p: Polynomial<O, I, C, P>) {
         let mut to_insert = vec![p];
 
         while let Some(p) = to_insert.pop() {
@@ -293,12 +325,12 @@ where
     O: Ordering,
     I: Id,
     C: Field,
-    P: Exponent,
+    P: Exponent + Display,
 {
     let mut reduced_set = ReducedSet::new();
 
     for p in input {
-        reduced_set.insert(p);
+        reduced_set.reducing_insert(p);
     }
 
     reduced_set
@@ -320,7 +352,7 @@ where
     let mut gb = ReducedSet::new();
 
     for p in input {
-        gb.insert(p);
+        gb.plain_insert(p, None);
     }
 
     while let Some(((elem, next_to_spar), _)) = gb.ordered_set.iter().fold(None, |acc, e| {
@@ -351,11 +383,7 @@ where
 
         if partner.1 < elem.1 {
             let new_p = spar(&elem.0, &partner.0);
-            println!("Sparred! Inserting ...");
-            gb.insert(new_p);
-            println!("Current size: {}", gb.ordered_set.len());
-        } else {
-            println!("Skipped");
+            gb.plain_insert(new_p, Some((elem.1, partner.1)));
         }
     }
 
