@@ -129,10 +129,13 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
         // given in the input. From my tests with a single input, sorting makes it
         // run much faster.
         //filtered_input.sort_unstable();
-        let seed = 18170886122908572225; //rand::random();
+
+        ///// DEBUG: lets find out if the order is really important //
+        let seed = 4268529541343527472; //rand::random();
         println!("Rng seed: {}", seed);
         let mut rng: StdRng = SeedableRng::seed_from_u64(seed);
         filtered_input.shuffle(&mut rng);
+        //////////////////////////////////////////////////////////////
 
         max_exp.reset_tracking();
         let mut c = BasisCalculator {
