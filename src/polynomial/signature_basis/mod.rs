@@ -297,7 +297,7 @@ fn rewrite_spair<O: Ordering, I: Id, C: Field, P: SignedExponent>(
 fn regular_reduce<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>(
     idx: u32,
     m_sign: MaskedSignature<O, I, P>,
-    s_pair: Polynomial<O, I, C, P>,
+    reduced_poly: Polynomial<O, I, C, P>,
     basis: &KnownBasis<O, I, C, P>,
 ) -> RegularReductionResult<O, I, C, P> {
     // The paper suggests splitting the reduced polynomial into a hash map of
@@ -308,7 +308,7 @@ fn regular_reduce<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Di
     // BTreeMap seems a little better.
 
     // The tree with the terms to be reduced.
-    let mut to_reduce: BTreeMap<Monomial<O, I, P>, C> = s_pair
+    let mut to_reduce: BTreeMap<Monomial<O, I, P>, C> = reduced_poly
         .terms
         .into_iter()
         // Since this is already reverse sorted, rev() is a little faster, as we
@@ -344,8 +344,9 @@ fn regular_reduce<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Di
             &sign_to_term_ratio,
             MaskedMonomialRef(&divmask, &term.monomial),
         ) {
-            // Since the reduction is singular, we can stop if we are
-            // reducing the leading term.
+            // The reduction is said singular if we are reducing the leading
+            // term and the reducer have the same signature as the reduced.
+            // In this case we can stop.
             if reduced_terms.is_empty() && reducer.masked_signature == m_sign {
                 return RegularReductionResult::Singular;
             }

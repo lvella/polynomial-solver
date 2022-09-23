@@ -1,7 +1,6 @@
 use std::{collections::BTreeMap, fmt::Display};
 
 use num_traits::{One, Zero};
-use rand::{rngs::StdRng, seq::SliceRandom, thread_rng, SeedableRng};
 
 use crate::polynomial::{
     division::Field, divmask::MaximumExponentsTracker, monomial_ordering::Ordering, Id, Monomial,
@@ -98,7 +97,7 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
     pub fn new(input: Vec<Polynomial<O, I, C, P>>) -> Result<Self, Polynomial<O, I, C, P>> {
         let mut max_exp = MaximumExponentsTracker::new();
 
-        let mut filtered_input: Vec<Polynomial<O, I, C, P>> = input
+        let filtered_input: Vec<Polynomial<O, I, C, P>> = input
             .into_iter()
             .filter_map(|polynomial| {
                 if polynomial.is_zero() {
@@ -124,18 +123,6 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
                 Some(Ok(polynomial))
             })
             .collect::<Result<_, _>>()?;
-
-        // The algorithm performance might depend on the order the elements are
-        // given in the input. From my tests with a single input, sorting makes it
-        // run much faster.
-        //filtered_input.sort_unstable();
-
-        ///// DEBUG: lets find out if the order is really important //
-        let seed = 4268529541343527472; //rand::random();
-        println!("Rng seed: {}", seed);
-        let mut rng: StdRng = SeedableRng::seed_from_u64(seed);
-        filtered_input.shuffle(&mut rng);
-        //////////////////////////////////////////////////////////////
 
         max_exp.reset_tracking();
         let mut c = BasisCalculator {

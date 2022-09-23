@@ -195,7 +195,6 @@ where
                 .first()
                 .map_or("0".to_string(), |t| format!("{}", t.monomial))
         );
-        let orig = p.terms.first().map(|t| t.monomial.clone());
         let p = self.reduce(p).1;
 
         if p.is_constant() {
