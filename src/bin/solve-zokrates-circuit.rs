@@ -4,6 +4,7 @@ use polynomial_solver::{
         cocoa_print, grobner_basis::reorder_vars_for_easier_gb, monomial_ordering::Grevlex, Term,
     },
 };
+use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};
 use std::{
     env,
     fs::File,
@@ -88,9 +89,34 @@ fn solve<T: Field, I: Iterator<Item = ir::Statement<T>>>(ir_prog: ir::ProgIterat
     cocoa_print::list_of_polys(&mut cocoa5_file, "original", poly_set.iter()).unwrap();
 
     println!("\nGröbner Basis:");
+
+    // The algorithm performance might depend on the order the elements are
+    // given in the input. From my tests with a single input, sorting makes it
+    // run much faster.
+    //poly_set.sort_unstable();
+
+    ///// DEBUG: lets find out if the order is really important //
+    let seed = 4268529541343527472; //rand::random();
+    println!("Rng seed: {}", seed);
+    let mut rng: StdRng = SeedableRng::seed_from_u64(seed);
+    poly_set.shuffle(&mut rng);
+    //////////////////////////////////////////////////////////////
     let gb = polynomial_solver::polynomial::signature_basis::grobner_basis(poly_set);
 
     println!("Size of the Gröbner Basis: {} polynomials.", gb.len());
+
+    /*println!("===== DEBUG: Second pass in a different order =========");
+    let mut gb = polynomial_solver::polynomial::signature_basis::grobner_basis(gb);
+    std::fs::remove_dir_all("polys");
+    std::fs::create_dir("polys").unwrap();
+    for (idx, p) in gb.iter_mut().enumerate() {
+        *p = std::mem::replace(p, Polynomial::zero()).normalized_by_coefs();
+        let mut fd = File::create(format!("polys/{}.txt", idx)).unwrap();
+        for t in p.get_terms().iter() {
+            writeln!(fd, "{}", t).unwrap();
+        }
+    }
+    println!("=======================================================");*/
 
     cocoa_print::list_of_polys(&mut cocoa5_file, "gb", gb.iter()).unwrap();
 
@@ -122,7 +148,7 @@ endif;
     drop(cocoa5_file);
     println!("CoCoA 5 verification file written.");
 
-    //println!("============ DEBUG =============");
-    //polynomial_solver::polynomial::grobner_basis::grobner_basis(&mut gb.into_iter());
-    //println!("================================");
+    println!("============ DEBUG =============");
+    polynomial_solver::polynomial::grobner_basis::grobner_basis(&mut gb.into_iter());
+    println!("================================");
 }
