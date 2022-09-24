@@ -148,7 +148,7 @@ endif;
     drop(cocoa5_file);
     println!("CoCoA 5 verification file written.");
 
-    println!("============ DEBUG =============");
-    polynomial_solver::polynomial::grobner_basis::grobner_basis(&mut gb.into_iter());
-    println!("================================");
+    //println!("============ DEBUG =============");
+    //polynomial_solver::polynomial::grobner_basis::grobner_basis(&mut gb.into_iter());
+    //println!("================================");
 }
