@@ -13,9 +13,7 @@ pub trait FiniteField: polynomial::division::Field {
 pub trait PrimeField: FiniteField {}
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
-pub struct ThreadPrimeField {
-    value: rug::Integer,
-}
+pub struct ThreadPrimeField(rug::Integer);
 
 impl ThreadPrimeField {
     thread_local! {
@@ -41,9 +39,9 @@ impl ThreadPrimeField {
     fn normalize(&mut self) {
         Self::PRIME.with(|prime| {
             let p = &*prime.borrow();
-            self.value %= p;
-            if self.value < 0 {
-                self.value += p
+            self.0 %= p;
+            if self.0 < 0 {
+                self.0 += p
             }
         })
     }
@@ -59,7 +57,7 @@ impl PrimeField for ThreadPrimeField {}
 
 impl Display for ThreadPrimeField {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        self.value.fmt(f)
+        self.0.fmt(f)
     }
 }
 
@@ -68,9 +66,7 @@ where
     rug::Integer: From<T>,
 {
     fn from(value: T) -> Self {
-        let mut v = ThreadPrimeField {
-            value: rug::Integer::from(value),
-        };
+        let mut v = ThreadPrimeField(rug::Integer::from(value));
         v.normalize();
         v
     }
@@ -80,7 +76,7 @@ impl FromStr for ThreadPrimeField {
     type Err = <rug::Integer as FromStr>::Err;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut result = ThreadPrimeField { value: s.parse()? };
+        let mut result = ThreadPrimeField(s.parse()?);
         result.normalize();
 
         Ok(result)
@@ -91,9 +87,8 @@ impl std::ops::Add for ThreadPrimeField {
     type Output = Self;
 
     fn add(self, rhs: Self) -> Self {
-        let mut r = Self {
-            value: self.value + rhs.value,
-        };
+        let mut r = Self(self.0 + rhs.0);
+
         r.normalize();
         r
     }
@@ -103,9 +98,7 @@ impl std::ops::Mul for ThreadPrimeField {
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self {
-        let mut r = Self {
-            value: self.value * rhs.value,
-        };
+        let mut r = Self(self.0 * rhs.0);
         r.normalize();
         r
     }
@@ -115,9 +108,7 @@ impl std::ops::Mul<&Self> for ThreadPrimeField {
     type Output = Self;
 
     fn mul(self, rhs: &Self) -> Self {
-        let mut r = Self {
-            value: self.value * &rhs.value,
-        };
+        let mut r = Self(self.0 * &rhs.0);
         r.normalize();
         r
     }
@@ -125,21 +116,21 @@ impl std::ops::Mul<&Self> for ThreadPrimeField {
 
 impl std::ops::AddAssign for ThreadPrimeField {
     fn add_assign(&mut self, rhs: Self) {
-        self.value += rhs.value;
+        self.0 += rhs.0;
         self.normalize();
     }
 }
 
 impl std::ops::SubAssign for ThreadPrimeField {
     fn sub_assign(&mut self, rhs: Self) {
-        self.value -= rhs.value;
+        self.0 -= rhs.0;
         self.normalize();
     }
 }
 
 impl std::ops::MulAssign<&Self> for ThreadPrimeField {
     fn mul_assign(&mut self, rhs: &Self) {
-        self.value *= &rhs.value;
+        self.0 *= &rhs.0;
         self.normalize();
     }
 }
@@ -149,7 +140,7 @@ impl num_traits::pow::Pow<u32> for ThreadPrimeField {
 
     fn pow(mut self, rhs: u32) -> Self {
         Self::PRIME.with(|prime| {
-            self.value
+            self.0
                 .pow_mod_mut(&rug::Integer::from(rhs), &*prime.borrow())
                 .unwrap();
             self
@@ -159,21 +150,17 @@ impl num_traits::pow::Pow<u32> for ThreadPrimeField {
 
 impl num_traits::Zero for ThreadPrimeField {
     fn zero() -> Self {
-        ThreadPrimeField {
-            value: rug::Integer::from(0),
-        }
+        ThreadPrimeField(rug::Integer::from(0))
     }
 
     fn is_zero(&self) -> bool {
-        self.value == 0
+        self.0 == 0
     }
 }
 
 impl num_traits::One for ThreadPrimeField {
     fn one() -> Self {
-        ThreadPrimeField {
-            value: rug::Integer::from(1),
-        }
+        ThreadPrimeField(rug::Integer::from(1))
     }
 }
 
@@ -181,9 +168,7 @@ impl num_traits::ops::inv::Inv for ThreadPrimeField {
     type Output = Self;
 
     fn inv(self) -> Self {
-        Self {
-            value: Self::PRIME.with(|prime| self.value.invert(&*prime.borrow()).unwrap()),
-        }
+        Self(Self::PRIME.with(|prime| self.0.invert(&*prime.borrow()).unwrap()))
     }
 }
 
