@@ -164,29 +164,6 @@ impl<O: Ordering, I: Id, C: Field, P: SignedExponent + Display> Display for Sign
 }
 
 impl<O: Ordering, I: Id, C: Field, P: SignedExponent> SignPoly<O, I, C, P> {
-    /// Creates a new Signature Polynomial Builder.
-    ///
-    /// Polynomial can not be zero, otherwise this will panic.
-    pub fn new(
-        div_map: &DivMap<P>,
-        idx: u32,
-        signature: Signature<O, I, P>,
-        polynomial: Polynomial<O, I, C, P>,
-    ) -> Self {
-        let sign_to_lm_ratio = sign_to_monomial_ratio(&signature, &polynomial.terms[0].monomial);
-
-        Self {
-            masked_signature: MaskedSignature {
-                divmask: div_map.map(&signature.monomial),
-                signature,
-            },
-            lm_divmask: div_map.map(&polynomial.terms[0].monomial),
-            polynomial,
-            idx,
-            sign_to_lm_ratio,
-        }
-    }
-
     /// Compare SigPolys by signature to leading monomial ratio.
     fn sign_to_lm_ratio_cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.sign_to_lm_ratio.cmp(&other.sign_to_lm_ratio)
