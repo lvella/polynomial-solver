@@ -14,17 +14,24 @@ use std::{
 use bitvec::prelude::BitVec;
 use itertools::Itertools;
 
-use crate::{
-    ordered_ops::partial_sum,
-    polynomial::{
-        division::Field, monomial_ordering::Ordering, Id, Monomial, Polynomial, Term, VariablePower,
-    },
+use crate::polynomial::{
+    division::Field, monomial_ordering::Ordering, Id, Monomial, Polynomial, Term, VariablePower,
 };
 
 use super::{
     basis_calculator::SyzygySet, contains_divisor, rewrite_spair, DivMask, KnownBasis,
     MaskedMonomialRef, MaskedSignature, PointedCmp, Ratio, SignPoly, Signature, SignedExponent,
 };
+
+/// Calculate monomial factor that is multiplied to base to get the S-pair.
+fn calculate_spair_factor<O: Ordering, I: Id, C: Field, P: SignedExponent>(
+    base: &SignPoly<O, I, C, P>,
+    other: &SignPoly<O, I, C, P>,
+) -> Monomial<O, I, P> {
+    other.polynomial.terms[0]
+        .monomial
+        .div_by_gcd(&base.polynomial.terms[0].monomial)
+}
 
 /// Half S-pair
 ///
@@ -88,7 +95,8 @@ impl<O: Ordering, I: Id, P: SignedExponent> HalfSPair<O, I, P> {
         };
 
         // Calculate the S-pair signature.
-        let signature = HalfSPair::calculate_signature(sign_base, sign_other);
+        let signature =
+            sign_base.signature().clone() * calculate_spair_factor(sign_base, sign_other);
         let masked_signature = MaskedSignature {
             divmask: basis.div_map.map(&signature.monomial),
             signature,
@@ -104,48 +112,91 @@ impl<O: Ordering, I: Id, P: SignedExponent> HalfSPair<O, I, P> {
             })
         }
     }
+}
 
-    /// Creates a new S-pair without checking any elimination criteria.
-    fn new_unconditionally<C: Field>(
-        sign_poly: &SignPoly<O, I, C, P>,
-        idx: u32,
-        basis: &[Box<SignPoly<O, I, C, P>>],
-    ) -> Self {
-        let other = basis[idx as usize].as_ref();
+/// Contains the information needed to compute the S-pair polynomial, including
+/// its first reducer.
+struct SPairBuildInfo<O: Ordering, I: Id, P: SignedExponent> {
+    /// The monomial that multiplying by the base polynomial will give the SPair.
+    multiplier: Monomial<O, I, P>,
+    /// The idx of the base polynomial.
+    base_idx: u32,
+    /// This is the index of the other polynomial in the S-pair. It is known to
+    /// be a regular reducer of the SPair. This come for free, as it is the
+    /// other polynomial that was not used as base in the pair.
+    other_idx: u32,
+}
 
-        // Find what polynomial to calculate the signature from.
-        // It is the one with highest signature to LM ratio.
-        let (sign_base, sign_other) = match sign_poly.sign_to_lm_ratio_cmp(&other) {
-            std::cmp::Ordering::Less => (other, sign_poly),
-            _ => (sign_poly, other),
-        };
-
-        HalfSPair {
-            signature: HalfSPair::calculate_signature(sign_base, sign_other),
-            idx,
-        }
-    }
-
-    /// Calculate the S-pair signature.
-    fn calculate_signature<C: Field>(
-        base: &SignPoly<O, I, C, P>,
-        other: &SignPoly<O, I, C, P>,
-    ) -> Signature<O, I, P> {
-        let monomial = base.signature().monomial.clone()
-            * other.polynomial.terms[0]
-                .monomial
-                .div_by_gcd(&base.polynomial.terms[0].monomial);
-
-        Signature {
-            monomial,
-            ..*base.signature()
+impl<O: Ordering, I: Id, P: SignedExponent> SPairBuildInfo<O, I, P> {
+    /// Get the index pair that originated this S-pair.
+    ///
+    /// Biggest idx comes first, just to preserve the convention.
+    fn idx_pair(&self) -> (u32, u32) {
+        if self.base_idx > self.other_idx {
+            (self.base_idx, self.other_idx)
+        } else {
+            (self.other_idx, self.base_idx)
         }
     }
 }
 
-/// Elements of the SPairTriangle, ordered by head_spair signature.
+/// Contains the information needed to compute the full S-pair.
+struct SPairInfo<O: Ordering, I: Id, P: SignedExponent> {
+    signature: Signature<O, I, P>,
+    build_info: SPairBuildInfo<O, I, P>,
+    lms_are_relativelly_prime: bool,
+}
+
+impl<O: Ordering, I: Id, P: SignedExponent> SPairInfo<O, I, P> {
+    /// Creates a new S-pair info without checking for any elimination criteria.
+    fn new<C: Field>(
+        a_poly: &SignPoly<O, I, C, P>,
+        b_poly: &SignPoly<O, I, C, P>,
+        signature: Option<Signature<O, I, P>>,
+    ) -> Self {
+        let lms_are_relativelly_prime = !a_poly.polynomial.terms[0]
+            .monomial
+            .has_shared_variables(&b_poly.polynomial.terms[0].monomial);
+
+        // Find what polynomial to calculate the signature from.
+        // It is the one with highest signature to LM ratio.
+        let (sign_base, sign_other) = match a_poly.sign_to_lm_ratio_cmp(&b_poly) {
+            std::cmp::Ordering::Less => (b_poly, a_poly),
+            _ => (a_poly, b_poly),
+        };
+
+        let multiplier = calculate_spair_factor(sign_base, sign_other);
+        let signature = match signature {
+            Some(s) => s,
+            None => sign_base.signature().clone() * multiplier.clone(),
+        };
+
+        SPairInfo {
+            signature,
+            build_info: SPairBuildInfo {
+                multiplier,
+                base_idx: sign_base.idx,
+                other_idx: sign_other.idx,
+            },
+            lms_are_relativelly_prime,
+        }
+    }
+
+    /// Creates a new S-pair info directly from a HalfSpair.
+    fn from_half<C: Field>(
+        half_spair: HalfSPair<O, I, P>,
+        b_poly: &SignPoly<O, I, C, P>,
+        basis: &KnownBasis<O, I, C, P>,
+    ) -> Self {
+        let a_poly = basis.polys[half_spair.idx as usize].as_ref();
+        Self::new(b_poly, a_poly, Some(half_spair.signature))
+    }
+}
+
+/// Elements of the SPairTriangle, ordered by spair signature, where head_spair
+/// is the first.
 struct SPairColumn<O: Ordering, I: Id, P: SignedExponent> {
-    head_spair: HalfSPair<O, I, P>,
+    head_spair: SPairInfo<O, I, P>,
 
     /// The index of the polynomial S-pairing with the others in the colum.
     origin_idx: u32,
@@ -182,91 +233,35 @@ impl<O: Ordering, I: Id, P: SignedExponent> Ord for SPairColumn<O, I, P> {
 /// S-Pair where only the leading term has been evaluated.
 pub struct PartialSPair<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> {
     pub leading_term: Term<O, I, C, P>,
-    iter_p: Box<(dyn Iterator<Item = Term<O, I, C, P>> + 'a)>,
-    iter_q: Box<(dyn Iterator<Item = Term<O, I, C, P>> + 'a)>,
-}
-
-impl<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> From<PartialSPair<'a, O, I, C, P>>
-    for Polynomial<O, I, C, P>
-{
-    /// Complete the calculation of PartialSPair into a SigPoly
-    fn from(spair: PartialSPair<O, I, C, P>) -> Self {
-        let mut terms = vec![spair.leading_term];
-        Self::sum_terms(spair.iter_p, spair.iter_q, &mut terms);
-        Self { terms }
-    }
+    origin_poly: &'a SignPoly<O, I, C, P>,
+    build_info: SPairBuildInfo<O, I, P>,
 }
 
 impl<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> PartialSPair<'a, O, I, C, P> {
-    /// Creates a partial S-pair with a leading term plus enough information
-    /// to finish the computation. Performs relativelly prime elimination
-    /// criterion, and return None if the S-pair was either eliminated or
-    /// turns out to evaluate to zero.
-    fn new_if_not_eliminated(
-        p: &'a SignPoly<O, I, C, P>,
-        q: &'a SignPoly<O, I, C, P>,
-    ) -> Option<Self> {
-        // Helper function used to calculate the complement of each polynomial
-        let complement = |a: &Term<O, I, C, P>, b: &Term<O, I, C, P>| Term {
-            monomial: a.monomial.div_by_gcd(&b.monomial),
-            // Each complement has the coefficient of the other polynomial, so that
-            // when multiplied, they end up with the same value.
-            coefficient: a.coefficient.clone(),
-        };
+    fn new(
+        build_info: SPairBuildInfo<O, I, P>,
+        basis: &'a [Box<SignPoly<O, I, C, P>>],
+    ) -> PartialSPair<'a, O, I, C, P> {
+        let origin_poly = basis[build_info.base_idx as usize].as_ref();
+        let mut leading_term = origin_poly.polynomial.terms[0].clone();
+        leading_term.monomial = leading_term.monomial * build_info.multiplier.clone();
 
-        let mut iter_p = p.polynomial.terms.iter();
-        let ini_p = iter_p.next()?;
-
-        let mut iter_q = q.polynomial.terms.iter();
-        let ini_q = iter_q.next()?;
-
-        // Relativelly prime criterion: if leading monomials are relativelly
-        // prime, the S-pair will reduce to zero.
-        if !ini_p.monomial.has_shared_variables(&ini_q.monomial) {
-            return None;
-        }
-
-        let p_complement = complement(ini_q, ini_p);
-        let mut q_complement = complement(ini_p, ini_q);
-
-        // q_complement's coefficient must be the opposite, so the sum would
-        // eliminate the first term:
-        q_complement.coefficient = {
-            let mut neg = C::zero();
-            neg -= q_complement.coefficient;
-            neg
-        };
-
-        let mut iter_p = Box::new(
-            iter_p
-                .map(move |x| p_complement.clone() * x.clone())
-                .peekable(),
-        );
-        let mut iter_q = Box::new(
-            iter_q
-                .map(move |x| q_complement.clone() * x.clone())
-                .peekable(),
-        );
-
-        let leading_term = partial_sum(
-            &mut iter_p,
-            &mut iter_q,
-            |a, b| b.monomial.cmp(&a.monomial),
-            |mut a, b| {
-                a.coefficient += b.coefficient;
-                if a.coefficient.is_zero() {
-                    None
-                } else {
-                    Some(a)
-                }
-            },
-        )?;
-
-        Some(PartialSPair {
+        Self {
             leading_term,
-            iter_p,
-            iter_q,
-        })
+            origin_poly,
+            build_info,
+        }
+    }
+
+    pub fn complete(self: Self) -> (Polynomial<O, I, C, P>, u32) {
+        let mut terms = vec![self.leading_term];
+        terms.extend(self.origin_poly.polynomial.terms[1..].iter().map(|term| {
+            let mut term = term.clone();
+            term.monomial = self.build_info.multiplier.clone() * term.monomial;
+            term
+        }));
+
+        (Polynomial { terms }, self.build_info.other_idx)
     }
 }
 
@@ -598,7 +593,7 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
             ) {
                 Ok(spair) => {
                     new_spairs.push(spair);
-                    false /* does not reduce to zero */
+                    false /* does not reduce to zero (that we know) */
                 }
                 Err(red_to_zero) => red_to_zero,
             };
@@ -614,7 +609,7 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
             let origin_idx = basis.polys.len() as u32;
 
             self.heads.push(SPairColumn {
-                head_spair,
+                head_spair: SPairInfo::from_half(head_spair, sign_poly, basis),
                 column,
                 origin_idx,
             });
@@ -622,29 +617,23 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
     }
 
     /// Extract the one of the S-pairs with minimal signature. There can be multiple.
-    fn pop<'a, C: Field>(
-        &mut self,
-        basis: &'a [Box<SignPoly<O, I, C, P>>],
-    ) -> Option<(
-        Signature<O, I, P>,
-        &'a SignPoly<O, I, C, P>,
-        &'a SignPoly<O, I, C, P>,
-    )> {
+    fn pop<C: Field>(&mut self, basis: &[Box<SignPoly<O, I, C, P>>]) -> Option<SPairInfo<O, I, P>> {
         // Get the S-pair at the head of the column
         let mut head = self.heads.pop()?;
         let ret = head.head_spair;
-        let a_poly = basis[head.origin_idx as usize].as_ref();
-        assert!(a_poly.idx == head.origin_idx);
-        let b_poly = basis[ret.idx as usize].as_ref();
-        assert!(b_poly.idx == ret.idx);
 
         // Update the column's head and insert it back into the heap
         if let Some(next_head_idx) = head.column.pop() {
-            head.head_spair = HalfSPair::new_unconditionally(a_poly, next_head_idx, basis);
+            let a_poly = basis[head.origin_idx as usize].as_ref();
+            assert!(a_poly.idx == head.origin_idx);
+            let b_poly = basis[next_head_idx as usize].as_ref();
+            assert!(b_poly.idx == next_head_idx);
+
+            head.head_spair = SPairInfo::new(a_poly, b_poly, None);
             self.heads.push(head);
         }
 
-        Some((ret.signature, a_poly, b_poly))
+        Some(ret)
     }
 
     /// Return the next S-pair to be reduced, which is the S-pair of minimal
@@ -656,28 +645,35 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
     ) -> Option<(
         MaskedSignature<O, I, P>,
         Polynomial<O, I, C, P>,
+        Option<u32>,
         Vec<(u32, u32)>,
     )> {
         let mut same_sign_spairs = Vec::new();
 
         // Iterate until some S-pair remains that is not eliminated by one
         // of the late elimination criteria.
-        while let Some((signature, a_poly, b_poly)) = self.pop(&basis.polys) {
+        while let Some(spair) = self.pop(&basis.polys) {
             same_sign_spairs.clear();
-            same_sign_spairs.push((a_poly.idx, b_poly.idx));
+            same_sign_spairs.push(spair.build_info.idx_pair());
 
             let m_sign = MaskedSignature {
-                divmask: basis.div_map.map(&signature.monomial),
-                signature,
+                divmask: basis.div_map.map(&spair.signature.monomial),
+                signature: spair.signature,
             };
 
-            // Late test for signature criterion:
-            let mut chosen_spair = if contains_divisor(&m_sign, &syzygies) {
-                // Eliminated by signature criterion
-                Err(true)
+            // Test for relativelly prime criterion.
+            let mut chosen_spair = if spair.lms_are_relativelly_prime {
+                // Eliminated by the relativelly prime criterion.
+                Err(false)
             } else {
-                // Either we get a S-pair, or it was not eliminated by signature.
-                PartialSPair::new_if_not_eliminated(a_poly, b_poly).ok_or(false)
+                // Late test for signature criterion:
+                if contains_divisor(&m_sign, &syzygies) {
+                    // Eliminated by signature criterion
+                    Err(true)
+                } else {
+                    // Either we get an S-pair, or it was not eliminated by signature.
+                    Ok(PartialSPair::new(spair.build_info, &basis.polys))
+                }
             };
 
             // Duplicate signature criterion: only one of all S-pairs of the
@@ -688,26 +684,19 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
                     break;
                 }
 
-                let (_, a_poly, b_poly) = self.pop(&basis.polys).unwrap();
-                same_sign_spairs.push((a_poly.idx, b_poly.idx));
+                let new_spair = self.pop(&basis.polys).unwrap();
+                same_sign_spairs.push(new_spair.build_info.idx_pair());
 
                 // Only process the new S-pair if no other of same signature has been eliminated.
                 if let Ok(spair) = &mut chosen_spair {
-                    match PartialSPair::new_if_not_eliminated(a_poly, b_poly) {
-                        Some(new_spair) => {
-                            // There is a non-eliminated new S-pair,
-                            // replace the chosen one if it has a smaller
-                            // leading monomial.
-                            if new_spair.leading_term.monomial < spair.leading_term.monomial {
-                                *spair = new_spair;
-                            }
-                        }
-                        None => {
-                            // The new S-pair was eliminated by relatively prime
-                            // criterion (or amazingly, reduced to zero), so
-                            // every S-pair of same signature can be eliminated
-                            // as well.
-                            chosen_spair = Err(false);
+                    if new_spair.lms_are_relativelly_prime {
+                        // Eliminated by the relativelly prime criterion.
+                        chosen_spair = Err(false)
+                    } else {
+                        let new_spair = PartialSPair::new(new_spair.build_info, &basis.polys);
+
+                        if new_spair.leading_term.monomial < spair.leading_term.monomial {
+                            *spair = new_spair;
                         }
                     }
                 }
@@ -719,8 +708,8 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
                 Ok(spair) => {
                     // We found a potential S-pair. Apply rewrite criterion to it
                     // and return if not singular.
-                    if let Some(spair) = rewrite_spair(&m_sign, spair, basis) {
-                        return Some((m_sign, spair, same_sign_spairs));
+                    if let Some((poly, reducer)) = rewrite_spair(&m_sign, spair, basis) {
+                        return Some((m_sign, poly, reducer, same_sign_spairs));
                     }
                 }
                 Err(eliminated_by_signature) => {

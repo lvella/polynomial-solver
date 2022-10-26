@@ -7,7 +7,7 @@ mod basis_calculator;
 mod s_pairs;
 mod signature_monomial_index;
 
-use std::{collections::BTreeMap, fmt::Display};
+use std::{collections::BTreeMap, fmt::Display, ops::Mul};
 
 use self::{
     basis_calculator::{BasisCalculator, KnownBasis, SyzygySet},
@@ -91,6 +91,15 @@ impl<'a, O: Ordering, I: Id, P: SignedExponent> MaskedMonomialRef<'a, O, I, P> {
 pub struct Signature<O: Ordering, I: Id, P: SignedExponent> {
     idx: u32,
     monomial: Monomial<O, I, P>,
+}
+
+impl<O: Ordering, I: Id, P: SignedExponent> Mul<Monomial<O, I, P>> for Signature<O, I, P> {
+    type Output = Self;
+
+    fn mul(mut self, rhs: Monomial<O, I, P>) -> Self {
+        self.monomial = self.monomial * rhs;
+        self
+    }
 }
 
 impl<O: Ordering, I: Id, P: SignedExponent + Display> Display for Signature<O, I, P> {
@@ -243,7 +252,7 @@ fn rewrite_spair<O: Ordering, I: Id, C: Field, P: SignedExponent>(
     m_sign: &MaskedSignature<O, I, P>,
     s_pair: PartialSPair<O, I, C, P>,
     basis: &KnownBasis<O, I, C, P>,
-) -> Option<Polynomial<O, I, C, P>> {
+) -> Option<(Polynomial<O, I, C, P>, Option<u32>)> {
     // Limit search for rewrite candidate in elements whose signature/lm
     // ratio are greater than the current candidate we have, in ascending
     // order, so that the first match we find will be the one with the
@@ -282,11 +291,12 @@ fn rewrite_spair<O: Ordering, I: Id, C: Field, P: SignedExponent>(
             }
 
             // We have a minimal leading monomial rewriter.
-            return Some(&factor * rewriter.polynomial.clone());
+            return Some((&factor * rewriter.polynomial.clone(), None));
         }
     }
 
-    Some(s_pair.into())
+    let (p, reducer) = s_pair.complete();
+    Some((p, Some(reducer)))
 }
 
 /// Regular reduction, as defined in the paper.
@@ -298,6 +308,7 @@ fn regular_reduce<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Di
     idx: u32,
     m_sign: MaskedSignature<O, I, P>,
     reduced_poly: Polynomial<O, I, C, P>,
+    first_reducer: Option<u32>,
     basis: &KnownBasis<O, I, C, P>,
 ) -> RegularReductionResult<O, I, C, P> {
     // The paper suggests splitting the reduced polynomial into a hash map of
@@ -320,6 +331,13 @@ fn regular_reduce<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Di
     // Reduce one term at a time.
     let mut reduced_terms = Vec::new();
     let mut lm_properties = None;
+
+    // If first_reducer has been provided, we use it to skip one search
+    // for a reducer.
+    if let Some(idx) = first_reducer {
+        // TODO...
+    }
+
     while let Some((m, c)) = to_reduce.pop_last() {
         // Reassemble the term
         let term = Term {
@@ -462,14 +480,21 @@ pub fn grobner_basis<
     // more S-pairs to be reduced. Since each newly inserted polynomials can
     // generate up to n-1 new S-pairs, this loop is exponential.
     loop {
-        let (m_sign, s_pair, indices) = if let Some(next_spair) = c.get_next_spair() {
+        let (m_sign, s_pair, first_reducer, indices) = if let Some(next_spair) = c.get_next_spair()
+        {
             next_spair
         } else {
             break;
         };
 
         let b = c.get_basis();
-        match regular_reduce(b.polys.len() as u32, m_sign, s_pair, c.get_basis()) {
+        match regular_reduce(
+            b.polys.len() as u32,
+            m_sign,
+            s_pair,
+            first_reducer,
+            c.get_basis(),
+        ) {
             RegularReductionResult::Reduced(reduced) => {
                 println!(
                     "#(p: {}, s: {}), {:?} → {}",

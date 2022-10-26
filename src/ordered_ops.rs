@@ -65,53 +65,6 @@ pub fn sum<T>(
     }
 }
 
-/// Like sum, but stops when the first element is calculated.
-pub fn partial_sum<T: Clone>(
-    a_iter: &mut Peekable<impl Iterator<Item = T>>,
-    b_iter: &mut Peekable<impl Iterator<Item = T>>,
-    cmp: impl Fn(&T, &T) -> std::cmp::Ordering,
-    op: impl Fn(T, T) -> Option<T>,
-) -> Option<T> {
-    loop {
-        let ret;
-        match (a_iter.peek(), b_iter.peek()) {
-            (Some(ra), Some(rb)) => match cmp(ra, rb) {
-                std::cmp::Ordering::Equal => {
-                    let a = a_iter.next().unwrap();
-                    let b = b_iter.next().unwrap();
-
-                    // Do the operation
-                    match op(a, b) {
-                        Some(r) => {
-                            ret = r;
-                            false
-                        }
-                        None => {
-                            continue;
-                        }
-                    };
-                }
-                std::cmp::Ordering::Less => {
-                    ret = a_iter.next().unwrap();
-                }
-                std::cmp::Ordering::Greater => {
-                    ret = b_iter.next().unwrap();
-                }
-            },
-            (None, Some(_)) => {
-                ret = b_iter.next().unwrap();
-            }
-            (Some(_), None) => {
-                ret = a_iter.next().unwrap();
-            }
-            (None, None) => {
-                return None;
-            }
-        }
-        return Some(ret);
-    }
-}
-
 /// Implements ordered saturated difference.
 /// Used to calculate the complementing monomial in spar algorithm
 pub fn saturating_sub<T, U>(

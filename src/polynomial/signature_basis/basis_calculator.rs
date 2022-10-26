@@ -165,6 +165,7 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
     ) -> Option<(
         MaskedSignature<O, I, P>,
         Polynomial<O, I, C, P>,
+        Option<u32>,
         Vec<(u32, u32)>,
     )> {
         self.spairs.get_next(&self.basis, &mut self.syzygies)
