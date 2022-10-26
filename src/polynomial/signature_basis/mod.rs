@@ -19,9 +19,7 @@ use super::{
     divmask::{self, DivMaskTestResult},
 };
 use super::{monomial_ordering::Ordering, Exponent, Id, Monomial, Polynomial, Term};
-use num_traits::One;
-
-use num_traits::Signed;
+use num_traits::{One, Signed, Zero};
 
 type CmpMap<O, I, P> = crate::fast_compare::ComparerMap<Signature<O, I, P>>;
 type Ratio<O, I, P> = crate::fast_compare::FastCompared<Signature<O, I, P>>;
@@ -439,6 +437,69 @@ fn regular_reduce<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Di
     }
 }
 
+/// Handles the result of a reduction, and returns Err(Polynomial) in case of
+/// constant, for early termination.
+fn handle_reduction_result<
+    O: Ordering,
+    I: Id + Display,
+    F: Field + Display,
+    E: SignedExponent + Display,
+>(
+    c: &mut BasisCalculator<O, I, F, E>,
+    reduction: RegularReductionResult<O, I, F, E>,
+    spair_indices: &[(u32, u32)],
+) -> Result<(), Vec<Polynomial<O, I, F, E>>> {
+    match reduction {
+        RegularReductionResult::Reduced(reduced) => {
+            println!(
+                "#(p: {}, s: {}), {:?} → {}",
+                c.get_basis().polys.len(),
+                c.get_num_syzygies(),
+                spair_indices,
+                reduced
+            );
+
+            // Polynomial is a new valid member of the basis. Insert it into
+            // the basis.
+            c.insert_poly_with_spairs(reduced);
+
+            // Generate the corresponding Koszul syzygy to help eliminating
+            // future S-pairs.
+            c.add_koszul_syzygies(spair_indices);
+        }
+        RegularReductionResult::Zero(signature) => {
+            // Polynomial reduces to zero, so we keep the signature to
+            // eliminate S-pairs before reduction.
+            c.add_spair_syzygy(signature, spair_indices);
+        }
+        RegularReductionResult::Singular => {
+            // Polynomial was singular top reducible, so it was redundant
+            // and discarded.
+            return Ok(());
+        }
+        RegularReductionResult::NonZeroConstant(polynomial) => {
+            // The new basis member is a constant, so it reduces everything
+            // to zero and we can stop.
+            return Err(vec![polynomial]);
+        }
+    }
+
+    // Something was added to the basis calculator, be it polynomial or
+    // syzygy, so the monomials might have changed enough to justify
+    // a recalculation of the divmasks.
+    c.maybe_recalculate_divmasks();
+
+    Ok(())
+}
+
+macro_rules! early_ret_err {
+    ($result: expr) => {
+        match $result {
+            Ok(x) => x,
+            Err(e) => return e,
+        }
+    };
+}
 /// Calculates a Grobner Basis using the Signature Buchberger (SB) algorithm.
 ///
 /// The returned basis will not be reduced.
@@ -450,64 +511,76 @@ pub fn grobner_basis<
 >(
     input: Vec<Polynomial<O, I, C, P>>,
 ) -> Vec<Polynomial<O, I, C, P>> {
-    // Initiate the basis calculation with the input polynomials.
-    let mut c = match BasisCalculator::new(input) {
-        Ok(c) => c,
-        Err(const_polynomial) => {
-            return vec![const_polynomial];
+    // Quick sanity check if any of the inputs are constants, and get the
+    // maximum variable id.
+    let mut max_var_id = 0;
+    for p in input.iter() {
+        if p.is_constant() && !p.is_zero() {
+            // If there is a constant, the GB for this input is trivial.
+            return vec![Polynomial::new_constant(C::one())];
         }
-    };
 
-    // Main loop, reduce every S-pair and insert in the basis until there are no
-    // more S-pairs to be reduced. Since each newly inserted polynomials can
-    // generate up to n-1 new S-pairs, this loop is exponential.
-    loop {
-        let (m_sign, s_pair, indices) = if let Some(next_spair) = c.get_next_spair() {
-            next_spair
-        } else {
-            break;
+        for t in p.terms.iter() {
+            for var in t.monomial.product.iter() {
+                let var_id = var.id.to_idx();
+                if max_var_id < var_id {
+                    max_var_id = var_id;
+                }
+            }
+        }
+    }
+
+    let mut c = BasisCalculator::new(max_var_id + 1);
+
+    // We incrementally add the input polynomials one by one, and expand the
+    // calculated Gröbner Basis each time. This can be done because in the
+    // signature order we use, called the "pot" order by "A survey on
+    // signature-based algorithms for computing Gröbner bases" (Eder & Faugère,
+    // 2017), all the S-pairs among the previous input polynomials have:
+    //
+    // a) smaller signature than the next input polynomial and all its S-pairs
+    // descendants, so we don't break the rule that the new polynomials inserted
+    // into the basis must be processed in incremental signature order;
+    //
+    // b) smaller signature/LM ratios than the next input polynomial, so it
+    // can't possibly be a regular reducer for any of the previous basis
+    // elements.
+    //
+    // This doesn't hold "top" or other arbitrary signature orders, but "pot"
+    // seems to be the most efficient order (and we are using it).
+    for (i, p) in input.into_iter().enumerate() {
+        let reduction = {
+            // Assemble the signature for the new polynomial:
+            let monomial = Monomial::one();
+            let m_sign = MaskedSignature {
+                divmask: c.get_basis().div_map.map(&monomial),
+                signature: Signature {
+                    idx: i as u32,
+                    monomial,
+                },
+            };
+
+            // Reduce it:
+            let b = c.get_basis();
+            regular_reduce(b.polys.len() as u32, m_sign, p, b)
         };
 
-        let b = c.get_basis();
-        match regular_reduce(b.polys.len() as u32, m_sign, s_pair, c.get_basis()) {
-            RegularReductionResult::Reduced(reduced) => {
-                println!(
-                    "#(p: {}, s: {}), {:?} → {}",
-                    b.polys.len(),
-                    c.get_num_syzygies(),
-                    indices,
-                    reduced
-                );
+        early_ret_err!(handle_reduction_result(&mut c, reduction, &[]));
 
-                // Polynomial is a new valid member of the basis. Insert it into
-                // the basis.
-                c.insert_poly_with_spairs(reduced);
+        // Main loop, reduce every S-pair and insert in the basis until there are no
+        // more S-pairs to be reduced. Since each newly inserted polynomials can
+        // generate up to n-1 new S-pairs, this loop is exponential.
+        loop {
+            let (m_sign, s_pair, indices) = if let Some(next_spair) = c.get_next_spair() {
+                next_spair
+            } else {
+                break;
+            };
 
-                // Generate the corresponding Koszul syzygy to help eliminating
-                // future S-pairs.
-                c.add_koszul_syzygies(&indices[..]);
-            }
-            RegularReductionResult::Zero(signature) => {
-                // Polynomial reduces to zero, so we keep the signature to
-                // eliminate S-pairs before reduction.
-                c.add_spair_syzygy(signature, &indices[..]);
-            }
-            RegularReductionResult::Singular => {
-                // Polynomial was singular top reducible, so it was redundant
-                // and discarded.
-                continue;
-            }
-            RegularReductionResult::NonZeroConstant(polynomial) => {
-                // The new basis member is a constant, so it reduces everything
-                // to zero and we can stop.
-                return vec![polynomial];
-            }
+            let b = c.get_basis();
+            let reduction = regular_reduce(b.polys.len() as u32, m_sign, s_pair, b);
+            early_ret_err!(handle_reduction_result(&mut c, reduction, &indices[..]));
         }
-
-        // Something was added to the basis calculator, be it polynomial or
-        // syzygy, so the monomials might have changed enough to justify
-        // a recalculation of the divmasks.
-        c.maybe_recalculate_divmasks();
     }
 
     // Return the polynomials from the basis.

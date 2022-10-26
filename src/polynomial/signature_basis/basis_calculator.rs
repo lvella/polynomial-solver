@@ -28,7 +28,8 @@ pub struct KnownBasis<O: Ordering, I: Id, C: Field, P: SignedExponent> {
     /// important to the spair triangle).
     pub polys: Vec<Box<SignPoly<O, I, C, P>>>,
 
-    /// Basis ordered by signature to leading monomial ratio.
+    /// Basis ordered by signature to leading monomial ratio (plus a
+    /// disambiguation integer, to allow for elements with same key).
     ///
     /// TODO: to search for a reducer and for a high base divisor, maybe this
     /// should be a n-D index (like R*-tree), indexing both the leading monomial
@@ -91,11 +92,25 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
     BasisCalculator<O, I, C, P>
 {
     /// Creates a new basis calculator.
-    ///
+    pub fn new(num_vars: usize) -> Self {
+        let max_exp = MaximumExponentsTracker::new(num_vars);
+        BasisCalculator {
+            basis: KnownBasis {
+                div_map: DivMap::new(&max_exp),
+                max_exp,
+                polys: Vec::new(),
+                by_sign_lm_ratio: BTreeMap::new(),
+            },
+            syzygies: SyzygySet::new(),
+            spairs: s_pairs::SPairTriangle::new(),
+            ratio_map: CmpMap::new(),
+        }
+    }
+
     /// May fail if the input contains a constant polynomial, in which case the
     /// polynomial is returned as the error.
-    pub fn new(input: Vec<Polynomial<O, I, C, P>>) -> Result<Self, Polynomial<O, I, C, P>> {
-        let mut max_exp = MaximumExponentsTracker::new();
+    pub fn neww(input: Vec<Polynomial<O, I, C, P>>) -> Result<Self, Polynomial<O, I, C, P>> {
+        let mut max_exp = MaximumExponentsTracker::new(0);
 
         let filtered_input: Vec<Polynomial<O, I, C, P>> = input
             .into_iter()
