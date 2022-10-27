@@ -523,8 +523,8 @@ pub fn grobner_basis<
     // can't possibly be a regular reducer for any of the previous basis
     // elements.
     //
-    // This doesn't hold "top" or other arbitrary signature orders, but "pot"
-    // seems to be the most efficient order (and we are using it).
+    // This doesn't hold for "top" or other arbitrary signature orders, but
+    // "pot" seems to be the most efficient order (and we are using it).
     for (i, p) in input.into_iter().enumerate() {
         let reduction = {
             // Assemble the signature for the new polynomial:
