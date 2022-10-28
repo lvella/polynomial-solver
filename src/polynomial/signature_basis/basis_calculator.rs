@@ -1,10 +1,10 @@
-use std::{collections::BTreeMap, fmt::Display};
+use std::{cell::Cell, collections::BTreeMap, fmt::Display, marker::PhantomData};
 
 use num_traits::{One, Zero};
 
 use crate::polynomial::{
     division::Field, divmask::MaximumExponentsTracker, monomial_ordering::Ordering, Id, Monomial,
-    Polynomial,
+    Polynomial, VariablePower,
 };
 
 use super::{
@@ -17,6 +17,10 @@ use super::{
 /// Everything is public because all fields must be read by the user, and the
 /// user can only get an immutable reference.
 pub struct KnownBasis<O: Ordering, I: Id, C: Field, P: SignedExponent> {
+    /// Lowest possible monomial ratio with these variables, useful in the
+    /// search for rewriter/singular criterion. Two copies are necessary.
+    pub lowest_monomial_ratio: Cell<Monomial<O, I, P>>,
+
     /// Tracks the maximum exponent seen for each variable, and the evolution.
     pub max_exp: MaximumExponentsTracker<P>,
 
@@ -125,12 +129,24 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
             .collect::<Result<_, _>>()?;
 
         max_exp.reset_tracking();
+
+        let lowest_monomial_ratio = Cell::new(Monomial {
+            product: (0..max_exp.len())
+                .map(|idx| VariablePower {
+                    id: I::from_idx(idx),
+                    power: P::min_value(),
+                })
+                .collect(),
+            total_power: P::min_value(),
+            _phantom_ordering: PhantomData,
+        });
         let mut c = BasisCalculator {
             basis: KnownBasis {
                 div_map: DivMap::new(&max_exp),
                 max_exp,
                 polys: Vec::new(),
                 by_sign_lm_ratio: BTreeMap::new(),
+                lowest_monomial_ratio,
             },
             syzygies: SyzygySet::new(),
             spairs: s_pairs::SPairTriangle::new(),
