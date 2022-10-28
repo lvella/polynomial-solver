@@ -7,7 +7,7 @@ mod basis_calculator;
 mod s_pairs;
 mod signature_monomial_index;
 
-use std::{collections::BTreeMap, fmt::Display};
+use std::{collections::BTreeMap, fmt::Display, ops::Bound::Excluded};
 
 use self::{
     basis_calculator::{BasisCalculator, KnownBasis, SyzygySet},
@@ -219,49 +219,80 @@ fn rewrite_spair<O: Ordering, I: Id, C: Field, P: SignedExponent>(
     s_pair: PartialSPair<O, I, C, P>,
     basis: &KnownBasis<O, I, C, P>,
 ) -> Option<Polynomial<O, I, C, P>> {
-    // Limit search for rewrite candidate in elements whose signature/lm
-    // ratio are greater than the current candidate we have, in ascending
-    // order, so that the first match we find will be the one with the
-    // smallest leading monomial.
-    let sign_to_lm_ratio = sign_to_monomial_ratio(&m_sign.signature, &s_pair.leading_term.monomial);
-    let search_range = basis
-        .by_sign_lm_ratio
-        .range((PointedCmp(&sign_to_lm_ratio), 0)..);
+    // All this trickery just to avoid copying the lowest_monomial_ratio from
+    // basis to create upper_limit.
+    //
+    // TODO: fix this very ugly hack
+    fn inner<O: Ordering, I: Id, C: Field, P: SignedExponent>(
+        upper_limit: &Ratio<O, I, P>,
+        m_sign: &MaskedSignature<O, I, P>,
+        s_pair: PartialSPair<O, I, C, P>,
+        basis: &KnownBasis<O, I, C, P>,
+    ) -> Option<Polynomial<O, I, C, P>> {
+        // Limit search to elements whose signature/lm ratio are greater than the
+        // current candidate we have, in descending order, so that the first match
+        // we find will be the one with the smallest leading monomial.
+        let lower_limit = sign_to_monomial_ratio(&m_sign.signature, &s_pair.leading_term.monomial);
+        let search_range = basis
+            .by_sign_lm_ratio
+            .range((
+                Excluded((PointedCmp(&lower_limit), u32::MAX)),
+                Excluded((PointedCmp(upper_limit), 0)),
+            ))
+            .rev();
 
-    let masked_sig_monomial = m_sign.monomial();
+        let masked_sig_monomial = m_sign.monomial();
 
-    for (_, rewriter) in search_range {
-        let rewriter = unsafe { &**rewriter };
-        if rewriter.signature().idx != m_sign.signature.idx {
-            // No rewriter found that can divide s-pair signature.
-            break;
-        }
+        for (_, rewriter) in search_range {
+            let rewriter = unsafe { &**rewriter };
+            assert!(rewriter.signature().idx == m_sign.signature.idx);
 
-        if rewriter
-            .masked_signature
-            .monomial()
-            .divides(&masked_sig_monomial)
-        {
-            let factor = m_sign
-                .signature
-                .monomial
-                .clone()
-                .whole_division(&rewriter.signature().monomial)
-                .unwrap();
+            if rewriter
+                .masked_signature
+                .monomial()
+                .divides(&masked_sig_monomial)
+            {
+                let factor = m_sign
+                    .signature
+                    .monomial
+                    .clone()
+                    .whole_division(&rewriter.signature().monomial)
+                    .unwrap();
 
-            // Test singular criterion: if signatures are identical (which means
-            // the quotient is one), it is already reduced and present in the
-            // basis.
-            if factor.is_one() {
-                return None;
+                // Test singular criterion: if signatures are identical (which means
+                // the quotient is one), it is already reduced and present in the
+                // basis.
+                if factor.is_one() {
+                    return None;
+                }
+
+                // We have a minimal leading monomial rewriter.
+                let poly = &factor * rewriter.polynomial.clone();
+                assert!(poly.terms[0].monomial < s_pair.leading_term.monomial);
+                return Some(poly);
             }
-
-            // We have a minimal leading monomial rewriter.
-            return Some(&factor * rewriter.polynomial.clone());
         }
+
+        Some(s_pair.into())
     }
 
-    Some(s_pair.into())
+    let upper_limit = Ratio::new(
+        None,
+        Signature {
+            // The higher index will limit the search to smaller indices.
+            idx: m_sign.signature.idx + 1,
+            monomial: basis.lowest_monomial_ratio.replace(Monomial::one()),
+        },
+    )
+    .unwrap();
+
+    let ret = inner(&upper_limit, m_sign, s_pair, basis);
+
+    basis
+        .lowest_monomial_ratio
+        .set(upper_limit.into_inner().monomial);
+
+    ret
 }
 
 /// Regular reduction, as defined in the paper.
