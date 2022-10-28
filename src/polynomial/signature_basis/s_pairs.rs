@@ -22,7 +22,7 @@ use crate::{
 };
 
 use super::{
-    basis_calculator::SyzygySet, contains_divisor, rewrite_spair, DivMask, KnownBasis,
+    basis_calculator::SyzygySet, contains_divisor, test_singular_criterion, DivMask, KnownBasis,
     MaskedMonomialRef, MaskedSignature, PointedCmp, Ratio, SignPoly, Signature, SignedExponent,
 };
 
@@ -717,10 +717,10 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
             // is at most one remaining.
             match chosen_spair {
                 Ok(spair) => {
-                    // We found a potential S-pair. Apply rewrite criterion to it
-                    // and return if not singular.
-                    if let Some(spair) = rewrite_spair(&m_sign, spair, basis) {
-                        return Some((m_sign, spair, same_sign_spairs));
+                    // We found a potential S-pair. Apply singular criterion.
+                    if !test_singular_criterion(&m_sign, &spair, basis) {
+                        // S-pair was kept.
+                        return Some((m_sign, spair.into(), same_sign_spairs));
                     }
                 }
                 Err(eliminated_by_signature) => {

@@ -213,22 +213,25 @@ enum RegularReductionResult<O: Ordering, I: Id, C: Field, P: SignedExponent> {
     Reduced(SignPoly<O, I, C, P>),
 }
 
-// Search for an basis member to rewrite, and return if not singular.
-fn rewrite_spair<O: Ordering, I: Id, C: Field, P: SignedExponent>(
+/// Tests for singular criterion: searches the basis members for an element
+/// that would make the S-pair redundant.
+///
+/// Returns true if the S-pair is singular and must be eliminated.
+fn test_singular_criterion<O: Ordering, I: Id, C: Field, P: SignedExponent>(
     m_sign: &MaskedSignature<O, I, P>,
-    s_pair: PartialSPair<O, I, C, P>,
+    s_pair: &PartialSPair<O, I, C, P>,
     basis: &KnownBasis<O, I, C, P>,
-) -> Option<Polynomial<O, I, C, P>> {
-    // All this trickery just to avoid copying the lowest_monomial_ratio from
-    // basis to create upper_limit.
+) -> bool {
+    // All this trickery with inner function just to avoid copying the
+    // lowest_monomial_ratio from basis to create upper_limit.
     //
     // TODO: fix this very ugly hack
     fn inner<O: Ordering, I: Id, C: Field, P: SignedExponent>(
         upper_limit: &Ratio<O, I, P>,
         m_sign: &MaskedSignature<O, I, P>,
-        s_pair: PartialSPair<O, I, C, P>,
+        s_pair: &PartialSPair<O, I, C, P>,
         basis: &KnownBasis<O, I, C, P>,
-    ) -> Option<Polynomial<O, I, C, P>> {
+    ) -> bool {
         // Limit search to elements whose signature/lm ratio are greater than the
         // current candidate we have, in descending order, so that the first match
         // we find will be the one with the smallest leading monomial.
@@ -243,37 +246,25 @@ fn rewrite_spair<O: Ordering, I: Id, C: Field, P: SignedExponent>(
 
         let masked_sig_monomial = m_sign.monomial();
 
-        for (_, rewriter) in search_range {
-            let rewriter = unsafe { &**rewriter };
-            assert!(rewriter.signature().idx == m_sign.signature.idx);
-
-            if rewriter
+        for (_, singular) in search_range {
+            let singular = unsafe { &**singular };
+            assert!(singular.signature().idx == m_sign.signature.idx);
+            // Test singular criterion: if we find some element p whose signature
+            // divides the S-pair's signature, it means there is some f such that
+            // f*e has the same signature. Since we only search greater sign/LM
+            // ratio, f*e will necessarily have smaller LM than the S-pair, which
+            // means that this S-pair can be eliminated immediately, according to
+            // Section 3.2 of the paper.
+            if singular
                 .masked_signature
                 .monomial()
                 .divides(&masked_sig_monomial)
             {
-                let factor = m_sign
-                    .signature
-                    .monomial
-                    .clone()
-                    .whole_division(&rewriter.signature().monomial)
-                    .unwrap();
-
-                // Test singular criterion: if signatures are identical (which means
-                // the quotient is one), it is already reduced and present in the
-                // basis.
-                if factor.is_one() {
-                    return None;
-                }
-
-                // We have a minimal leading monomial rewriter.
-                let poly = &factor * rewriter.polynomial.clone();
-                assert!(poly.terms[0].monomial < s_pair.leading_term.monomial);
-                return Some(poly);
+                return true;
             }
         }
 
-        Some(s_pair.into())
+        false
     }
 
     let upper_limit = Ratio::new(

@@ -1,7 +1,5 @@
 use std::{cell::Cell, collections::BTreeMap, fmt::Display, marker::PhantomData};
 
-use num_traits::{One, Zero};
-
 use crate::polynomial::{
     division::Field, divmask::MaximumExponentsTracker, monomial_ordering::Ordering, Id, Monomial,
     Polynomial, VariablePower,
