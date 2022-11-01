@@ -253,7 +253,7 @@ fn test_singular_criterion<O: Ordering, I: Id, C: Field, P: SignedExponent>(
             .by_sign_lm_ratio
             .range((
                 Excluded((PointedCmp(&lower_limit), u32::MAX)),
-                Excluded((PointedCmp(upper_limit), 0)),
+                Excluded((PointedCmp(upper_limit), u32::MIN)),
             ))
             .rev();
 
@@ -335,7 +335,61 @@ fn regular_reduce<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Di
     // If first_reducer has been provided, we use it to skip one search
     // for a reducer.
     if let Some(idx) = first_reducer {
-        // TODO...
+        let reducer = basis.polys[idx as usize].as_ref();
+
+        let (m, c) = to_reduce.pop_last().unwrap();
+        assert!(reducer.polynomial.terms[0].monomial.divides(&m));
+
+        // Reassemble the term
+        let term = Term {
+            coefficient: c,
+            monomial: m,
+        };
+
+        // TODO: deduplicate the code below:
+
+        let mut iter = reducer.polynomial.terms.iter();
+        let leading_term = iter.next().unwrap();
+
+        // Calculate the multiplier monomial that will nullify the term.
+        // We can unwrap() because we trust "find_a_regular_reducer" to
+        // have returned a valid reducer.
+        let monomial = term
+            .monomial
+            .whole_division(&leading_term.monomial)
+            .unwrap();
+
+        // Calculate the multiplier's coefficient using the reducer leading term:
+        let coefficient = term
+            .coefficient
+            .elimination_factor(&leading_term.coefficient.clone().inv());
+
+        let factor = Term {
+            coefficient,
+            monomial,
+        };
+
+        // Subtract every element of the reducer from the rest of the
+        // polynomial.
+        for term in iter {
+            use std::collections::btree_map::Entry;
+
+            let reducer_term = factor.clone() * term.clone();
+
+            match to_reduce.entry(reducer_term.monomial) {
+                Entry::Vacant(entry) => {
+                    // There was no such monomial, just insert:
+                    entry.insert(reducer_term.coefficient);
+                }
+                Entry::Occupied(mut entry) => {
+                    // Sum the coefficients, and remove if result is zero.
+                    *entry.get_mut() += reducer_term.coefficient;
+                    if entry.get().is_zero() {
+                        entry.remove_entry();
+                    }
+                }
+            }
+        }
     }
 
     while let Some((m, c)) = to_reduce.pop_last() {
