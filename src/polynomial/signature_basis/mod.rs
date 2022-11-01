@@ -7,7 +7,11 @@ mod basis_calculator;
 mod s_pairs;
 mod signature_monomial_index;
 
-use std::{collections::BTreeMap, fmt::Display, ops::Mul};
+use std::{
+    collections::BTreeMap,
+    fmt::Display,
+    ops::{Bound::Excluded, Mul},
+};
 
 use self::{
     basis_calculator::{BasisCalculator, KnownBasis, SyzygySet},
@@ -19,9 +23,7 @@ use super::{
     divmask::{self, DivMaskTestResult},
 };
 use super::{monomial_ordering::Ordering, Exponent, Id, Monomial, Polynomial, Term};
-use num_traits::One;
-
-use num_traits::Signed;
+use num_traits::{One, Signed, Zero};
 
 type CmpMap<O, I, P> = crate::fast_compare::ComparerMap<Signature<O, I, P>>;
 type Ratio<O, I, P> = crate::fast_compare::FastCompared<Signature<O, I, P>>;
@@ -175,29 +177,6 @@ impl<O: Ordering, I: Id, C: Field, P: SignedExponent + Display> Display for Sign
 }
 
 impl<O: Ordering, I: Id, C: Field, P: SignedExponent> SignPoly<O, I, C, P> {
-    /// Creates a new Signature Polynomial Builder.
-    ///
-    /// Polynomial can not be zero, otherwise this will panic.
-    pub fn new(
-        div_map: &DivMap<P>,
-        idx: u32,
-        signature: Signature<O, I, P>,
-        polynomial: Polynomial<O, I, C, P>,
-    ) -> Self {
-        let sign_to_lm_ratio = sign_to_monomial_ratio(&signature, &polynomial.terms[0].monomial);
-
-        Self {
-            masked_signature: MaskedSignature {
-                divmask: div_map.map(&signature.monomial),
-                signature,
-            },
-            lm_divmask: div_map.map(&polynomial.terms[0].monomial),
-            polynomial,
-            idx,
-            sign_to_lm_ratio,
-        }
-    }
-
     /// Compare SigPolys by signature to leading monomial ratio.
     fn sign_to_lm_ratio_cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.sign_to_lm_ratio.cmp(&other.sign_to_lm_ratio)
@@ -247,56 +226,77 @@ enum RegularReductionResult<O: Ordering, I: Id, C: Field, P: SignedExponent> {
     Reduced(SignPoly<O, I, C, P>),
 }
 
-// Search for an basis member to rewrite, and return if not singular.
-fn rewrite_spair<O: Ordering, I: Id, C: Field, P: SignedExponent>(
+/// Tests for singular criterion: searches the basis members for an element
+/// that would make the S-pair redundant.
+///
+/// Returns true if the S-pair is singular and must be eliminated.
+fn test_singular_criterion<O: Ordering, I: Id, C: Field, P: SignedExponent>(
     m_sign: &MaskedSignature<O, I, P>,
-    s_pair: PartialSPair<O, I, C, P>,
+    s_pair: &PartialSPair<O, I, C, P>,
     basis: &KnownBasis<O, I, C, P>,
-) -> Option<(Polynomial<O, I, C, P>, Option<u32>)> {
-    // Limit search for rewrite candidate in elements whose signature/lm
-    // ratio are greater than the current candidate we have, in ascending
-    // order, so that the first match we find will be the one with the
-    // smallest leading monomial.
-    let sign_to_lm_ratio = sign_to_monomial_ratio(&m_sign.signature, &s_pair.leading_term.monomial);
-    let search_range = basis
-        .by_sign_lm_ratio
-        .range((PointedCmp(&sign_to_lm_ratio), 0)..);
+) -> bool {
+    // All this trickery with inner function just to avoid copying the
+    // lowest_monomial_ratio from basis to create upper_limit.
+    //
+    // TODO: fix this very ugly hack
+    fn inner<O: Ordering, I: Id, C: Field, P: SignedExponent>(
+        upper_limit: &Ratio<O, I, P>,
+        m_sign: &MaskedSignature<O, I, P>,
+        s_pair: &PartialSPair<O, I, C, P>,
+        basis: &KnownBasis<O, I, C, P>,
+    ) -> bool {
+        // Limit search to elements whose signature/lm ratio are greater than the
+        // current candidate we have, in descending order, so that the first match
+        // we find will be the one with the smallest leading monomial.
+        let lower_limit = sign_to_monomial_ratio(&m_sign.signature, &s_pair.leading_term.monomial);
+        let search_range = basis
+            .by_sign_lm_ratio
+            .range((
+                Excluded((PointedCmp(&lower_limit), u32::MAX)),
+                Excluded((PointedCmp(upper_limit), 0)),
+            ))
+            .rev();
 
-    let masked_sig_monomial = m_sign.monomial();
+        let masked_sig_monomial = m_sign.monomial();
 
-    for (_, rewriter) in search_range {
-        let rewriter = unsafe { &**rewriter };
-        if rewriter.signature().idx != m_sign.signature.idx {
-            // No rewriter found that can divide s-pair signature.
-            break;
-        }
-
-        if rewriter
-            .masked_signature
-            .monomial()
-            .divides(&masked_sig_monomial)
-        {
-            let factor = m_sign
-                .signature
-                .monomial
-                .clone()
-                .whole_division(&rewriter.signature().monomial)
-                .unwrap();
-
-            // Test singular criterion: if signatures are identical (which means
-            // the quotient is one), it is already reduced and present in the
-            // basis.
-            if factor.is_one() {
-                return None;
+        for (_, singular) in search_range {
+            let singular = unsafe { &**singular };
+            assert!(singular.signature().idx == m_sign.signature.idx);
+            // Test singular criterion: if we find some element p whose signature
+            // divides the S-pair's signature, it means there is some f such that
+            // f*e has the same signature. Since we only search greater sign/LM
+            // ratio, f*e will necessarily have smaller LM than the S-pair, which
+            // means that this S-pair can be eliminated immediately, according to
+            // Section 3.2 of the paper.
+            if singular
+                .masked_signature
+                .monomial()
+                .divides(&masked_sig_monomial)
+            {
+                return true;
             }
-
-            // We have a minimal leading monomial rewriter.
-            return Some((&factor * rewriter.polynomial.clone(), None));
         }
+
+        false
     }
 
-    let (p, reducer) = s_pair.complete();
-    Some((p, Some(reducer)))
+    let upper_limit = Ratio::new(
+        None,
+        Signature {
+            // The higher index will limit the search to smaller indices.
+            idx: m_sign.signature.idx + 1,
+            monomial: basis.lowest_monomial_ratio.replace(Monomial::one()),
+        },
+    )
+    .unwrap();
+
+    let ret = inner(&upper_limit, m_sign, s_pair, basis);
+
+    basis
+        .lowest_monomial_ratio
+        .set(upper_limit.into_inner().monomial);
+
+    ret
 }
 
 /// Regular reduction, as defined in the paper.
@@ -457,6 +457,69 @@ fn regular_reduce<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Di
     }
 }
 
+/// Handles the result of a reduction, and returns Err(Polynomial) in case of
+/// constant, for early termination.
+fn handle_reduction_result<
+    O: Ordering,
+    I: Id + Display,
+    F: Field + Display,
+    E: SignedExponent + Display,
+>(
+    c: &mut BasisCalculator<O, I, F, E>,
+    reduction: RegularReductionResult<O, I, F, E>,
+    spair_indices: &[(u32, u32)],
+) -> Result<(), Vec<Polynomial<O, I, F, E>>> {
+    match reduction {
+        RegularReductionResult::Reduced(reduced) => {
+            println!(
+                "#(p: {}, s: {}), {:?} → {}",
+                c.get_basis().polys.len(),
+                c.get_num_syzygies(),
+                spair_indices,
+                reduced
+            );
+
+            // Polynomial is a new valid member of the basis. Insert it into
+            // the basis.
+            c.insert_poly_with_spairs(reduced);
+
+            // Generate the corresponding Koszul syzygy to help eliminating
+            // future S-pairs.
+            c.add_koszul_syzygies(spair_indices);
+        }
+        RegularReductionResult::Zero(signature) => {
+            // Polynomial reduces to zero, so we keep the signature to
+            // eliminate S-pairs before reduction.
+            c.add_spair_syzygy(signature, spair_indices);
+        }
+        RegularReductionResult::Singular => {
+            // Polynomial was singular top reducible, so it was redundant
+            // and discarded.
+            return Ok(());
+        }
+        RegularReductionResult::NonZeroConstant(polynomial) => {
+            // The new basis member is a constant, so it reduces everything
+            // to zero and we can stop.
+            return Err(vec![polynomial]);
+        }
+    }
+
+    // Something was added to the basis calculator, be it polynomial or
+    // syzygy, so the monomials might have changed enough to justify
+    // a recalculation of the divmasks.
+    c.maybe_recalculate_divmasks();
+
+    Ok(())
+}
+
+macro_rules! early_ret_err {
+    ($result: expr) => {
+        match $result {
+            Ok(x) => x,
+            Err(e) => return e,
+        }
+    };
+}
 /// Calculates a Grobner Basis using the Signature Buchberger (SB) algorithm.
 ///
 /// The returned basis will not be reduced.
@@ -468,71 +531,78 @@ pub fn grobner_basis<
 >(
     input: Vec<Polynomial<O, I, C, P>>,
 ) -> Vec<Polynomial<O, I, C, P>> {
-    // Initiate the basis calculation with the input polynomials.
-    let mut c = match BasisCalculator::new(input) {
-        Ok(c) => c,
-        Err(const_polynomial) => {
-            return vec![const_polynomial];
+    // Quick sanity check if any of the inputs are constants, and get the
+    // maximum variable id.
+    let mut max_var_id = 0;
+    for p in input.iter() {
+        if p.is_constant() && !p.is_zero() {
+            // If there is a constant, the GB for this input is trivial.
+            return vec![Polynomial::new_constant(C::one())];
         }
-    };
 
-    // Main loop, reduce every S-pair and insert in the basis until there are no
-    // more S-pairs to be reduced. Since each newly inserted polynomials can
-    // generate up to n-1 new S-pairs, this loop is exponential.
-    loop {
-        let (m_sign, s_pair, first_reducer, indices) = if let Some(next_spair) = c.get_next_spair()
-        {
-            next_spair
-        } else {
-            break;
+        for t in p.terms.iter() {
+            for var in t.monomial.product.iter() {
+                let var_id = var.id.to_idx();
+                if max_var_id < var_id {
+                    max_var_id = var_id;
+                }
+            }
+        }
+    }
+
+    let mut c = BasisCalculator::new(max_var_id + 1);
+
+    // We incrementally add the input polynomials one by one, and expand the
+    // calculated Gröbner Basis each time. This can be done because in the
+    // signature order we use, called the "pot" order by "A survey on
+    // signature-based algorithms for computing Gröbner bases" (Eder & Faugère,
+    // 2017), all the S-pairs among the previous input polynomials have:
+    //
+    // a) smaller signature than the next input polynomial and all its S-pairs
+    // descendants, so we don't break the rule that the new polynomials inserted
+    // into the basis must be processed in incremental signature order;
+    //
+    // b) smaller signature/LM ratios than the next input polynomial, so it
+    // can't possibly be a regular reducer for any of the previous basis
+    // elements.
+    //
+    // This doesn't hold for "top" or other arbitrary signature orders, but
+    // "pot" seems to be the most efficient order (and we are using it).
+    for (i, p) in input.into_iter().enumerate() {
+        let reduction = {
+            // Assemble the signature for the new polynomial:
+            let monomial = Monomial::one();
+            let m_sign = MaskedSignature {
+                divmask: c.get_basis().div_map.map(&monomial),
+                signature: Signature {
+                    idx: i as u32,
+                    monomial,
+                },
+            };
+
+            // Reduce it:
+            let b = c.get_basis();
+            regular_reduce(b.polys.len() as u32, m_sign, p, None, b)
         };
 
-        let b = c.get_basis();
-        match regular_reduce(
-            b.polys.len() as u32,
-            m_sign,
-            s_pair,
-            first_reducer,
-            c.get_basis(),
-        ) {
-            RegularReductionResult::Reduced(reduced) => {
-                println!(
-                    "#(p: {}, s: {}), {:?} → {}",
-                    b.polys.len(),
-                    c.get_num_syzygies(),
-                    indices,
-                    reduced
-                );
+        early_ret_err!(handle_reduction_result(&mut c, reduction, &[]));
 
-                // Polynomial is a new valid member of the basis. Insert it into
-                // the basis.
-                c.insert_poly_with_spairs(reduced);
+        // Main loop, reduce every S-pair and insert in the basis until there are no
+        // more S-pairs to be reduced. Since each newly inserted polynomials can
+        // generate up to n-1 new S-pairs, this loop is exponential.
+        loop {
+            let (m_sign, s_pair, first_reducer, indices) =
+                if let Some(next_spair) = c.get_next_spair() {
+                    next_spair
+                } else {
+                    break;
+                };
 
-                // Generate the corresponding Koszul syzygy to help eliminating
-                // future S-pairs.
-                c.add_koszul_syzygies(&indices[..]);
-            }
-            RegularReductionResult::Zero(signature) => {
-                // Polynomial reduces to zero, so we keep the signature to
-                // eliminate S-pairs before reduction.
-                c.add_spair_syzygy(signature, &indices[..]);
-            }
-            RegularReductionResult::Singular => {
-                // Polynomial was singular top reducible, so it was redundant
-                // and discarded.
-                continue;
-            }
-            RegularReductionResult::NonZeroConstant(polynomial) => {
-                // The new basis member is a constant, so it reduces everything
-                // to zero and we can stop.
-                return vec![polynomial];
-            }
+            let b = c.get_basis();
+            let reduction =
+                regular_reduce(b.polys.len() as u32, m_sign, s_pair, Some(first_reducer), b);
+            early_ret_err!(handle_reduction_result(&mut c, reduction, &indices[..]));
         }
-
-        // Something was added to the basis calculator, be it polynomial or
-        // syzygy, so the monomials might have changed enough to justify
-        // a recalculation of the divmasks.
-        c.maybe_recalculate_divmasks();
     }
 
     // Return the polynomials from the basis.

@@ -19,7 +19,7 @@ use crate::polynomial::{
 };
 
 use super::{
-    basis_calculator::SyzygySet, contains_divisor, rewrite_spair, DivMask, KnownBasis,
+    basis_calculator::SyzygySet, contains_divisor, test_singular_criterion, DivMask, KnownBasis,
     MaskedMonomialRef, MaskedSignature, PointedCmp, Ratio, SignPoly, Signature, SignedExponent,
 };
 
@@ -645,7 +645,7 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
     ) -> Option<(
         MaskedSignature<O, I, P>,
         Polynomial<O, I, C, P>,
-        Option<u32>,
+        u32,
         Vec<(u32, u32)>,
     )> {
         let mut same_sign_spairs = Vec::new();
@@ -706,10 +706,11 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
             // is at most one remaining.
             match chosen_spair {
                 Ok(spair) => {
-                    // We found a potential S-pair. Apply rewrite criterion to it
-                    // and return if not singular.
-                    if let Some((poly, reducer)) = rewrite_spair(&m_sign, spair, basis) {
-                        return Some((m_sign, poly, reducer, same_sign_spairs));
+                    // We found a potential S-pair. Apply singular criterion.
+                    if !test_singular_criterion(&m_sign, &spair, basis) {
+                        // S-pair was kept.
+                        let (poly, first_reducer) = spair.complete();
+                        return Some((m_sign, poly, first_reducer, same_sign_spairs));
                     }
                 }
                 Err(eliminated_by_signature) => {

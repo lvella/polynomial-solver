@@ -1,10 +1,8 @@
-use std::{collections::BTreeMap, fmt::Display};
-
-use num_traits::{One, Zero};
+use std::{cell::Cell, collections::BTreeMap, fmt::Display, marker::PhantomData};
 
 use crate::polynomial::{
     division::Field, divmask::MaximumExponentsTracker, monomial_ordering::Ordering, Id, Monomial,
-    Polynomial,
+    Polynomial, VariablePower,
 };
 
 use super::{
@@ -17,6 +15,10 @@ use super::{
 /// Everything is public because all fields must be read by the user, and the
 /// user can only get an immutable reference.
 pub struct KnownBasis<O: Ordering, I: Id, C: Field, P: SignedExponent> {
+    /// Lowest possible monomial ratio with these variables, useful in the
+    /// search for rewriter/singular criterion. Two copies are necessary.
+    pub lowest_monomial_ratio: Cell<Monomial<O, I, P>>,
+
     /// Tracks the maximum exponent seen for each variable, and the evolution.
     pub max_exp: MaximumExponentsTracker<P>,
 
@@ -28,7 +30,8 @@ pub struct KnownBasis<O: Ordering, I: Id, C: Field, P: SignedExponent> {
     /// important to the spair triangle).
     pub polys: Vec<Box<SignPoly<O, I, C, P>>>,
 
-    /// Basis ordered by signature to leading monomial ratio.
+    /// Basis ordered by signature to leading monomial ratio (plus a
+    /// disambiguation integer, to allow for elements with same key).
     ///
     /// TODO: to search for a reducer and for a high base divisor, maybe this
     /// should be a n-D index (like R*-tree), indexing both the leading monomial
@@ -91,81 +94,40 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
     BasisCalculator<O, I, C, P>
 {
     /// Creates a new basis calculator.
-    ///
-    /// May fail if the input contains a constant polynomial, in which case the
-    /// polynomial is returned as the error.
-    pub fn new(input: Vec<Polynomial<O, I, C, P>>) -> Result<Self, Polynomial<O, I, C, P>> {
-        let mut max_exp = MaximumExponentsTracker::new();
-
-        let filtered_input: Vec<Polynomial<O, I, C, P>> = input
-            .into_iter()
-            .filter_map(|polynomial| {
-                if polynomial.is_zero() {
-                    // Zero polynomial is implicitly part of every ideal, so it is
-                    // redundant. Discarded by filter_map.
-                    return None;
-                }
-
-                if polynomial.is_constant() {
-                    // Constant polynomial means the ideal is the full set of all
-                    // polynomials, for which any constant polynomial is a generator, so
-                    // we can stop. Iteration is cut short by collect() into Option<Vec>
-                    return Some(Err(polynomial));
-                }
-
-                // Update the maximum exponent for each variable used.
-                for term in polynomial.terms.iter() {
-                    for var in term.monomial.product.iter() {
-                        max_exp.add_var(&var);
-                    }
-                }
-
-                Some(Ok(polynomial))
-            })
-            .collect::<Result<_, _>>()?;
-
-        max_exp.reset_tracking();
-        let mut c = BasisCalculator {
+    pub fn new(num_vars: usize) -> Self {
+        let max_exp = MaximumExponentsTracker::new(num_vars);
+        let lowest_monomial_ratio = Cell::new(Monomial {
+            product: (0..num_vars)
+                .map(|idx| VariablePower {
+                    id: I::from_idx(idx),
+                    power: P::min_value(),
+                })
+                .collect(),
+            total_power: P::min_value(),
+            _phantom_ordering: PhantomData,
+        });
+        BasisCalculator {
             basis: KnownBasis {
                 div_map: DivMap::new(&max_exp),
                 max_exp,
                 polys: Vec::new(),
                 by_sign_lm_ratio: BTreeMap::new(),
+                lowest_monomial_ratio,
             },
             syzygies: SyzygySet::new(),
             spairs: s_pairs::SPairTriangle::new(),
             ratio_map: CmpMap::new(),
-        };
-
-        // Insert all input polynomials in the basis.
-        for polynomial in filtered_input {
-            let monomial = Monomial::one();
-
-            let signature = Signature {
-                idx: c.basis.polys.len() as u32,
-                monomial,
-            };
-
-            let sign_poly = SignPoly::new(&c.basis.div_map, signature.idx, signature, polynomial);
-
-            println!(
-                "#(p: {}, s: {}), [] → {}",
-                c.basis.polys.len(),
-                c.get_num_syzygies(),
-                sign_poly
-            );
-            c.insert_poly_with_spairs(sign_poly);
         }
-
-        Ok(c)
     }
 
+    /// Returns the next spair signature, polynomial, the index of the first
+    /// reducer, and the set of index pairs that originates this same S-pair.
     pub fn get_next_spair(
         &mut self,
     ) -> Option<(
         MaskedSignature<O, I, P>,
         Polynomial<O, I, C, P>,
-        Option<u32>,
+        u32,
         Vec<(u32, u32)>,
     )> {
         self.spairs.get_next(&self.basis, &mut self.syzygies)
