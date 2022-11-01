@@ -121,9 +121,7 @@ struct SPairBuildInfo<O: Ordering, I: Id, P: SignedExponent> {
     multiplier: Monomial<O, I, P>,
     /// The idx of the base polynomial.
     base_idx: u32,
-    /// This is the index of the other polynomial in the S-pair. It is known to
-    /// be a regular reducer of the SPair. This come for free, as it is the
-    /// other polynomial that was not used as base in the pair.
+    /// This is the index of the other polynomial in the S-pair.
     other_idx: u32,
 }
 
@@ -253,7 +251,7 @@ impl<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> PartialSPair<'a, O, I,
         }
     }
 
-    pub fn complete(self: Self) -> (Polynomial<O, I, C, P>, u32) {
+    pub fn complete(self: Self) -> Polynomial<O, I, C, P> {
         let mut terms = vec![self.leading_term];
         terms.extend(self.origin_poly.polynomial.terms[1..].iter().map(|term| {
             let mut term = term.clone();
@@ -261,7 +259,7 @@ impl<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> PartialSPair<'a, O, I,
             term
         }));
 
-        (Polynomial { terms }, self.build_info.other_idx)
+        Polynomial { terms }
     }
 }
 
@@ -645,7 +643,6 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
     ) -> Option<(
         MaskedSignature<O, I, P>,
         Polynomial<O, I, C, P>,
-        u32,
         Vec<(u32, u32)>,
     )> {
         let mut same_sign_spairs = Vec::new();
@@ -709,8 +706,7 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
                     // We found a potential S-pair. Apply singular criterion.
                     if !test_singular_criterion(&m_sign, &spair, basis) {
                         // S-pair was kept.
-                        let (poly, first_reducer) = spair.complete();
-                        return Some((m_sign, poly, first_reducer, same_sign_spairs));
+                        return Some((m_sign, spair.complete(), same_sign_spairs));
                     }
                 }
                 Err(eliminated_by_signature) => {

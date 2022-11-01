@@ -120,14 +120,13 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
         }
     }
 
-    /// Returns the next spair signature, polynomial, the index of the first
-    /// reducer, and the set of index pairs that originates this same S-pair.
+    /// Returns the next spair signature, polynomial, and the set of index pairs
+    /// that originates this same S-pair.
     pub fn get_next_spair(
         &mut self,
     ) -> Option<(
         MaskedSignature<O, I, P>,
         Polynomial<O, I, C, P>,
-        u32,
         Vec<(u32, u32)>,
     )> {
         self.spairs.get_next(&self.basis, &mut self.syzygies)

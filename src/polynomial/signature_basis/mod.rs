@@ -308,7 +308,6 @@ fn regular_reduce<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Di
     idx: u32,
     m_sign: MaskedSignature<O, I, P>,
     reduced_poly: Polynomial<O, I, C, P>,
-    first_reducer: Option<u32>,
     basis: &KnownBasis<O, I, C, P>,
 ) -> RegularReductionResult<O, I, C, P> {
     // The paper suggests splitting the reduced polynomial into a hash map of
@@ -331,66 +330,6 @@ fn regular_reduce<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Di
     // Reduce one term at a time.
     let mut reduced_terms = Vec::new();
     let mut lm_properties = None;
-
-    // If first_reducer has been provided, we use it to skip one search
-    // for a reducer.
-    if let Some(idx) = first_reducer {
-        let reducer = basis.polys[idx as usize].as_ref();
-
-        let (m, c) = to_reduce.pop_last().unwrap();
-        assert!(reducer.polynomial.terms[0].monomial.divides(&m));
-
-        // Reassemble the term
-        let term = Term {
-            coefficient: c,
-            monomial: m,
-        };
-
-        // TODO: deduplicate the code below:
-
-        let mut iter = reducer.polynomial.terms.iter();
-        let leading_term = iter.next().unwrap();
-
-        // Calculate the multiplier monomial that will nullify the term.
-        // We can unwrap() because we trust "find_a_regular_reducer" to
-        // have returned a valid reducer.
-        let monomial = term
-            .monomial
-            .whole_division(&leading_term.monomial)
-            .unwrap();
-
-        // Calculate the multiplier's coefficient using the reducer leading term:
-        let coefficient = term
-            .coefficient
-            .elimination_factor(&leading_term.coefficient.clone().inv());
-
-        let factor = Term {
-            coefficient,
-            monomial,
-        };
-
-        // Subtract every element of the reducer from the rest of the
-        // polynomial.
-        for term in iter {
-            use std::collections::btree_map::Entry;
-
-            let reducer_term = factor.clone() * term.clone();
-
-            match to_reduce.entry(reducer_term.monomial) {
-                Entry::Vacant(entry) => {
-                    // There was no such monomial, just insert:
-                    entry.insert(reducer_term.coefficient);
-                }
-                Entry::Occupied(mut entry) => {
-                    // Sum the coefficients, and remove if result is zero.
-                    *entry.get_mut() += reducer_term.coefficient;
-                    if entry.get().is_zero() {
-                        entry.remove_entry();
-                    }
-                }
-            }
-        }
-    }
 
     while let Some((m, c)) = to_reduce.pop_last() {
         // Reassemble the term
@@ -636,7 +575,7 @@ pub fn grobner_basis<
 
             // Reduce it:
             let b = c.get_basis();
-            regular_reduce(b.polys.len() as u32, m_sign, p, None, b)
+            regular_reduce(b.polys.len() as u32, m_sign, p, b)
         };
 
         early_ret_err!(handle_reduction_result(&mut c, reduction, &[]));
@@ -645,16 +584,14 @@ pub fn grobner_basis<
         // more S-pairs to be reduced. Since each newly inserted polynomials can
         // generate up to n-1 new S-pairs, this loop is exponential.
         loop {
-            let (m_sign, s_pair, first_reducer, indices) =
-                if let Some(next_spair) = c.get_next_spair() {
-                    next_spair
-                } else {
-                    break;
-                };
+            let (m_sign, s_pair, indices) = if let Some(next_spair) = c.get_next_spair() {
+                next_spair
+            } else {
+                break;
+            };
 
             let b = c.get_basis();
-            let reduction =
-                regular_reduce(b.polys.len() as u32, m_sign, s_pair, Some(first_reducer), b);
+            let reduction = regular_reduce(b.polys.len() as u32, m_sign, s_pair, b);
             early_ret_err!(handle_reduction_result(&mut c, reduction, &indices[..]));
         }
     }
