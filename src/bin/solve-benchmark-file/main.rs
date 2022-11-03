@@ -50,7 +50,8 @@ fn main() -> Result<(), String> {
         systems = filtered;
     }
 
-    for system in systems {
+    for mut system in systems {
+        system.sort_unstable();
         println!("\n\nSystem:");
         for p in system.iter() {
             println!("  : {}", p);
