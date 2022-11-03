@@ -12,6 +12,7 @@ num-traits = "0.2"
 itertools = "0.10.1"
 zokrates_core = { git = "https://github.com/Zokrates/ZoKrates.git" }
 zokrates_field = { git = "https://github.com/Zokrates/ZoKrates.git" }
+clap = { version = "4.0", features = ["derive"] }
 pest = "2.0"
 pest_derive = "2.0"
 bitvec = "1"
