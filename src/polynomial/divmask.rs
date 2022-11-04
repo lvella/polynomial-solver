@@ -112,24 +112,31 @@ pub struct MaximumExponentsTracker<P: Exponent> {
 /// Uses a vector indexed by variable id, so it is assumed that every id up to
 /// maximum id is used (i.e. ids are a dense enumeration of all variables).
 impl<P: Exponent> MaximumExponentsTracker<P> {
-    pub fn new() -> Self {
+    pub fn new(num_vars: usize) -> Self {
+        assert!(num_vars > 0);
+        let mut max_exponents = Vec::new();
+        max_exponents.resize(num_vars, P::one());
+
+        let t: P = max_exponents.iter().fold(P::zero(), |s, _| s + P::one());
         Self {
-            max_exponents: Vec::new(),
-            total: P::zero(),
-            prev_total: P::zero(),
+            max_exponents,
+            total: t.clone(),
+            prev_total: t,
         }
     }
 
-    /// Number of variables seen.
+    /// Number of variables.
     pub fn len(&self) -> usize {
         self.max_exponents.len()
     }
 
+    /// Maybe update the maximum seen exponent for some given variable.
+    ///
+    /// The variable must have id smaller than the num_vars given at tracker
+    /// creation.
     pub fn add_var<I: Id>(&mut self, var: &VariablePower<I, P>) {
         let idx = var.id.to_idx();
-        if self.len() <= idx {
-            self.max_exponents.resize(idx + 1, P::zero());
-        } else if self.max_exponents[idx] >= var.power {
+        if self.max_exponents[idx] >= var.power {
             return;
         }
         let mut delta = var.power.clone();
@@ -140,10 +147,6 @@ impl<P: Exponent> MaximumExponentsTracker<P> {
     }
 
     pub fn has_grown_beyond_percentage(&self, percentage: u8) -> bool {
-        if self.prev_total.is_zero() {
-            return !self.total.is_zero();
-        }
-
         let mut delta = self.total.clone();
         delta -= &self.prev_total;
         let growth = delta * P::from(100) / &self.total;

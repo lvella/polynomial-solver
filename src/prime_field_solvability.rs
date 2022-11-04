@@ -129,7 +129,7 @@ pub fn polynomial_system_solvability_test<
 
     // Autoreduce polynomial set as it is relativelly cheap and
     // might help reducing the size of the problem:
-    let polys = polynomial::grobner_basis::autoreduce(polys);
+    //let polys = polynomial::grobner_basis::autoreduce(polys);
 
     // Test if anything is a solution to the system:
     if polys.is_empty() {
