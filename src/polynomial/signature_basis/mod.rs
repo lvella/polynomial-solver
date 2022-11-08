@@ -351,14 +351,15 @@ fn regular_reduce<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Di
         // and possibly store it as the ratio for the leading term.
         let sign_to_term_ratio = sign_to_monomial_ratio(&m_sign.signature, &term.monomial);
 
-        if let Some(reducer) = basis.find_a_regular_reducer(
+        if let Some(reducer) = basis.find_a_reducer(
             &sign_to_term_ratio,
             MaskedMonomialRef(&divmask, &term.monomial),
         ) {
             // The reduction is said singular if we are reducing the leading
-            // term and the reducer have the same signature as the reduced.
-            // In this case we can stop.
-            if reduced_terms.is_empty() && reducer.masked_signature == m_sign {
+            // term and the factor*reducer have the same signature as the reduced.
+            // This translates to equal signature/monomial ratio. In this case
+            // we can stop.
+            if reduced_terms.is_empty() && reducer.sign_to_lm_ratio == sign_to_term_ratio {
                 return RegularReductionResult::Singular;
             }
 
