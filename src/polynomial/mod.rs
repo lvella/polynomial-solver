@@ -1073,6 +1073,17 @@ where
     }
 }
 
+impl<I: Id, E: Exponent + std::fmt::Display> std::fmt::Display for VariablePower<I, E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "x{}", self.id.to_idx())?;
+        if !self.power.is_one() {
+            write!(f, "^{}", self.power)?;
+        }
+
+        Ok(())
+    }
+}
+
 impl<O, I, P> std::fmt::Display for Monomial<O, I, P>
 where
     I: Id,
@@ -1082,10 +1093,7 @@ where
         let mut iter = self.product.iter();
         if let Some(mut v) = iter.next() {
             loop {
-                write!(f, "x{}", v.id.to_idx())?;
-                if !v.power.is_one() {
-                    write!(f, "^{}", v.power)?;
-                }
+                write!(f, "{}", v)?;
                 v = if let Some(v) = iter.next() {
                     f.write_char('*')?;
                     v
