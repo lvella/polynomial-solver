@@ -1,5 +1,3 @@
-use std::iter::Peekable;
-
 /// A term of the summable sequence with total order for the key, and
 /// a summable type with null value.
 /// In a polynomial term, Key is the monomial, and Value is the coefficient.

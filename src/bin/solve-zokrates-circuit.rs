@@ -7,7 +7,6 @@ use polynomial_solver::{
 };
 use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};
 use std::{
-    env,
     fs::File,
     io::{BufReader, Write},
 };
