@@ -63,13 +63,15 @@ fn get_var_exp_from_lm<O: Ordering, I: Id, F: Field, E: SignedExponent>(
     get_var_exp_from_monomial(&poly.polynomial.terms[0].monomial, id)
 }
 
+/// Returns the exponent of a variable inside a monomial.
 fn get_var_exp_from_monomial<O: Ordering, I: Id, E: SignedExponent>(
     monomial: &Monomial<O, I, E>,
     id: &I,
 ) -> E {
     let m = &monomial.product;
     // Is binary search better than linear?
-    match m.binary_search_by(|v| v.id.cmp(id)) {
+    // TODO: Maybe create a dense monomial to skip this search?
+    match m.binary_search_by(|v| id.cmp(&v.id)) {
         Ok(idx) => m[idx].power.clone(),
         Err(_) => E::zero(),
     }
@@ -270,5 +272,23 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
         );
 
         found
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::polynomial::Polynomial;
+
+    use super::get_var_exp_from_monomial;
+
+    pub type Poly = Polynomial<crate::polynomial::monomial_ordering::Grevlex, u8, i32, i32>;
+
+    #[test]
+    fn test_get_var_exp() {
+        let [x8, x7]: [Poly; 2] = Poly::new_variables([8u8, 7u8]).try_into().unwrap();
+
+        let poly = x8.clone() * x8.clone() * x7;
+        let exp = get_var_exp_from_monomial(&poly.terms[0].monomial, &8);
+        assert!(exp == 2);
     }
 }
