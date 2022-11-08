@@ -45,7 +45,14 @@ pub struct KnownBasis<O: Ordering, I: Id, C: Field, P: SignedExponent> {
 }
 
 impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display> KnownBasis<O, I, C, P> {
-    pub(super) fn find_a_regular_reducer(
+    /// Returns either a regular reducer (whose factor*reducer has smaller
+    /// signature than the reduced) or a singular reducer (where the signature
+    /// is the same), in the absence of a regular reducer.
+    ///
+    /// The search for a singular reducer could be separated from the search for
+    /// a regular reducer, but since those searches are used in close proximity
+    /// and are very related, I think it saves time to do both here.
+    pub(super) fn find_a_reducer(
         &self,
         ratio: &Ratio<O, I, P>,
         monomial: MaskedMonomialRef<O, I, P>,

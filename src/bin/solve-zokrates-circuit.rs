@@ -125,19 +125,6 @@ fn solve<T: Field, I: Iterator<Item = ir::Statement<T>>>(
 
     println!("Size of the Gröbner Basis: {} polynomials.", gb.len());
 
-    /*println!("===== DEBUG: Second pass in a different order =========");
-    let mut gb = polynomial_solver::polynomial::signature_basis::grobner_basis(gb);
-    std::fs::remove_dir_all("polys");
-    std::fs::create_dir("polys").unwrap();
-    for (idx, p) in gb.iter_mut().enumerate() {
-        *p = std::mem::replace(p, Polynomial::zero()).normalized_by_coefs();
-        let mut fd = File::create(format!("polys/{}.txt", idx)).unwrap();
-        for t in p.get_terms().iter() {
-            writeln!(fd, "{}", t).unwrap();
-        }
-    }
-    println!("=======================================================");*/
-
     if let Some(cocoa5_file) = &mut cocoa5_file {
         cocoa_print::list_of_polys(cocoa5_file, "gb", gb.iter()).unwrap();
 
