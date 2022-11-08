@@ -224,7 +224,7 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
         best
     }
 
-    pub(super) fn find_regular_reducer(
+    pub(super) fn find_a_reducer(
         &self,
         s_lm_ratio: &Ratio<O, I, E>,
         lm: MaskedMonomialRef<O, I, E>,
@@ -256,9 +256,13 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
             },
             &mut |Entry(poly_ptr)| {
                 let poly = unsafe { &**poly_ptr };
-                if poly.sign_to_lm_ratio <= *s_lm_ratio && poly.leading_monomial().divides(&lm) {
+                let ord = poly.sign_to_lm_ratio.cmp(s_lm_ratio);
+                if ord != std::cmp::Ordering::Greater && poly.leading_monomial().divides(&lm) {
                     found = Some(*poly_ptr);
-                    false
+                    // Keep searching if ratios are equal (meaning this find is
+                    // a singular reducer), otherwise stop searching (this find
+                    // is a regular reducer, which takes precedence).
+                    ord == std::cmp::Ordering::Equal
                 } else {
                     true
                 }

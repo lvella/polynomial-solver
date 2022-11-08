@@ -58,7 +58,7 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display> KnownB
         monomial: MaskedMonomialRef<O, I, P>,
     ) -> Option<&SignPoly<O, I, C, P>> {
         self.by_sign_lm_ratio_new
-            .find_regular_reducer(ratio, monomial)
+            .find_a_reducer(ratio, monomial)
             .map(|ptr| unsafe { &*ptr })
     }
 }
