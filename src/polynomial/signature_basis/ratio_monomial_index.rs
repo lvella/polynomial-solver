@@ -8,7 +8,7 @@ use crate::polynomial::{division::Field, monomial_ordering::Ordering, Id, Variab
 
 use super::{DivMap, DivMask, MaskedMonomialRef, Ratio, SignPoly, SignedExponent};
 
-/// The entries stored in the leafs are just raw pointers to SignPoly.
+/// The entries stored in the leafs are raw pointers to SignPoly.
 struct Entry<O: Ordering, I: Id, F: Field, E: SignedExponent>(*const SignPoly<O, I, F, E>);
 
 impl<O: Ordering, I: Id, F: Field, E: SignedExponent> Clone for Entry<O, I, F, E> {
@@ -168,6 +168,7 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
         lm: MaskedMonomialRef<O, I, E>,
     ) -> Option<*const SignPoly<O, I, F, E>> {
         let mut best: Option<*const SignPoly<O, I, F, E>> = None;
+        let dense_monomial = make_dense_monomial(lm.1);
         self.0.search(
             &|key, contained_gcd| {
                 if let DivMaskTestResult::NotDivisible = contained_gcd.divmask.divides(lm.0) {
@@ -188,12 +189,13 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
                         SearchPath::Both
                     }
                     KeyElem::MonomialVar(var) => {
-                        let exp = get_var_exp_from_monomial(lm.1, &var.id);
-                        if exp < var.power {
-                            SearchPath::LessThan
-                        } else {
-                            SearchPath::Both
+                        let mut path = SearchPath::Both;
+                        if let Some(exp) = dense_monomial.get(var.id.to_idx()) {
+                            if *exp < var.power {
+                                path = SearchPath::LessThan;
+                            }
                         }
+                        path
                     }
                 }
             },
@@ -231,6 +233,7 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
         s_lm_ratio: &Ratio<O, I, E>,
         lm: MaskedMonomialRef<O, I, E>,
     ) -> Option<*const SignPoly<O, I, F, E>> {
+        let dense_monomial = make_dense_monomial(lm.1);
         let mut found = None;
         self.0.search(
             &|key, contained_gcd| {
@@ -247,12 +250,13 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
                         }
                     }
                     KeyElem::MonomialVar(var) => {
-                        let exp = get_var_exp_from_monomial(lm.1, &var.id);
-                        if exp < var.power {
-                            SearchPath::LessThan
-                        } else {
-                            SearchPath::Both
+                        let mut path = SearchPath::Both;
+                        if let Some(exp) = dense_monomial.get(var.id.to_idx()) {
+                            if *exp < var.power {
+                                path = SearchPath::LessThan;
+                            }
                         }
+                        path
                     }
                 }
             },
@@ -273,6 +277,21 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
 
         found
     }
+}
+
+/// Makes a dense vector with the exponents of a monomial, up to the largest
+/// variable id.
+fn make_dense_monomial<O: Ordering, I: Id, E: SignedExponent>(
+    monomial: &Monomial<O, I, E>,
+) -> Vec<E> {
+    let largest_id = monomial.product.get(0).map_or(0, |var| var.id.to_idx());
+    let mut dense_monomial = Vec::new();
+    dense_monomial.resize(largest_id + 1, E::zero());
+    for var in monomial.product.iter() {
+        dense_monomial[var.id.to_idx()] = var.power.clone();
+    }
+
+    dense_monomial
 }
 
 #[cfg(test)]
