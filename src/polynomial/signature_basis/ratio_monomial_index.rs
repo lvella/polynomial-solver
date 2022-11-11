@@ -177,16 +177,15 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
 
                 match key {
                     KeyElem::S2LMRatio(ratio) => {
-                        // TODO: find why there are divisor with smaller ratios.
-                        // Maybe it is due to the input polynomials that are not reduced.
-                        // Maybe it is how it is supposed to be, and I am missing something.
-
-                        /*if s_lm_ratio < (unsafe { &(**ratio) }) {
+                        // Since the reference polynomial is fully regular
+                        // reduced, all possible divisors must have higher
+                        // signature/LM ratio, otherwise it would already have
+                        // been reduced or eliminated as singular.
+                        if unsafe { *s_lm_ratio < **ratio } {
                             SearchPath::Both
                         } else {
                             SearchPath::GreaterOrEqualThan
-                        }*/
-                        SearchPath::Both
+                        }
                     }
                     KeyElem::MonomialVar(var) => {
                         let mut path = SearchPath::Both;
@@ -202,6 +201,7 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
             &mut |Entry(poly_ptr)| {
                 let poly = unsafe { &**poly_ptr };
                 if poly.leading_monomial().divides(&lm) {
+                    assert!(poly.sign_to_lm_ratio > *s_lm_ratio);
                     match best {
                         Some(best_poly) => {
                             let best_poly = unsafe { &*best_poly };
@@ -218,12 +218,6 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
                 true
             },
         );
-
-        /*
-        assert!(best
-            .map(|pptr| unsafe { (*pptr).sign_to_lm_ratio >= *s_lm_ratio })
-            .unwrap_or(true));
-        */
 
         best
     }
