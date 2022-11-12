@@ -16,7 +16,7 @@ clap = { version = "4.0", features = ["derive"] }
 pest = "2.0"
 pest_derive = "2.0"
 bitvec = "1"
-rand = "0.8.4"
+rand = "0.8"
 
 [dependencies.rug]
 version = "1.13"

@@ -112,26 +112,26 @@ pub struct RatioMonomialIndex<O: Ordering, I: Id, F: Field, E: SignedExponent>(
 
 /// Maps a tree entry to its NodeData.
 fn node_data_map<O: Ordering, I: Id, F: Field, E: SignedExponent>(
+    div_map: &DivMap<E>,
     &Entry(p): &Entry<O, I, F, E>,
-) -> Monomial<O, I, E> {
-    unsafe { (*p).polynomial.terms[0].monomial.clone() }
+) -> MaskedMonomial<O, I, E> {
+    let monomial = unsafe { (*p).polynomial.terms[0].monomial.clone() };
+    let divmask = div_map.map(&monomial);
+    MaskedMonomial { divmask, monomial }
 }
 
 /// Maps a tree entry to its NodeData.
 fn node_data_builder<O: Ordering, I: Id, E: SignedExponent>(
     div_map: &DivMap<E>,
-    a: Monomial<O, I, E>,
-    b: Monomial<O, I, E>,
-) -> (MaskedMonomial<O, I, E>, Monomial<O, I, E>) {
-    let gcd = a.gcd(&b);
+    a: MaskedMonomial<O, I, E>,
+    b: &MaskedMonomial<O, I, E>,
+) -> MaskedMonomial<O, I, E> {
+    let gcd = a.monomial.gcd(&b.monomial);
     let divmask = div_map.map(&gcd);
-    let masked_gcd = MaskedMonomial {
+    MaskedMonomial {
         divmask,
-        monomial: gcd.clone(),
-    };
-    // If the compiler is smart enough, it will reuse the allocation
-    // of the two input monomials into the output monomials.
-    (masked_gcd, gcd)
+        monomial: gcd,
+    }
 }
 
 impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F, E> {
@@ -144,22 +144,17 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
         Self(KDTree::new(
             num_variables + 1,
             entries,
-            &node_data_map,
+            &|e| node_data_map(div_map, e),
             &|a, b| node_data_builder(div_map, a, b),
         ))
     }
 
     pub fn insert(&mut self, div_map: &DivMap<E>, elem: *const SignPoly<O, I, F, E>) {
         let new_entry = Entry(elem);
-        self.0.insert(
-            new_entry,
-            &|a, b| node_data_builder(div_map, node_data_map(a), node_data_map(b)),
-            &|node_data, new_gcd| {
-                node_data.monomial = new_gcd.gcd(&node_data.monomial);
-                node_data.divmask = div_map.map(&node_data.monomial);
-                node_data.monomial.clone()
-            },
-        )
+        self.0
+            .insert(new_entry, &|e| node_data_map(div_map, e), &|a, b| {
+                node_data_builder(div_map, a, b)
+            })
     }
 
     pub(super) fn find_high_base_divisor(
