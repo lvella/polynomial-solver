@@ -8,8 +8,9 @@ mod s_pairs;
 mod signature_monomial_index;
 
 use std::{
-    collections::BTreeMap,
+    collections::{BinaryHeap, HashMap},
     fmt::Display,
+    hash::Hash,
     ops::{Bound::Excluded, Mul},
 };
 
@@ -217,6 +218,12 @@ impl<T: Ord> Ord for PointedCmp<T> {
     }
 }
 
+impl<T: Hash> Hash for PointedCmp<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        unsafe { (*self.0).hash(state) };
+    }
+}
+
 /// The 3 possible results of a regular reduction.
 enum RegularReductionResult<O: Ordering, I: Id, C: Field, P: SignedExponent> {
     /// Polynomial was singular top reducible
@@ -316,29 +323,38 @@ fn regular_reduce<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Di
     // The paper suggests splitting the reduced polynomial into a hash map of
     // monomial -> coefficient, so that we can efficiently sum the new terms,
     // and a priority queue, so that we know what is the next monomial to be
-    // reduced. We can do both with a single BTreeMap, which is ordered and has
-    // fast map access. I have tested both solutions, and in bigger problems
-    // BTreeMap seems a little better.
-
-    // The tree with the terms to be reduced.
-    let mut to_reduce: BTreeMap<Monomial<O, I, P>, C> = reduced_poly
+    // reduced. Tests have shown that this is actually better than simply using
+    // a BTreeMap.
+    let (mut to_reduce, mut remaining_terms): (
+        BinaryHeap<Box<Monomial<O, I, P>>>,
+        HashMap<PointedCmp<Monomial<O, I, P>>, C>,
+    ) = reduced_poly
         .terms
         .into_iter()
-        // Since this is already reverse sorted, rev() is a little faster, as we
-        // insert the elements in increasing order.
-        .rev()
-        .map(|term| (term.monomial, term.coefficient))
-        .collect();
+        .map(|e| {
+            let monomial = Box::new(e.monomial);
+            let pointed = PointedCmp(monomial.as_ref());
+            (monomial, (pointed, e.coefficient))
+        })
+        .unzip();
 
     // Reduce one term at a time.
     let mut reduced_terms = Vec::new();
     let mut lm_properties = None;
 
-    while let Some((m, c)) = to_reduce.pop_last() {
+    while let Some(m) = to_reduce.pop() {
+        let coefficient = if let Some(coefficient) = remaining_terms.remove(&PointedCmp(m.as_ref()))
+        {
+            coefficient
+        } else {
+            // The entry was removed due to summing to zero:
+            continue;
+        };
+
         // Reassemble the term
         let term = Term {
-            coefficient: c,
-            monomial: m,
+            coefficient,
+            monomial: Box::<Monomial<O, I, P>>::into_inner(m),
         };
 
         // Skip searching for a divisor for 1 and (maybe) save some time.
@@ -390,13 +406,15 @@ fn regular_reduce<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Di
             // Subtract every element of the reducer from the rest of the
             // polynomial.
             for term in iter {
-                use std::collections::btree_map::Entry;
+                use std::collections::hash_map::Entry;
 
                 let reducer_term = factor.clone() * term.clone();
+                let new_monomial = Box::new(reducer_term.monomial);
 
-                match to_reduce.entry(reducer_term.monomial) {
+                match remaining_terms.entry(PointedCmp(new_monomial.as_ref())) {
                     Entry::Vacant(entry) => {
                         // There was no such monomial, just insert:
+                        to_reduce.push(new_monomial);
                         entry.insert(reducer_term.coefficient);
                     }
                     Entry::Occupied(mut entry) => {

@@ -12,6 +12,7 @@ use num_traits::{One, Signed};
 use std::{
     cmp::{Ordering as CmpOrd, Reverse},
     fmt::Write,
+    hash::Hash,
     marker::PhantomData,
     ops::{Mul, MulAssign},
 };
@@ -22,7 +23,7 @@ use std::{
 /// alternative would be to require Id to be hashable and use hash table where
 /// Id is used as index, but that would worsen the performance of Gröbner Basis
 /// algorithm.
-pub trait Id: core::fmt::Debug + Eq + Ord + Clone {
+pub trait Id: core::fmt::Debug + Eq + Ord + Clone + Hash {
     /// The forward side of the bijection with usize:
     fn to_idx(&self) -> usize;
 
@@ -74,10 +75,11 @@ pub trait Exponent:
     + num_traits::One
     + num_traits::Bounded
     + From<u8>
+    + Hash
 {
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub struct VariablePower<I, P> {
     id: I,
     power: P,
@@ -97,7 +99,7 @@ where
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Hash)]
 pub struct Monomial<O: ?Sized, I, P> {
     // Product is sorted in decreasing order of id:
     product: Vec<VariablePower<I, P>>,
