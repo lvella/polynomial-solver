@@ -25,3 +25,7 @@ features = ["integer","float"]
 
 [profile.release]
 lto = "thin"
+
+[profile.release-with-debug]
+inherits = "release"
+debug = true

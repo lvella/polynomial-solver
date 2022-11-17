@@ -154,6 +154,9 @@ pub struct SignPoly<O: Ordering, I: Id, C: Field, P: SignedExponent> {
     polynomial: Polynomial<O, I, C, P>,
     /// The divmask fot the leading monomial.
     lm_divmask: DivMask,
+    /// The inverse of the leading term coefficient. This is used repeatedly
+    /// during reduction and is expensive to calculate.
+    inv_leading_coeff: C,
 
     /// Own index inside the basis.
     idx: u32,
@@ -377,7 +380,7 @@ fn regular_reduce<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Di
             // Calculate the multiplier's coefficient using the reducer leading term:
             let coefficient = term
                 .coefficient
-                .elimination_factor(&leading_term.coefficient.clone().inv());
+                .elimination_factor(&reducer.inv_leading_coeff);
 
             let factor = Term {
                 coefficient,
@@ -430,6 +433,7 @@ fn regular_reduce<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Di
 
     match lm_properties {
         Some((sign_to_lm_ratio, lm_divmask)) => RegularReductionResult::Reduced(SignPoly {
+            inv_leading_coeff: polynomial.terms[0].coefficient.clone().inv(),
             masked_signature: m_sign,
             polynomial,
             lm_divmask,
