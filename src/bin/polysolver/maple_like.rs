@@ -1,15 +1,20 @@
 use std::{collections::HashMap, fmt::Debug, str::FromStr};
 
 use pest::{iterators::Pair, Parser};
+use pest_derive::Parser;
 use polynomial_solver::polynomial::{
     monomial_ordering::Ordering, CommutativeRing, Polynomial, Term, VariablePower,
 };
 
 #[derive(Parser)]
-#[grammar = "bin/solve-benchmark-file/systems.pest"]
+#[grammar = "bin/polysolver/maple_like.pest"]
 pub struct SystemsParser;
 
-pub fn parse<O, C>(unparsed_file: &str) -> Result<Vec<Vec<Polynomial<O, u32, C, i32>>>, String>
+/// Parses a set of polynomial systems provided in a very specific limited
+/// subset of Maple language. See example in "benchmark.txt".
+pub fn parse_maple_like<O, C>(
+    unparsed_file: &str,
+) -> Result<Vec<Vec<Polynomial<O, u32, C, i32>>>, String>
 where
     O: Ordering,
     C: CommutativeRing + FromStr + num_traits::pow::Pow<u32, Output = C>,

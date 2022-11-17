@@ -5,12 +5,14 @@
 
 use crate::polynomial::{Exponent, Id, Polynomial, Term};
 
-use num_traits::Zero;
+use num_traits::{int::PrimInt, Zero};
 use std::{
     cell::Cell,
     cmp::Reverse,
     collections::{BTreeMap, HashMap},
     fmt::Display,
+    hash::Hash,
+    iter::Step,
 };
 
 use super::{
@@ -24,9 +26,9 @@ use super::{
 /// https://gitlab.trnsz.com/reduce-algebra/reduce-algebra/-/blob/master/packages/groebner/groebopt.red
 ///
 /// Returns a map from the old variables to the new ones.
-pub fn reorder_vars_for_easier_gb<O, C, P>(
-    polynomials: &mut Vec<Polynomial<O, usize, C, P>>,
-) -> HashMap<usize, usize>
+pub fn reorder_vars_for_easier_gb<O, I: Id + PrimInt + Hash + Step, C, P>(
+    polynomials: &mut Vec<Polynomial<O, I, C, P>>,
+) -> HashMap<I, I>
 where
     O: Ordering,
     C: CommutativeRing,
@@ -52,7 +54,7 @@ where
     // as the hash map is probably randomized for security.
     reordered.sort_unstable_by_key(|id| (var_map.get(id).unwrap(), *id));
 
-    let var_map: HashMap<usize, usize> = reordered.into_iter().zip(0..).collect();
+    let var_map: HashMap<_, _> = reordered.into_iter().zip(I::zero()..).collect();
 
     for p in polynomials.iter_mut() {
         for t in p.terms.iter_mut() {
