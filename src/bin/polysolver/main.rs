@@ -2,13 +2,14 @@ mod maple_like;
 
 use clap::{command, ArgGroup, Parser};
 use polynomial_solver::{
-    finite_field::ZkFieldWrapper,
+    finite_field::{FiniteField, U32PrimeField, ZkFieldWrapper},
     polynomial::{
         cocoa_print, grobner_basis::reorder_vars_for_easier_gb, monomial_ordering::Grevlex, Term,
     },
 };
 use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};
 use std::{
+    fmt::Display,
     fs::File,
     io::{BufReader, Write},
     time::Instant,
@@ -16,9 +17,9 @@ use std::{
 use zokrates_core::flat_absy::FlatVariable;
 use zokrates_core::ir::Statement::Constraint;
 use zokrates_core::ir::{self, LinComb, ProgEnum};
-use zokrates_field::{Bn128Field, Field};
+use zokrates_field::Field as ZkField;
 
-type Poly<F> = polynomial_solver::polynomial::Polynomial<Grevlex, u32, ZkFieldWrapper<F>, i32>;
+type Poly<F> = polynomial_solver::polynomial::Polynomial<Grevlex, u32, F, i32>;
 
 /// Computes the Gröbner Basis of a polynomial system.
 #[derive(Parser, Debug)]
@@ -66,7 +67,7 @@ fn main() -> Result<(), String> {
         }
     } else if let Some(maple_file) = &args.maple_file {
         // Field to use for systems loaded from maple-like file:
-        type Field = Bn128Field;
+        type Field = U32PrimeField<2147483647>; // 2**31 - 1
 
         // Load polynomial systems from file and filter the provided indices.
         let systems = {
@@ -102,11 +103,11 @@ fn main() -> Result<(), String> {
     Ok(())
 }
 
-fn zok_solve<T: Field, I: Iterator<Item = ir::Statement<T>>>(
+fn zok_solve<T: ZkField, I: Iterator<Item = ir::Statement<T>>>(
     ir_prog: ir::ProgIterator<T, I>,
     args: &Args,
 ) {
-    fn to_poly<T: Field>(lin: LinComb<T>) -> Poly<T> {
+    fn to_poly<T: ZkField>(lin: LinComb<T>) -> Poly<ZkFieldWrapper<T>> {
         let mut terms = Vec::new();
 
         for (var, coeff) in lin.0 {
@@ -137,12 +138,12 @@ fn zok_solve<T: Field, I: Iterator<Item = ir::Statement<T>>>(
     solve(poly_set, args.randomize, &args.verification_output)
 }
 
-fn solve<T: Field>(
+fn solve<T: FiniteField + Display>(
     mut poly_set: Vec<Poly<T>>,
     randomize: bool,
     verification_output: &Option<String>,
 ) {
-    let prime = ZkFieldWrapper::<T>::get_prime();
+    let prime = T::get_order();
     println!("Field type: {}", std::any::type_name::<T>());
     println!("Prime number: {}", prime);
 
