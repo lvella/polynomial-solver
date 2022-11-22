@@ -8,7 +8,8 @@ mod s_pairs;
 mod signature_monomial_index;
 
 use std::{
-    collections::BTreeMap,
+    cmp::Reverse,
+    collections::{BTreeMap, HashMap, HashSet},
     fmt::Display,
     ops::{Bound::Excluded, Mul},
 };
@@ -23,6 +24,7 @@ use super::{
     divmask::{self, DivMaskTestResult},
 };
 use super::{monomial_ordering::Ordering, Exponent, Id, Monomial, Polynomial, Term};
+use itertools::Itertools;
 use num_traits::{One, Signed, Zero};
 
 type CmpMap<O, I, P> = crate::fast_compare::ComparerMap<Signature<O, I, P>>;
@@ -603,6 +605,42 @@ pub fn grobner_basis<
 
     // Return the polynomials from the basis.
     c.into_iter().collect()
+}
+
+/// Change the variables so that they are a dense set starting from 0.
+pub fn make_dense_variable_set<O: Ordering, I: Id, F: Field, E: Exponent>(
+    polynomials: &mut [Polynomial<O, I, F, E>],
+) -> HashMap<usize, usize> {
+    // Figure out what variables are used:
+    let mut used_set = HashSet::new();
+    for p in polynomials.iter() {
+        for t in p.terms.iter() {
+            for var in t.monomial.product.iter() {
+                used_set.insert(var.id.to_idx());
+            }
+        }
+    }
+
+    // Make a map from old values to new values without changing the relative
+    // order.
+    let var_map: HashMap<usize, usize> = used_set
+        .into_iter()
+        .sorted()
+        .enumerate()
+        .map(|(new_val, old_val)| (old_val, new_val))
+        .collect();
+
+    // Replace the variables in the polynomials.
+    for p in polynomials.iter_mut() {
+        for t in p.terms.iter_mut() {
+            for var in t.monomial.product.iter_mut() {
+                let new_idx = *var_map.get(&var.id.to_idx()).unwrap();
+                var.id = I::from_idx(new_idx);
+            }
+        }
+    }
+
+    var_map
 }
 
 #[cfg(test)]
