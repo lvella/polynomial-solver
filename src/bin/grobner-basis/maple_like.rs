@@ -7,7 +7,7 @@ use polynomial_solver::polynomial::{
 };
 
 #[derive(Parser)]
-#[grammar = "bin/polysolver/maple_like.pest"]
+#[grammar = "bin/grobner-basis/maple_like.pest"]
 pub struct SystemsParser;
 
 /// Parses a set of polynomial systems provided in a very specific limited
