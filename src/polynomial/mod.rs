@@ -8,7 +8,7 @@ pub mod signature_basis;
 use super::ordered_ops;
 use bitvec::macros::internal::funty::Unsigned;
 use monomial_ordering::Ordering;
-use num_traits::{One, Signed};
+use num_traits::{One, Signed, Zero};
 use std::{
     cmp::{Ordering as CmpOrd, Reverse},
     fmt::Write,
@@ -463,7 +463,7 @@ where
     pub fn new_constant(value: C) -> Self {
         Term {
             coefficient: value,
-            monomial: Monomial::<O, I, P>::one(),
+            monomial: Monomial::one(),
         }
     }
 
@@ -604,6 +604,14 @@ where
         }
     }
 
+    pub fn new_var(id: I) -> Self {
+        Self::new_monomial_term(C::one(), id, P::one())
+    }
+
+    pub fn one() -> Self {
+        Self::new_constant(C::one())
+    }
+
     pub fn from_terms(mut terms: Vec<Term<O, I, C, P>>) -> Self {
         terms.sort_unstable_by(|a, b| b.monomial.cmp(&a.monomial));
         terms.dedup_by(|from, to| {
@@ -627,6 +635,10 @@ where
             None => true,
             Some(t) => t.monomial.product.is_empty(),
         }
+    }
+
+    pub fn is_zero(&self) -> bool {
+        self.terms.is_empty()
     }
 
     /// If the polynomial uses exactly one variable, returns the variable id.
