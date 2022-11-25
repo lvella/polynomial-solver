@@ -1,6 +1,6 @@
 This repository contains a library for handling polynomial systems over
 arbitrary fields, but with special focus on polynomials over large finite prime
-fields, with the goal of being used in the formal verification of Zero Knoledge
+fields, with the goal of being used in the formal verification of Zero Knowledge
 circuits.
 
 Currently it implements the Gröbner Basis algorithm *Signature Buchberger*, as
@@ -25,7 +25,7 @@ Then clone this repository, and inside its directory, run:
 $ cargo build --release
 ```
 
-The `--release` flag is higly recommended if you intent to actually execute it,
+The `--release` flag is highly recommended if you intent to actually execute it,
 because Gröbner Basis is a slow algorithm, and the execution time difference
 between an optimized and unoptimized build is as much as 20x.
 
@@ -40,7 +40,7 @@ or if you already built, you can execute the binary directly:
 $ ./target/release/check-determinism PATH_TO_INPUT_FILE.r1cs
 ```
 
-After a possibly very long execution time, outputing a lot of debugging
+After a possibly very long execution time, outputting a lot of debugging
 information on the progress of Gröbner Basis execution, eventually it will
 terminate with one of the following lines output:
 * `DETERMINISTIC`
