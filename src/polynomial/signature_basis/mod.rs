@@ -658,6 +658,7 @@ mod tests {
         ];
 
         let grobner_basis = grobner_basis(eqs.into());
+        let grobner_basis = crate::polynomial::grobner_basis::autoreduce(grobner_basis);
         println!("Gröbner Basis:");
         for p in grobner_basis.iter() {
             println!("{}", p);
