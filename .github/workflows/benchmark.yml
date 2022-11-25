@@ -1,0 +1,21 @@
+name: Run benchmarks
+
+on:
+  push:
+    branches: [ "workflow-test" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: Build
+      run: cargo build --verbose --release
+    - name: Run benchmakr
+      run: python run_benchmarks.py
+      working-directory: ./benchmarks
