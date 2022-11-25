@@ -8,7 +8,6 @@ mod s_pairs;
 mod signature_monomial_index;
 
 use std::{
-    cmp::Reverse,
     collections::{BTreeMap, HashMap, HashSet},
     fmt::Display,
     ops::{Bound::Excluded, Mul},
@@ -25,7 +24,7 @@ use super::{
 };
 use super::{monomial_ordering::Ordering, Exponent, Id, Monomial, Polynomial, Term};
 use itertools::Itertools;
-use num_traits::{One, Signed, Zero};
+use num_traits::{One, Signed};
 
 type CmpMap<O, I, P> = crate::fast_compare::ComparerMap<Signature<O, I, P>>;
 type Ratio<O, I, P> = crate::fast_compare::FastCompared<Signature<O, I, P>>;

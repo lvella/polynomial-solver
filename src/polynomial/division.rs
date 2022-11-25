@@ -207,7 +207,7 @@ pub mod tests {
     use super::*;
     use crate::polynomial::Polynomial;
     use num::Rational32;
-    use num_traits::{One, Pow, Zero};
+    use num_traits::{One, Pow};
 
     impl CommutativeRing for Rational32 {}
     impl Field for Rational32 {}

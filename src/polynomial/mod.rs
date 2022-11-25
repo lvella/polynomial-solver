@@ -8,7 +8,7 @@ pub mod signature_basis;
 use super::ordered_ops;
 use bitvec::macros::internal::funty::Unsigned;
 use monomial_ordering::Ordering;
-use num_traits::{One, Signed, Zero};
+use num_traits::{One, Signed};
 use std::{
     cmp::{Ordering as CmpOrd, Reverse},
     fmt::Write,
