@@ -17,6 +17,7 @@ pest = "2.0"
 pest_derive = "2.0"
 bitvec = "1"
 rand = "0.8"
+r1cs-file = { git = "https://github.com/lvella/zeropool-utils.git" }
 
 [dependencies.rug]
 version = "1.13"
@@ -25,3 +26,7 @@ features = ["integer","float"]
 
 [profile.release]
 lto = "thin"
+
+[profile.release-with-debug]
+inherits = "release"
+debug = true
