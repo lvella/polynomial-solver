@@ -4,7 +4,7 @@
 //! http://www.broune.com/papers/issac2012.html
 
 mod basis_calculator;
-mod ratio_monomial_index;
+mod indices;
 mod s_pairs;
 
 use std::{
@@ -25,6 +25,20 @@ use num_traits::{One, Signed};
 
 type CmpMap<O, I, P> = crate::fast_compare::ComparerMap<Signature<O, I, P>>;
 type Ratio<O, I, P> = crate::fast_compare::FastCompared<Signature<O, I, P>>;
+
+/// Returns the exponent of a variable inside a monomial.
+fn get_var_exp_from_monomial<O: Ordering, I: Id, E: SignedExponent>(
+    monomial: &Monomial<O, I, E>,
+    id: &I,
+) -> E {
+    let m = &monomial.product;
+    // Is binary search better than linear?
+    // TODO: Maybe create a dense monomial to skip this search?
+    match m.binary_search_by(|v| id.cmp(&v.id)) {
+        Ok(idx) => m[idx].power.clone(),
+        Err(_) => E::zero(),
+    }
+}
 
 /// Tests if a set contains a divisor for a signature.
 ///
@@ -55,8 +69,8 @@ type DivMaskSize = u32;
 type DivMap<P> = divmask::DivMap<DivMaskSize, P>;
 type DivMask = divmask::DivMask<DivMaskSize>;
 
-/// Wraps together a divmask and a (hopefully) corresponding monomial, wrapping
-/// the divisibility test.
+/// Like MaskedMonomial, but stores individual references for the monomial and
+/// its divmask.
 struct MaskedMonomialRef<'a, O: Ordering, I: Id, P: SignedExponent>(
     &'a DivMask,
     &'a Monomial<O, I, P>,

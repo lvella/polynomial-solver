@@ -3,10 +3,13 @@
 
 use crate::kd_tree::{self, KDTree, SearchPath};
 use crate::polynomial::divmask::DivMaskTestResult;
+use crate::polynomial::signature_basis::{
+    get_var_exp_from_monomial, MaskedMonomialRef, MaskedSignature, Ratio, SignPoly,
+};
 use crate::polynomial::Monomial;
 use crate::polynomial::{division::Field, monomial_ordering::Ordering, Id, VariablePower};
 
-use super::{DivMap, DivMask, MaskedMonomialRef, MaskedSignature, Ratio, SignPoly, SignedExponent};
+use super::{make_dense_monomial, node_data_builder, DivMap, MaskedMonomial, SignedExponent};
 
 /// The entries stored in the leafs are raw pointers to SignPoly.
 struct Entry<O: Ordering, I: Id, F: Field, E: SignedExponent>(*const SignPoly<O, I, F, E>);
@@ -63,20 +66,6 @@ fn get_var_exp_from_lm<O: Ordering, I: Id, F: Field, E: SignedExponent>(
     get_var_exp_from_monomial(&poly.polynomial.terms[0].monomial, id)
 }
 
-/// Returns the exponent of a variable inside a monomial.
-fn get_var_exp_from_monomial<O: Ordering, I: Id, E: SignedExponent>(
-    monomial: &Monomial<O, I, E>,
-    id: &I,
-) -> E {
-    let m = &monomial.product;
-    // Is binary search better than linear?
-    // TODO: Maybe create a dense monomial to skip this search?
-    match m.binary_search_by(|v| id.cmp(&v.id)) {
-        Ok(idx) => m[idx].power.clone(),
-        Err(_) => E::zero(),
-    }
-}
-
 /// The key element 0 is a signature/leading monomial ratio, which is stored as
 /// the integer comparer and a pointer to the original. The other key elements
 /// are variables to some power, factors of the leading monomial.
@@ -92,12 +81,6 @@ impl<O: Ordering, I: Id, E: SignedExponent> kd_tree::KeyElem for KeyElem<O, I, E
             KeyElem::MonomialVar(var) => var.id.to_idx() + 1,
         }
     }
-}
-
-#[derive(Clone)]
-struct MaskedMonomial<O: Ordering, I: Id, E: SignedExponent> {
-    divmask: DivMask,
-    monomial: Monomial<O, I, E>,
 }
 
 /// A k-dimensional tree index, indexed by the signatures/leading monomial ratio
@@ -118,20 +101,6 @@ fn node_data_map<O: Ordering, I: Id, F: Field, E: SignedExponent>(
     let monomial = unsafe { (*p).polynomial.terms[0].monomial.clone() };
     let divmask = div_map.map(&monomial);
     MaskedMonomial { divmask, monomial }
-}
-
-/// Maps a tree entry to its NodeData.
-fn node_data_builder<O: Ordering, I: Id, E: SignedExponent>(
-    div_map: &DivMap<E>,
-    a: MaskedMonomial<O, I, E>,
-    b: &MaskedMonomial<O, I, E>,
-) -> MaskedMonomial<O, I, E> {
-    let gcd = a.monomial.gcd(&b.monomial);
-    let divmask = div_map.map(&gcd);
-    MaskedMonomial {
-        divmask,
-        monomial: gcd,
-    }
 }
 
 impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F, E> {
@@ -157,7 +126,7 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
             })
     }
 
-    pub(super) fn find_high_base_divisor(
+    pub(in crate::polynomial::signature_basis) fn find_high_base_divisor(
         &self,
         s_lm_ratio: &Ratio<O, I, E>,
         lm: MaskedMonomialRef<O, I, E>,
@@ -217,7 +186,7 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
         best
     }
 
-    pub(super) fn find_a_reducer(
+    pub(in crate::polynomial::signature_basis) fn find_a_reducer(
         &self,
         s_lm_ratio: &Ratio<O, I, E>,
         lm: MaskedMonomialRef<O, I, E>,
@@ -239,13 +208,12 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
                         }
                     }
                     KeyElem::MonomialVar(var) => {
-                        let mut path = SearchPath::Both;
                         if let Some(exp) = dense_monomial.get(var.id.to_idx()) {
                             if *exp < var.power {
-                                path = SearchPath::LessThan;
+                                return SearchPath::LessThan;
                             }
                         }
-                        path
+                        SearchPath::Both
                     }
                 }
             },
@@ -277,7 +245,7 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
     ///
     /// This search only uses the indexed signature/LM ratio to narrow down the
     /// possible signature divisors.
-    pub(super) fn test_singular_criterion(
+    pub fn test_singular_criterion(
         &self,
         sign: &MaskedSignature<O, I, E>,
         lm: &Monomial<O, I, E>,
@@ -321,7 +289,7 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
 
     /// For low base divisor, find the polynomial with maximum sign/lm ratio
     /// whose signature divides sign_poly's.
-    pub(super) fn find_low_base_divisor<'a>(
+    pub fn find_low_base_divisor<'a>(
         &'a self,
         sign_poly: &SignPoly<O, I, F, E>,
     ) -> Option<&'a SignPoly<O, I, F, E>> {
@@ -363,21 +331,6 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
 
         found
     }
-}
-
-/// Makes a dense vector with the exponents of a monomial, up to the largest
-/// variable id.
-fn make_dense_monomial<O: Ordering, I: Id, E: SignedExponent>(
-    monomial: &Monomial<O, I, E>,
-) -> Vec<E> {
-    let largest_id = monomial.product.get(0).map_or(0, |var| var.id.to_idx());
-    let mut dense_monomial = Vec::new();
-    dense_monomial.resize(largest_id + 1, E::zero());
-    for var in monomial.product.iter() {
-        dense_monomial[var.id.to_idx()] = var.power.clone();
-    }
-
-    dense_monomial
 }
 
 #[cfg(test)]

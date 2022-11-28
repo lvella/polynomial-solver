@@ -6,8 +6,8 @@ use crate::polynomial::{
 };
 
 use super::{
-    contains_divisor, ratio_monomial_index::RatioMonomialIndex, s_pairs, CmpMap, DivMap, DivMask,
-    MaskedMonomialRef, MaskedSignature, Ratio, SignPoly, SignedExponent,
+    contains_divisor, indices::ratio_monomial_index::RatioMonomialIndex, s_pairs, CmpMap, DivMap,
+    DivMask, MaskedMonomialRef, MaskedSignature, Ratio, SignPoly, SignedExponent,
 };
 
 /// Stores all the basis elements known and processed so far.

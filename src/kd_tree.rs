@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::mem::MaybeUninit;
 
 /// Implementation of the classical data structure k-dimensional tree for
 /// multidimensional indexing.
@@ -337,34 +338,47 @@ impl<E: Entry, NodeData: Clone> Node<E, NodeData> {
 /// Partition a slice in two according to a predicate, preserving the relative
 /// order. Returns two slices, the first with the elements matching the
 /// predicate, and the second with the elements not matching.
-fn stable_partition<T: Copy, P: Fn(&T) -> bool>(
-    list: &mut [T],
-    predicate: P,
-) -> (&mut [T], &mut [T]) {
-    let mut tmp = Vec::new();
-
+fn stable_partition<T, P: Fn(&T) -> bool>(list: &mut [T], predicate: P) -> (&mut [T], &mut [T]) {
     let mut src = 0;
     let mut dst = 0;
-    while src < list.len() {
-        if predicate(&list[src]) {
-            list[dst] = list[src];
-            dst += 1;
-        } else {
-            tmp.push(list[src]);
+
+    unsafe {
+        // During the partition, we will need to temporarily vacate an array
+        // position, when its previous occupant is moved to a new place but
+        // hasn't already been replaced. To allow for uninitialized "vacancies",
+        // we transmute the array to MaybeUninit.
+        let list: &mut [MaybeUninit<T>] = std::mem::transmute(list);
+        let mut tmp = Vec::new();
+        while src < list.len() {
+            if predicate(list[src].assume_init_ref()) {
+                list[dst] = std::mem::replace(&mut list[src], MaybeUninit::uninit());
+                dst += 1;
+            } else {
+                tmp.push(std::mem::replace(&mut list[src], MaybeUninit::uninit()));
+            }
+            src += 1;
         }
-        src += 1;
+
+        // All uninitialized elements will be in the unmatching side:
+        assert_eq!(dst, list.len() - tmp.len());
+        let (matching, unmatching) = list.split_at_mut(dst);
+
+        // Fill all the uninitialized elements with elements from tmp:
+        for (dest, src) in unmatching.iter_mut().zip(tmp.into_iter()) {
+            *dest = src;
+        }
+
+        (
+            MaybeUninit::slice_assume_init_mut(matching),
+            MaybeUninit::slice_assume_init_mut(unmatching),
+        )
     }
-
-    let (matching, unmatching) = list.split_at_mut(list.len() - tmp.len());
-    unmatching.copy_from_slice(&tmp[..]);
-
-    (matching, unmatching)
 }
 
 /// A k-dimensional vector entry for the k-dimensional tree.
 ///
 /// This will be copied a lot, so make sure it is a small object.
-pub trait Entry: Copy {
+pub trait Entry: Clone {
     type KeyElem: KeyElem;
 
     fn get_key_elem(&self, dim: usize) -> Self::KeyElem;
