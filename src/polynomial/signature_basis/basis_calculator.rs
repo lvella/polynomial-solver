@@ -7,7 +7,7 @@ use crate::polynomial::{
 
 use super::{
     contains_divisor, s_pairs, CmpMap, DivMap, DivMask, MaskedMonomialRef, MaskedSignature,
-    PointedCmp, Ratio, SignPoly, Signature, SignedExponent,
+    PointedCmp, Ratio, SignPoly, SignedExponent,
 };
 
 /// Stores all the basis elements known and processed so far.
@@ -74,14 +74,15 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display> KnownB
     }
 }
 
-pub type SyzygySet<O, I, P> = BTreeMap<Signature<O, I, P>, DivMask>;
+pub type SyzygySet<O, I, P> = Vec<(Monomial<O, I, P>, DivMask)>;
 
 /// Hold together the structures that must be coherent during the algorithm execution
 pub struct BasisCalculator<O: Ordering, I: Id, C: Field, P: SignedExponent> {
     /// The basis elements and syzygies.
     basis: KnownBasis<O, I, C, P>,
 
-    /// Signatures of polynomials know to reduce to zero.
+    /// For each new input polynomial processed, this is a set of signatures of
+    /// polynomials know to reduce to zero, for that signature index.
     ///
     /// TODO: use a proper multidimensional index.
     ///
@@ -263,15 +264,20 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
         }
 
         // Recalculate the mask of each syzygy.
-        for (signature, divmask) in self.syzygies.iter_mut() {
-            *divmask = div_map.map(&signature.monomial);
+        for (monomial, divmask) in self.syzygies.iter_mut() {
+            *divmask = div_map.map(&monomial);
         }
+    }
+
+    pub fn clear_syzygies(&mut self) {
+        self.syzygies.clear();
     }
 
     fn add_syzygy(&mut self, signature: MaskedSignature<O, I, P>) {
         self.update_max_exp(&signature.signature.monomial);
 
-        self.syzygies.insert(signature.signature, signature.divmask);
+        self.syzygies
+            .push((signature.signature.monomial, signature.divmask));
     }
 
     fn update_max_exp(&mut self, monomial: &Monomial<O, I, P>) {

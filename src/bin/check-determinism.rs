@@ -168,6 +168,7 @@ fn is_deterministic<F: ZkField, const FS: usize>(r1cs: R1csFile<FS>) -> Conclusi
         poly_set.extend(new_polys);
     }
 
+    poly_set.sort_unstable();
     let gb = polynomial_solver::polynomial::signature_basis::grobner_basis(poly_set);
 
     // If we have a non-zero constant polynomial in GB, the system is UNSAT:
