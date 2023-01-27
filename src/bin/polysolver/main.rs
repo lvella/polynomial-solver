@@ -217,5 +217,8 @@ endif;
 
         println!("CoCoA 5 verification file written.");
     }
-    println!("### Gröbner Base calculation time: {:?}", duration);
+    println!(
+        "### Gröbner Base calculation time: {:.} s",
+        duration.as_secs_f64()
+    );
 }
