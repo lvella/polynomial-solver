@@ -13,6 +13,7 @@ use std::{
     io::{self, BufRead, BufReader},
     mem::MaybeUninit,
     os::unix::process::ExitStatusExt,
+    path::Path,
     process::{ChildStdout, Command, ExitStatus, Stdio},
     sync::mpsc::sync_channel,
     time::Duration,
@@ -26,26 +27,58 @@ fn main() {
 
     let mut wtr = csv::Writer::from_writer(io::stdout());
 
-    // Run the cases:
-    // TODO: dynamically traverse the directory assembling the cases
+    // Run the maple-like cases:
+    let walk = walkdir::WalkDir::new("maple-like")
+        .follow_links(true)
+        .sort_by_file_name();
+    for entry in walk {
+        match entry {
+            Ok(e) => {
+                // Each maple-like file may have multiple cases
+                if e.file_type().is_file() {
+                    for i in 0.. {
+                        match polysolver_runner(PolysolverInput::MapleLike(e.path(), i)) {
+                            Some(r) => {
+                                wtr.serialize(r).unwrap();
+                                wtr.flush().unwrap();
+                            }
+                            None => break,
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Error traversing Maple-like cases: {}", e);
+            }
+        }
+    }
 
-    wtr.serialize(polysolver_runner(PolysolverInput::ZokratesBin(
-        "zokrates-bin/u8_different_from_zero.zok_bin",
-    )))
-    .unwrap();
-    wtr.flush().unwrap();
-    wtr.serialize(polysolver_runner(PolysolverInput::MapleLike(
-        "maple-like/benchmark.txt",
-        0,
-    )))
-    .unwrap();
-    wtr.flush().unwrap();
+    // Run the zokrates cases:
+    let walk = walkdir::WalkDir::new("zokrates-bin")
+        .follow_links(true)
+        .sort_by_file_name();
+    for entry in walk {
+        match entry {
+            Ok(e) => {
+                if e.file_type().is_file() {
+                    wtr.serialize(
+                        polysolver_runner(PolysolverInput::ZokratesBin(e.path())).unwrap(),
+                    )
+                    .unwrap();
+                    wtr.flush().unwrap();
+                }
+            }
+            Err(e) => {
+                eprintln!("Error traversing Zokrates cases: {}", e);
+            }
+        }
+    }
 }
 
 /// A polysolver input problem locator, to be executed.
 enum PolysolverInput<'a> {
-    ZokratesBin(&'a str),
-    MapleLike(&'a str, u32),
+    ZokratesBin(&'a Path),
+    MapleLike(&'a Path, u32),
 }
 
 /// Execution result
@@ -70,7 +103,7 @@ struct RunStatistics {
     exit_signal: Option<i32>,
 }
 
-fn polysolver_runner(case: PolysolverInput) -> RunStatistics {
+fn polysolver_runner(case: PolysolverInput) -> Option<RunStatistics> {
     // Executable of the polysolver being benchmarked
     const POLYSOLVER_BIN: &'static str = env!("CARGO_BIN_EXE_polysolver");
 
@@ -78,22 +111,26 @@ fn polysolver_runner(case: PolysolverInput) -> RunStatistics {
         static ref PROGRESS_RE: Regex = Regex::new(r"^#\(p: (\d+), s: \d+\)").unwrap();
         static ref TIME_RE: Regex =
             Regex::new(r"^### Gröbner Base calculation time: (\d*\.\d+|\d+) s").unwrap();
+        static ref WRONG_IDX: Regex =
+            Regex::new(r"^Index too large, benchmark file only has \d+ systems.").unwrap();
     }
 
     let mut cmd = Command::new(POLYSOLVER_BIN);
-    let case_name;
+    let case_name: String;
     match case {
         PolysolverInput::ZokratesBin(filename) => {
             cmd.arg("-z").arg(filename);
-            case_name = filename.to_string();
+            case_name = filename.to_string_lossy().into();
         }
         PolysolverInput::MapleLike(filename, index) => {
             cmd.arg("-m").arg(filename).arg("-i").arg(index.to_string());
-            case_name = format!("{filename}:{index}");
+            case_name = format!("{}:{index}", filename.to_string_lossy());
         }
     }
 
-    child_runner(case_name, cmd, |output| {
+    let mut wrong_idx = false;
+
+    let run_result = child_runner(case_name, cmd, |output| {
         // Update the execution progress as output is written:
         let mut spairs = 0u32;
         let mut last_line = String::new();
@@ -104,12 +141,27 @@ fn polysolver_runner(case: PolysolverInput) -> RunStatistics {
             }
         }
 
+        // Check if the index is valid.
+        if let PolysolverInput::MapleLike(_, _) = case {
+            if WRONG_IDX.is_match(&last_line) {
+                wrong_idx = true;
+                return (None, 0);
+            }
+        }
+
+        // Try to get the self reported time, which is available if the run was successful.
         let self_reported = TIME_RE
             .captures(&last_line)
             .map(|caps| caps.get(1).unwrap().as_str().parse::<f64>().unwrap());
 
         (self_reported, spairs)
-    })
+    });
+
+    if wrong_idx {
+        None
+    } else {
+        Some(run_result)
+    }
 }
 
 fn child_runner(

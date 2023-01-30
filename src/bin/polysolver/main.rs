@@ -77,14 +77,21 @@ fn main() -> Result<(), String> {
                 maple_like::parse_maple_like(&unparsed_contents)?;
 
             if !args.system_index.is_empty() {
-                args.system_index
+                let assemble = args
+                    .system_index
                     .into_iter()
                     .map(|idx| systems.get_mut(idx).map(|s| (idx, std::mem::take(s))))
-                    .collect::<Option<Vec<_>>>()
-                    .ok_or(format!(
-                        "Index too large, benchmark file only has {} systems.",
-                        systems.len()
-                    ))?
+                    .collect::<Option<Vec<_>>>();
+                match assemble {
+                    Some(a) => a,
+                    None => {
+                        println!(
+                            "Index too large, benchmark file only has {} systems.",
+                            systems.len()
+                        );
+                        return Err("Wrong index provided.".to_string());
+                    }
+                }
             } else {
                 println!(
                     "No system index specified, using all the {} systems provided.",
