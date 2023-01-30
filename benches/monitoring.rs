@@ -105,7 +105,7 @@ struct RunStatistics {
 
 fn polysolver_runner(case: PolysolverInput) -> Option<RunStatistics> {
     // Executable of the polysolver being benchmarked
-    const POLYSOLVER_BIN: &'static str = env!("CARGO_BIN_EXE_polysolver");
+    const POLYSOLVER_BIN: &'static str = env!("CARGO_BIN_EXE_grobner-basis");
 
     lazy_static! {
         static ref PROGRESS_RE: Regex = Regex::new(r"^#\(p: (\d+), s: \d+\)").unwrap();
