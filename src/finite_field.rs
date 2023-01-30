@@ -432,7 +432,7 @@ impl<const PRIME: u32> FiniteField for U32PrimeField<PRIME> {
 
 #[cfg(test)]
 mod tests {
-    use num_traits::{Inv, One, Pow};
+    use num_traits::{Inv, One, Pow, Zero};
     use rand::{rngs::StdRng, Rng, SeedableRng};
 
     use crate::polynomial::{self, Polynomial};
@@ -482,12 +482,32 @@ mod tests {
             let a = rng.gen_range(0..PRIME);
             let b = rng.gen_range(0..PRIME);
 
+            // sum
+            {
+                let tested = (Field::new(a) + Field::new(b)).into_inner();
+                let control = ((a as u64 + b as u64) % PRIME as u64) as u32;
+                assert_eq!(tested, control);
+            }
+
+            // subtraction
+            {
+                let mut amb = Field::new(a);
+                amb -= Field::new(b);
+
+                let mut bma = Field::new(b);
+                bma -= Field::new(a);
+
+                assert!((amb + bma).is_zero());
+            }
+
             // exponentiation
-            let tested = rug::Integer::from(Field::new(a).pow(b).into_inner());
-            let control = rug::Integer::from(a)
-                .pow_mod(&b.into(), &PRIME.into())
-                .unwrap();
-            assert_eq!(tested, control);
+            {
+                let tested = rug::Integer::from(Field::new(a).pow(b).into_inner());
+                let control = rug::Integer::from(a)
+                    .pow_mod(&b.into(), &PRIME.into())
+                    .unwrap();
+                assert_eq!(tested, control);
+            }
 
             // inverse
             for v in [a, b] {

@@ -4,7 +4,7 @@ use clap::{command, ArgGroup, Parser};
 use polynomial_solver::{
     finite_field::{FiniteField, U32PrimeField, ZkFieldWrapper},
     polynomial::{
-        cocoa_print, grobner_basis::reorder_vars_for_easier_gb, monomial_ordering::Grevlex, Term,
+        cocoa_print, monomial_ordering::Grevlex, signature_basis::make_dense_variable_set, Term,
     },
 };
 use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};
@@ -158,12 +158,12 @@ fn solve<T: FiniteField + Display>(
         .as_ref()
         .map(|filename| File::create(filename).unwrap());
 
-    println!("\nVariables reordered to:");
+    println!("\nVariables renamed to to:");
     let mut var_ids = Vec::new();
-    let var_map = reorder_vars_for_easier_gb(&mut poly_set);
+    let var_map = make_dense_variable_set(&mut poly_set);
     for (from, to) in var_map {
         println!("{} → {}", from, to);
-        var_ids.push(to);
+        var_ids.push(to as u32);
     }
 
     println!("Set of polynomials constrained to 0:");
@@ -176,9 +176,8 @@ fn solve<T: FiniteField + Display>(
         cocoa_print::list_of_polys(cocoa5_file, "original", poly_set.iter()).unwrap();
     }
 
-    // The algorithm performance might depend on the order the elements are
-    // given in the input. From my tests with a single input, sorting makes it
-    // run much faster.
+    // The algorithm performance depends on the order the polynomials are given
+    // in the input. From my tests, sorting makes it run much faster.
     if !randomize {
         poly_set.sort_unstable();
     } else {
