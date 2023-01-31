@@ -1,0 +1,3 @@
+[submodule "external/formalbenchmarks"]
+	path = external/formalbenchmarks
+	url = git@github.com:zkonduit/formalbenchmarks.git
