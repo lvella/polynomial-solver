@@ -109,15 +109,24 @@ fn is_deterministic<F: ZkField, const FS: usize>(r1cs: R1csFile<FS>) -> Conclusi
 
     let mut var_id_gen = 1..;
 
-    // For each of public output, we generate 3 variables: 2 for the even and
-    // odd constraint systems, and one to write the constraint that says they
-    // should be different from each other. This is what connects the even and
-    // odd systems and ensures that, if UNSAT, the circuit is deterministic
-    // (i.e., for the same inputs, it is not possible to have 2 different
-    // outputs).
+    // For each of public output, we generate 3 variables: one for each of the
+    // even and odd constraint systems, and one to create the negative
+    // constraint that says the even variable should be different from the odd
+    // variable.
     //
-    // TODO: maybe this should be one huge polynomial constraint, multiplying
-    // all the non-equal encodings together.
+    // We should multiply together these negative constraints (effectively
+    // OR'ing them) into one single polynomial, so that if any one can be
+    // satisfied, the whole polynomial is satisfied and the system is considered
+    // non-deterministic.
+    //
+    // This is what connects the even and odd systems and ensures that, if
+    // UNSAT, the circuit is deterministic (i.e., for the same inputs, it is not
+    // possible to have 2 different outputs).
+    //
+    // TODO: This is ridiculous and absolutely impractical. Find a way to encode
+    // this where you don't have to multiply all the polynomials together (it
+    // seems Picus queries one output variable at a time).
+    let mut non_unique_constraint = Poly::one();
     for i in 0..r1cs.header.n_pub_out {
         let out_wire = 1 + i;
         let even = var_id_gen.next().unwrap();
@@ -126,9 +135,11 @@ fn is_deterministic<F: ZkField, const FS: usize>(r1cs: R1csFile<FS>) -> Conclusi
 
         // We need an extra variable to encode a negative constraint.
         let extra = var_id_gen.next().unwrap();
-        poly_set
-            .push(Poly::new_var(extra) * (Poly::new_var(even) - Poly::new_var(odd)) - Poly::one());
+        let factor =
+            Poly::new_var(extra) * (Poly::new_var(even) - Poly::new_var(odd)) - Poly::one();
+        non_unique_constraint = non_unique_constraint * factor;
     }
+    poly_set.push(non_unique_constraint);
 
     // The input wires are shared between even and odd systems:
     for i in 0..(r1cs.header.n_pub_in + r1cs.header.n_prvt_in) {
