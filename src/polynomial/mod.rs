@@ -29,6 +29,13 @@ pub trait Id: core::fmt::Debug + Eq + Ord + Clone {
     /// The reverse side of the bijection with usize. This will be called from 0
     /// up to the maximum value returned by to_idx() in the set of all Ids seen.
     fn from_idx(idx: usize) -> Self;
+
+    /// Display function for Id.
+    ///
+    /// Default implementation simply prints x followed by the index.
+    fn display(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "x{}", self.to_idx())
+    }
 }
 
 /// Implement Id for all basic unsigned types:
@@ -463,7 +470,7 @@ where
     pub fn new_constant(value: C) -> Self {
         Term {
             coefficient: value,
-            monomial: Monomial::<O, I, P>::one(),
+            monomial: Monomial::one(),
         }
     }
 
@@ -604,6 +611,14 @@ where
         }
     }
 
+    pub fn new_var(id: I) -> Self {
+        Self::new_monomial_term(C::one(), id, P::one())
+    }
+
+    pub fn one() -> Self {
+        Self::new_constant(C::one())
+    }
+
     pub fn from_terms(mut terms: Vec<Term<O, I, C, P>>) -> Self {
         terms.sort_unstable_by(|a, b| b.monomial.cmp(&a.monomial));
         terms.dedup_by(|from, to| {
@@ -627,6 +642,10 @@ where
             None => true,
             Some(t) => t.monomial.product.is_empty(),
         }
+    }
+
+    pub fn is_zero(&self) -> bool {
+        self.terms.is_empty()
     }
 
     /// If the polynomial uses exactly one variable, returns the variable id.
@@ -1073,6 +1092,17 @@ where
     }
 }
 
+impl<I: Id, E: Exponent + std::fmt::Display> std::fmt::Display for VariablePower<I, E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.id.display(f)?;
+        if !self.power.is_one() {
+            write!(f, "^{}", self.power)?;
+        }
+
+        Ok(())
+    }
+}
+
 impl<O, I, P> std::fmt::Display for Monomial<O, I, P>
 where
     I: Id,
@@ -1082,10 +1112,7 @@ where
         let mut iter = self.product.iter();
         if let Some(mut v) = iter.next() {
             loop {
-                write!(f, "x{}", v.id.to_idx())?;
-                if !v.power.is_one() {
-                    write!(f, "^{}", v.power)?;
-                }
+                write!(f, "{}", v)?;
                 v = if let Some(v) = iter.next() {
                     f.write_char('*')?;
                     v
