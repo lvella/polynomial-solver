@@ -36,16 +36,10 @@ fn contains_divisor<O: Ordering, I: Id, P: SignedExponent>(
     msign: &MaskedSignature<O, I, P>,
     set: &SyzygySet<O, I, P>,
 ) -> bool {
-    // Iterate over smaller signatures, testing if they are divisible
-    let minimal = Signature {
-        monomial: Monomial::one(),
-        idx: msign.signature.idx,
-    };
-
     let masked_dividend = &msign.monomial();
 
-    for maybe_divisor in set.range(&minimal..=&msign.signature) {
-        let masked_divisor = MaskedMonomialRef(maybe_divisor.1, &maybe_divisor.0.monomial);
+    for maybe_divisor in set.iter() {
+        let masked_divisor = MaskedMonomialRef(&maybe_divisor.1, &maybe_divisor.0);
         if masked_divisor.divides(masked_dividend) {
             return true;
         }
@@ -600,6 +594,11 @@ pub fn grobner_basis<
             let reduction = regular_reduce(b.polys.len() as u32, m_sign, s_pair, b);
             early_ret_err!(handle_reduction_result(&mut c, reduction, &indices[..]));
         }
+
+        // Syzygies found in this iteration are no longer useful in the next,
+        // because the next signatures will have a different index, and are not
+        // divisible by the currently known syzygies.
+        c.clear_syzygies();
     }
 
     // Return the polynomials from the basis.

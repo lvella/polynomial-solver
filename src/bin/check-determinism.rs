@@ -19,6 +19,10 @@ use zokrates_field::{Bls12_377Field, Bls12_381Field, Bn128Field, Bw6_761Field, F
 struct Args {
     /// Input R1CS file
     r1cs_file: String,
+
+    /// Do nothing, just read and dump R1CS file
+    #[arg(short, long)]
+    just_dump: bool,
 }
 
 fn main() -> std::io::Result<()> {
@@ -32,7 +36,14 @@ fn main() -> std::io::Result<()> {
 
     // This can be improved with a fixed size field type where prime is set per
     // thread, but for now, we only support a fixed set of primes.
+    //
+    // TODO: improve this
     let prime = Integer::from_digits(r1cs.header.prime.as_bytes(), Order::Lsf);
+
+    if args.just_dump {
+        just_dump::just_dump(prime, r1cs);
+        return Ok(());
+    }
 
     println!(
         "{}",
@@ -98,15 +109,24 @@ fn is_deterministic<F: ZkField, const FS: usize>(r1cs: R1csFile<FS>) -> Conclusi
 
     let mut var_id_gen = 1..;
 
-    // For each of public output, we generate 3 variables: 2 for the even and
-    // odd constraint systems, and one to write the constraint that says they
-    // should be different from each other. This is what connects the even and
-    // odd systems and ensures that, if UNSAT, the circuit is deterministic
-    // (i.e., for the same inputs, it is not possible to have 2 different
-    // outputs).
+    // For each of public output, we generate 3 variables: one for each of the
+    // even and odd constraint systems, and one to create the negative
+    // constraint that says the even variable should be different from the odd
+    // variable.
     //
-    // TODO: maybe this should be one huge polynomial constraint, multiplying
-    // all the non-equal encodings together.
+    // We should multiply together these negative constraints (effectively
+    // OR'ing them) into one single polynomial, so that if any one can be
+    // satisfied, the whole polynomial is satisfied and the system is considered
+    // non-deterministic.
+    //
+    // This is what connects the even and odd systems and ensures that, if
+    // UNSAT, the circuit is deterministic (i.e., for the same inputs, it is not
+    // possible to have 2 different outputs).
+    //
+    // TODO: This is ridiculous and absolutely impractical. Find a way to encode
+    // this where you don't have to multiply all the polynomials together (it
+    // seems Picus queries one output variable at a time).
+    let mut non_unique_constraint = Poly::one();
     for i in 0..r1cs.header.n_pub_out {
         let out_wire = 1 + i;
         let even = var_id_gen.next().unwrap();
@@ -115,9 +135,11 @@ fn is_deterministic<F: ZkField, const FS: usize>(r1cs: R1csFile<FS>) -> Conclusi
 
         // We need an extra variable to encode a negative constraint.
         let extra = var_id_gen.next().unwrap();
-        poly_set
-            .push(Poly::new_var(extra) * (Poly::new_var(even) - Poly::new_var(odd)) - Poly::one());
+        let factor =
+            Poly::new_var(extra) * (Poly::new_var(even) - Poly::new_var(odd)) - Poly::one();
+        non_unique_constraint = non_unique_constraint * factor;
     }
+    poly_set.push(non_unique_constraint);
 
     // The input wires are shared between even and odd systems:
     for i in 0..(r1cs.header.n_pub_in + r1cs.header.n_prvt_in) {
@@ -157,6 +179,7 @@ fn is_deterministic<F: ZkField, const FS: usize>(r1cs: R1csFile<FS>) -> Conclusi
         poly_set.extend(new_polys);
     }
 
+    poly_set.sort_unstable();
     let gb = polynomial_solver::polynomial::signature_basis::grobner_basis(poly_set);
 
     // If we have a non-zero constant polynomial in GB, the system is UNSAT:
@@ -164,5 +187,116 @@ fn is_deterministic<F: ZkField, const FS: usize>(r1cs: R1csFile<FS>) -> Conclusi
         Conclusion::Deterministic
     } else {
         Conclusion::Unknown
+    }
+}
+
+mod just_dump {
+    use std::cell::RefCell;
+
+    use polynomial_solver::{
+        finite_field::ThreadPrimeField,
+        polynomial::{Id, Term},
+    };
+    use r1cs_file::R1csFile;
+    use rug::Integer;
+
+    /// Id wrapper for better display of R1CS wire roles.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    struct R1csId(u32);
+
+    impl R1csId {
+        thread_local! {
+            pub static INFO: std::cell::RefCell<Option<VarInfo>>  = RefCell::new(None);
+        }
+    }
+
+    impl Id for R1csId {
+        fn to_idx(&self) -> usize {
+            self.0 as usize
+        }
+
+        fn from_idx(idx: usize) -> Self {
+            Self(idx as u32)
+        }
+
+        fn display(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            Self::INFO.with(|info| {
+                let r = info.borrow();
+                let info = r.as_ref().unwrap();
+
+                if self.0 == 0 {
+                    return write!(f, "𒁹");
+                }
+
+                let (prefix, delta) = if self.0 >= info.first_internal {
+                    ('w', info.first_internal)
+                } else if self.0 >= info.first_private_input {
+                    ('i', info.first_private_input)
+                } else if self.0 >= info.first_public_input {
+                    ('I', info.first_public_input)
+                } else {
+                    ('O', 1)
+                };
+
+                write!(f, "{}{}", prefix, self.0 - delta)
+            })
+        }
+    }
+
+    struct VarInfo {
+        first_internal: u32,
+        first_private_input: u32,
+        first_public_input: u32,
+    }
+
+    impl VarInfo {
+        fn new<const FS: usize>(r1cs: &R1csFile<FS>) -> Self {
+            let h = &r1cs.header;
+            let first_public_input = 1 + h.n_pub_out;
+            let first_private_input = first_public_input + h.n_pub_in;
+            let first_internal = first_private_input + h.n_prvt_in;
+
+            Self {
+                first_internal,
+                first_private_input,
+                first_public_input,
+            }
+        }
+    }
+
+    type DumpPoly = polynomial_solver::polynomial::Polynomial<
+        polynomial_solver::polynomial::monomial_ordering::Grevlex,
+        R1csId,
+        ThreadPrimeField,
+        i32,
+    >;
+
+    pub(crate) fn just_dump<const FS: usize>(prime: Integer, r1cs: R1csFile<FS>) {
+        println!("i: private input, I: public input, O: public output, w: internal wire, 𒁹: one");
+
+        ThreadPrimeField::set_prime(prime).unwrap();
+        R1csId::INFO.with(|info| {
+            info.replace(Some(VarInfo::new(&r1cs)));
+        });
+
+        // Read the constraints
+        for (cnum, constraint) in r1cs.constraints.0.into_iter().enumerate() {
+            let [a, b, c] = [constraint.0, constraint.1, constraint.2].map(|terms| {
+                let terms = terms
+                    .into_iter()
+                    .map(|(coeff, wire_id)| {
+                        Term::new(
+                            Integer::from_digits(coeff.as_bytes(), rug::integer::Order::Lsf).into(),
+                            R1csId(wire_id),
+                            1,
+                        )
+                    })
+                    .collect();
+
+                DumpPoly::from_terms(terms)
+            });
+
+            println!("\nConstraint {cnum}:\n  A: {a}\n  B: {b}\n  C: {c}");
+        }
     }
 }

@@ -2,7 +2,7 @@
 
 use std::{
     cmp::max,
-    collections::{BTreeMap, BinaryHeap},
+    collections::BinaryHeap,
     fmt::Display,
     marker::PhantomData,
     ops::Index,
@@ -627,7 +627,7 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
     pub fn get_next<'a, C: Field>(
         &mut self,
         basis: &KnownBasis<O, I, C, P>,
-        syzygies: &mut BTreeMap<Signature<O, I, P>, DivMask>,
+        syzygies: &mut SyzygySet<O, I, P>,
     ) -> Option<(
         MaskedSignature<O, I, P>,
         Polynomial<O, I, C, P>,
@@ -707,7 +707,7 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
                     // polynomial pair discarded because this signature we are
                     // adding necessarily divides all of them.
                     if !eliminated_by_signature {
-                        syzygies.insert(m_sign.signature, m_sign.divmask);
+                        syzygies.push((m_sign.signature.monomial, m_sign.divmask));
                     }
 
                     // Mark every popped S-pair as reducing to zero.

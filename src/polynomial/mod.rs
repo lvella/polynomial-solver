@@ -29,6 +29,13 @@ pub trait Id: core::fmt::Debug + Eq + Ord + Clone {
     /// The reverse side of the bijection with usize. This will be called from 0
     /// up to the maximum value returned by to_idx() in the set of all Ids seen.
     fn from_idx(idx: usize) -> Self;
+
+    /// Display function for Id.
+    ///
+    /// Default implementation simply prints x followed by the index.
+    fn display(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "x{}", self.to_idx())
+    }
 }
 
 /// Implement Id for all basic unsigned types:
@@ -1087,7 +1094,7 @@ where
 
 impl<I: Id, E: Exponent + std::fmt::Display> std::fmt::Display for VariablePower<I, E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "x{}", self.id.to_idx())?;
+        self.id.display(f)?;
         if !self.power.is_one() {
             write!(f, "^{}", self.power)?;
         }

@@ -15,6 +15,20 @@ pub trait PrimeField: FiniteField {}
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub struct ThreadPrimeField(rug::Integer);
 
+fn mod_display(
+    value: &rug::Integer,
+    order: &rug::Integer,
+    f: &mut std::fmt::Formatter<'_>,
+) -> std::fmt::Result {
+    let halfway = (order / 2u8).complete();
+
+    if value > &halfway {
+        std::fmt::Display::fmt(&(value - order).complete(), f)
+    } else {
+        std::fmt::Display::fmt(&value, f)
+    }
+}
+
 impl ThreadPrimeField {
     thread_local! {
         static PRIME: std::cell::RefCell<rug::Integer>  = RefCell::new(rug::Integer::from(3));
@@ -57,7 +71,7 @@ impl PrimeField for ThreadPrimeField {}
 
 impl Display for ThreadPrimeField {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        self.0.fmt(f)
+        Self::PRIME.with(|prime| mod_display(&self.0, &prime.borrow(), f))
     }
 }
 
@@ -252,14 +266,9 @@ impl<T: ZkField> FromStr for ZkFieldWrapper<T> {
 impl<T: ZkField> std::fmt::Display for ZkFieldWrapper<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let prime = Self::get_order();
-        let halfway = (&prime / 2u8).complete();
         let val = self.to_rug();
 
-        if val > halfway {
-            std::fmt::Display::fmt(&(val - prime), f)
-        } else {
-            std::fmt::Display::fmt(&val, f)
-        }
+        mod_display(&val, &prime, f)
     }
 }
 
