@@ -8,7 +8,7 @@ mod s_pairs;
 mod signature_monomial_index;
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{btree_map::Entry, BTreeMap, HashMap, HashSet},
     fmt::Display,
     ops::{Bound::Excluded, Mul},
 };
@@ -297,6 +297,45 @@ fn test_singular_criterion<O: Ordering, I: Id, C: Field, P: SignedExponent>(
     ret
 }
 
+/// Helper struct in reduction, sum terms of equal monomials and pops the
+/// leading term.
+struct TermAggregatorQueue<O: Ordering, I: Id, C: Field, P: SignedExponent> {
+    tree: BTreeMap<Monomial<O, I, P>, C>,
+}
+
+impl<O: Ordering, I: Id, C: Field, P: SignedExponent> TermAggregatorQueue<O, I, C, P> {
+    fn new() -> Self {
+        Self {
+            tree: BTreeMap::new(),
+        }
+    }
+
+    fn insert(&mut self, terms: impl ExactSizeIterator<Item = Term<O, I, C, P>>) {
+        for t in terms {
+            match self.tree.entry(t.monomial) {
+                Entry::Vacant(entry) => {
+                    // There was no such monomial, just insert:
+                    entry.insert(t.coefficient);
+                }
+                Entry::Occupied(mut entry) => {
+                    // Sum the coefficients, and remove if result is zero.
+                    *entry.get_mut() += t.coefficient;
+                    if entry.get().is_zero() {
+                        entry.remove_entry();
+                    }
+                }
+            }
+        }
+    }
+
+    fn pop_leading_term(&mut self) -> Option<Term<O, I, C, P>> {
+        self.tree.pop_last().map(|(monomial, coefficient)| Term {
+            coefficient,
+            monomial,
+        })
+    }
+}
+
 /// Regular reduction, as defined in the paper.
 ///
 /// This is analogous to calculate the remainder on a multivariate polynomial
@@ -316,26 +355,14 @@ fn regular_reduce<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Di
     // BTreeMap seems a little better.
 
     // The tree with the terms to be reduced.
-    let mut to_reduce: BTreeMap<Monomial<O, I, P>, C> = reduced_poly
-        .terms
-        .into_iter()
-        // Since this is already reverse sorted, rev() is a little faster, as we
-        // insert the elements in increasing order.
-        .rev()
-        .map(|term| (term.monomial, term.coefficient))
-        .collect();
+    let mut to_reduce = TermAggregatorQueue::new();
+    to_reduce.insert(reduced_poly.terms.into_iter());
 
     // Reduce one term at a time.
     let mut reduced_terms = Vec::new();
     let mut lm_properties = None;
 
-    while let Some((m, c)) = to_reduce.pop_last() {
-        // Reassemble the term
-        let term = Term {
-            coefficient: c,
-            monomial: m,
-        };
-
+    while let Some(term) = to_reduce.pop_leading_term() {
         // Skip searching for a divisor for 1 and (maybe) save some time.
         if term.monomial.is_one() {
             reduced_terms.push(term);
@@ -384,25 +411,7 @@ fn regular_reduce<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Di
 
             // Subtract every element of the reducer from the rest of the
             // polynomial.
-            for term in iter {
-                use std::collections::btree_map::Entry;
-
-                let reducer_term = factor.clone() * term.clone();
-
-                match to_reduce.entry(reducer_term.monomial) {
-                    Entry::Vacant(entry) => {
-                        // There was no such monomial, just insert:
-                        entry.insert(reducer_term.coefficient);
-                    }
-                    Entry::Occupied(mut entry) => {
-                        // Sum the coefficients, and remove if result is zero.
-                        *entry.get_mut() += reducer_term.coefficient;
-                        if entry.get().is_zero() {
-                            entry.remove_entry();
-                        }
-                    }
-                }
-            }
+            to_reduce.insert(iter.map(|term| factor.clone() * term.clone()));
 
             // Don't insert any new term in the final polynomial, as the
             // term has been eliminated.
