@@ -8,7 +8,7 @@ mod s_pairs;
 mod signature_monomial_index;
 
 use std::{
-    collections::{btree_map::Entry, BTreeMap, HashMap, HashSet},
+    collections::{BinaryHeap, HashMap, HashSet},
     fmt::Display,
     ops::{Bound::Excluded, Mul},
 };
@@ -297,42 +297,89 @@ fn test_singular_criterion<O: Ordering, I: Id, C: Field, P: SignedExponent>(
     ret
 }
 
+/// Helper struct for TermAggregatorQueue, holds a list of ordered terms, where
+/// the last is the leading term, and order is defined by the monomial of the
+/// last element.
+struct TermsVec<O: Ordering, I: Id, C: Field, P: SignedExponent>(Vec<Term<O, I, C, P>>);
+
+impl<O: Ordering, I: Id, C: Field, P: SignedExponent> Eq for TermsVec<O, I, C, P> {}
+
+impl<O: Ordering, I: Id, C: Field, P: SignedExponent> PartialEq for TermsVec<O, I, C, P> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.last().unwrap().monomial == other.0.last().unwrap().monomial
+    }
+}
+
+impl<O: Ordering, I: Id, C: Field, P: SignedExponent> Ord for TermsVec<O, I, C, P> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0
+            .last()
+            .unwrap()
+            .monomial
+            .cmp(&other.0.last().unwrap().monomial)
+    }
+}
+
+impl<O: Ordering, I: Id, C: Field, P: SignedExponent> PartialOrd for TermsVec<O, I, C, P> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(&other))
+    }
+}
+
 /// Helper struct in reduction, sum terms of equal monomials and pops the
 /// leading term.
 struct TermAggregatorQueue<O: Ordering, I: Id, C: Field, P: SignedExponent> {
-    tree: BTreeMap<Monomial<O, I, P>, C>,
+    heap: BinaryHeap<TermsVec<O, I, C, P>>,
 }
 
 impl<O: Ordering, I: Id, C: Field, P: SignedExponent> TermAggregatorQueue<O, I, C, P> {
     fn new() -> Self {
         Self {
-            tree: BTreeMap::new(),
+            heap: BinaryHeap::new(),
         }
     }
 
-    fn insert(&mut self, terms: impl ExactSizeIterator<Item = Term<O, I, C, P>>) {
-        for t in terms {
-            match self.tree.entry(t.monomial) {
-                Entry::Vacant(entry) => {
-                    // There was no such monomial, just insert:
-                    entry.insert(t.coefficient);
-                }
-                Entry::Occupied(mut entry) => {
-                    // Sum the coefficients, and remove if result is zero.
-                    *entry.get_mut() += t.coefficient;
-                    if entry.get().is_zero() {
-                        entry.remove_entry();
-                    }
-                }
-            }
-        }
+    fn insert<Iter>(&mut self, ordered_terms: Iter)
+    where
+        Iter: DoubleEndedIterator<Item = Term<O, I, C, P>>,
+    {
+        let v = TermsVec(ordered_terms.rev().collect());
+        assert!(!v.0.is_empty());
+        self.heap.push(v);
     }
 
     fn pop_leading_term(&mut self) -> Option<Term<O, I, C, P>> {
-        self.tree.pop_last().map(|(monomial, coefficient)| Term {
-            coefficient,
-            monomial,
-        })
+        while let Some(mut t) = self.raw_pop_term() {
+            while let Some(other) = self.peek_term() {
+                if t.monomial == other.monomial {
+                    t.coefficient += self.raw_pop_term().unwrap().coefficient;
+                } else {
+                    break;
+                }
+            }
+            if !t.coefficient.is_zero() {
+                return Some(t);
+            }
+        }
+        None
+    }
+
+    fn peek_term(&self) -> Option<&Term<O, I, C, P>> {
+        self.heap
+            .peek()
+            .map(|terms_vec| terms_vec.0.last().unwrap())
+    }
+
+    fn raw_pop_term(&mut self) -> Option<Term<O, I, C, P>> {
+        if let Some(mut terms_vec) = self.heap.pop() {
+            let t = terms_vec.0.pop();
+            if !terms_vec.0.is_empty() {
+                self.heap.push(terms_vec);
+            }
+            t
+        } else {
+            None
+        }
     }
 }
 
