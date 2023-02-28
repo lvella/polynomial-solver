@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fmt::Display, ptr::addr_of};
+use std::{fmt::Display, ptr::addr_of};
 
 use crate::polynomial::{
     division::Field, divmask::MaximumExponentsTracker, monomial_ordering::Ordering, Id, Monomial,
@@ -7,7 +7,7 @@ use crate::polynomial::{
 
 use super::{
     contains_divisor, ratio_monomial_index::RatioMonomialIndex, s_pairs, CmpMap, DivMap, DivMask,
-    MaskedMonomialRef, MaskedSignature, PointedCmp, Ratio, SignPoly, SignedExponent,
+    MaskedMonomialRef, MaskedSignature, Ratio, SignPoly, SignedExponent,
 };
 
 /// Stores all the basis elements known and processed so far.
@@ -25,11 +25,6 @@ pub struct KnownBasis<O: Ordering, I: Id, C: Field, P: SignedExponent> {
     /// Owns the basis polynomials, ordered by insertion order (which is
     /// important to the spair triangle).
     pub polys: Vec<Box<SignPoly<O, I, C, P>>>,
-
-    /// Basis ordered by signature to leading monomial ratio (plus a
-    /// disambiguation integer, to allow for elements with same key).
-    pub(super) by_sign_lm_ratio:
-        BTreeMap<(PointedCmp<Ratio<O, I, P>>, u32), *const SignPoly<O, I, C, P>>,
 
     /// Basis indexed both by sinature/LM ratio and LM. Used in multidimensional
     /// search for reducer and high base divisor.
@@ -89,14 +84,13 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
     pub fn new(num_vars: usize) -> Self {
         let max_exp = MaximumExponentsTracker::new(num_vars);
         let div_map = DivMap::new(&max_exp);
-        let by_sign_lm_ratio_new = RatioMonomialIndex::new(num_vars, &div_map, Vec::new());
+        let by_sign_lm_ratio_and_lm = RatioMonomialIndex::new(num_vars, &div_map, Vec::new());
         BasisCalculator {
             basis: KnownBasis {
                 div_map,
                 max_exp,
                 polys: Vec::new(),
-                by_sign_lm_ratio: BTreeMap::new(),
-                by_sign_lm_ratio_and_lm: by_sign_lm_ratio_new,
+                by_sign_lm_ratio_and_lm,
             },
             syzygies: SyzygySet::new(),
             spairs: s_pairs::SPairTriangle::new(),
@@ -164,10 +158,6 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
         self.spairs
             .add_column(&sign_poly, &self.basis, &self.syzygies);
 
-        self.basis.by_sign_lm_ratio.insert(
-            (PointedCmp(&sign_poly.sign_to_lm_ratio), sign_poly.idx),
-            sign_poly.as_ref(),
-        );
         self.basis
             .by_sign_lm_ratio_and_lm
             .insert(&self.basis.div_map, sign_poly.as_ref());
@@ -277,7 +267,11 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
         println!(
             "* singular criterion eliminations: {}",
             self.spairs.get_singular_criterion_counter()
-        )
+        );
+        println!(
+            "* low base divisors found: {}",
+            self.spairs.get_lbd_counter()
+        );
     }
 }
 

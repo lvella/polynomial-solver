@@ -318,6 +318,51 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
         );
         is_singular
     }
+
+    /// For low base divisor, find the polynomial with maximum sign/lm ratio
+    /// whose signature divides sign_poly's.
+    pub(super) fn find_low_base_divisor<'a>(
+        &'a self,
+        sign_poly: &SignPoly<O, I, F, E>,
+    ) -> Option<&'a SignPoly<O, I, F, E>> {
+        let mut found: Option<&'a SignPoly<O, I, F, E>> = None;
+
+        self.0.search(
+            &|key, _| {
+                if let KeyElem::S2LMRatio(b_ratio_ptr) = key {
+                    let b_ratio = unsafe { &**b_ratio_ptr }.get_value();
+                    match b_ratio.idx.cmp(&sign_poly.signature().idx) {
+                        std::cmp::Ordering::Less => SearchPath::GreaterOrEqualThan,
+                        std::cmp::Ordering::Equal => SearchPath::Both,
+                        std::cmp::Ordering::Greater => SearchPath::LessThan,
+                    }
+                } else {
+                    SearchPath::Both
+                }
+            },
+            &mut |Entry(poly_ptr)| {
+                let poly = unsafe { &**poly_ptr };
+                if poly.signature().idx == sign_poly.signature().idx
+                    && poly
+                        .masked_signature
+                        .monomial()
+                        .divides(&sign_poly.masked_signature.monomial())
+                {
+                    match found {
+                        Some(best_match) => {
+                            if poly.sign_to_lm_ratio > best_match.sign_to_lm_ratio {
+                                found = Some(poly);
+                            }
+                        }
+                        None => found = Some(poly),
+                    }
+                }
+                true
+            },
+        );
+
+        found
+    }
 }
 
 /// Makes a dense vector with the exponents of a monomial, up to the largest
