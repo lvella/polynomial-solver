@@ -6,7 +6,7 @@ use crate::polynomial::divmask::DivMaskTestResult;
 use crate::polynomial::Monomial;
 use crate::polynomial::{division::Field, monomial_ordering::Ordering, Id, VariablePower};
 
-use super::{DivMap, DivMask, MaskedMonomialRef, Ratio, SignPoly, SignedExponent};
+use super::{DivMap, DivMask, MaskedMonomialRef, MaskedSignature, Ratio, SignPoly, SignedExponent};
 
 /// The entries stored in the leafs are raw pointers to SignPoly.
 struct Entry<O: Ordering, I: Id, F: Field, E: SignedExponent>(*const SignPoly<O, I, F, E>);
@@ -265,6 +265,58 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
         );
 
         found
+    }
+
+    /// Singular criterion test: search in the basis for an element with
+    /// signature S and leading monomial M such that:
+    /// - there is a monomial k such k*S is equal the provided S-Pair's
+    /// signature T (which means S divides the T);
+    /// - and where k*M is smaller than the provided S-Pair's leading monomial
+    /// (which translates to signature/LM ratio of the S-Pair being lower than
+    /// S/M).
+    ///
+    /// This search only uses the indexed signature/LM ratio to narrow down the
+    /// possible signature divisors.
+    pub(super) fn test_singular_criterion(
+        &self,
+        sign: &MaskedSignature<O, I, E>,
+        lm: &Monomial<O, I, E>,
+    ) -> bool {
+        let ratio_mon = sign.signature.monomial.fraction_division(lm);
+        let masked_sig_monomial = sign.monomial();
+
+        let mut is_singular = false;
+        self.0.search(
+            &|key, _| {
+                if let KeyElem::S2LMRatio(b_ratio_ptr) = key {
+                    let b_ratio = unsafe { &**b_ratio_ptr }.get_value();
+                    match b_ratio.idx.cmp(&sign.signature.idx) {
+                        std::cmp::Ordering::Less => SearchPath::GreaterOrEqualThan,
+                        std::cmp::Ordering::Equal => {
+                            if b_ratio.monomial > ratio_mon {
+                                SearchPath::Both
+                            } else {
+                                SearchPath::GreaterOrEqualThan
+                            }
+                        }
+                        std::cmp::Ordering::Greater => SearchPath::LessThan,
+                    }
+                } else {
+                    SearchPath::Both
+                }
+            },
+            &mut |Entry(poly_ptr)| {
+                let poly = unsafe { &**poly_ptr };
+                is_singular = sign.signature.idx == poly.signature().idx
+                    && poly
+                        .masked_signature
+                        .monomial()
+                        .divides(&masked_sig_monomial)
+                    && ratio_mon < poly.sign_to_lm_ratio.get_value().monomial;
+                !is_singular
+            },
+        );
+        is_singular
     }
 }
 

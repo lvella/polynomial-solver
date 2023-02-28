@@ -10,13 +10,10 @@ mod s_pairs;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fmt::Display,
-    ops::{Bound::Excluded, Mul},
+    ops::Mul,
 };
 
-use self::{
-    basis_calculator::{BasisCalculator, KnownBasis, SyzygySet},
-    s_pairs::PartialSPair,
-};
+use self::basis_calculator::{BasisCalculator, KnownBasis, SyzygySet};
 
 use super::{
     division::Field,
@@ -222,79 +219,6 @@ enum RegularReductionResult<O: Ordering, I: Id, C: Field, P: SignedExponent> {
     NonZeroConstant(Polynomial<O, I, C, P>),
     /// Polynomial was reduced to some non singular top reducible polynomial.
     Reduced(SignPoly<O, I, C, P>),
-}
-
-/// Tests for singular criterion: searches the basis members for an element
-/// that would make the S-pair redundant.
-///
-/// Returns true if the S-pair is singular and must be eliminated.
-fn test_singular_criterion<O: Ordering, I: Id, C: Field, P: SignedExponent>(
-    m_sign: &MaskedSignature<O, I, P>,
-    s_pair: &PartialSPair<O, I, C, P>,
-    basis: &KnownBasis<O, I, C, P>,
-) -> bool {
-    // All this trickery with inner function just to avoid copying the
-    // lowest_monomial_ratio from basis to create upper_limit.
-    //
-    // TODO: fix this very ugly hack
-    fn inner<O: Ordering, I: Id, C: Field, P: SignedExponent>(
-        upper_limit: &Ratio<O, I, P>,
-        m_sign: &MaskedSignature<O, I, P>,
-        s_pair: &PartialSPair<O, I, C, P>,
-        basis: &KnownBasis<O, I, C, P>,
-    ) -> bool {
-        // Limit search to elements whose signature/lm ratio are greater than the
-        // current candidate we have, in descending order, so that the first match
-        // we find will be the one with the smallest leading monomial.
-        let lower_limit = sign_to_monomial_ratio(&m_sign.signature, &s_pair.leading_term.monomial);
-        let search_range = basis
-            .by_sign_lm_ratio
-            .range((
-                Excluded((PointedCmp(&lower_limit), u32::MAX)),
-                Excluded((PointedCmp(upper_limit), u32::MIN)),
-            ))
-            .rev();
-
-        let masked_sig_monomial = m_sign.monomial();
-
-        for (_, singular) in search_range {
-            let singular = unsafe { &**singular };
-            assert!(singular.signature().idx == m_sign.signature.idx);
-            // Test singular criterion: if we find some element p whose signature
-            // divides the S-pair's signature, it means there is some f such that
-            // f*e has the same signature. Since we only search greater sign/LM
-            // ratio, f*e will necessarily have smaller LM than the S-pair, which
-            // means that this S-pair can be eliminated immediately, according to
-            // Section 3.2 of the paper.
-            if singular
-                .masked_signature
-                .monomial()
-                .divides(&masked_sig_monomial)
-            {
-                return true;
-            }
-        }
-
-        false
-    }
-
-    let upper_limit = Ratio::new(
-        None,
-        Signature {
-            // The higher index will limit the search to smaller indices.
-            idx: m_sign.signature.idx + 1,
-            monomial: basis.lowest_monomial_ratio.replace(Monomial::one()),
-        },
-    )
-    .unwrap();
-
-    let ret = inner(&upper_limit, m_sign, s_pair, basis);
-
-    basis
-        .lowest_monomial_ratio
-        .set(upper_limit.into_inner().monomial);
-
-    ret
 }
 
 /// Regular reduction, as defined in the paper.
@@ -600,6 +524,8 @@ pub fn grobner_basis<
         // divisible by the currently known syzygies.
         c.clear_syzygies();
     }
+
+    c.print_statistics();
 
     // Return the polynomials from the basis.
     c.into_iter().collect()

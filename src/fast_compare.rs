@@ -117,6 +117,10 @@ impl<T: Ord + Clone> FastCompared<T> {
         Ok(())
     }
 
+    pub fn get_value(&self) -> &T {
+        &self.value
+    }
+
     /// Return the stored value.
     pub fn into_inner(self) -> T {
         self.value

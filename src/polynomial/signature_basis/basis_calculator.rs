@@ -1,8 +1,8 @@
-use std::{cell::Cell, collections::BTreeMap, fmt::Display, marker::PhantomData, ptr::addr_of};
+use std::{collections::BTreeMap, fmt::Display, ptr::addr_of};
 
 use crate::polynomial::{
     division::Field, divmask::MaximumExponentsTracker, monomial_ordering::Ordering, Id, Monomial,
-    Polynomial, VariablePower,
+    Polynomial,
 };
 
 use super::{
@@ -15,10 +15,6 @@ use super::{
 /// Everything is public because all fields must be read by the user, and the
 /// user can only get an immutable reference.
 pub struct KnownBasis<O: Ordering, I: Id, C: Field, P: SignedExponent> {
-    /// Lowest possible monomial ratio with these variables, useful in the
-    /// search for rewriter/singular criterion. Two copies are necessary.
-    pub lowest_monomial_ratio: Cell<Monomial<O, I, P>>,
-
     /// Tracks the maximum exponent seen for each variable, and the evolution.
     pub max_exp: MaximumExponentsTracker<P>,
 
@@ -32,14 +28,13 @@ pub struct KnownBasis<O: Ordering, I: Id, C: Field, P: SignedExponent> {
 
     /// Basis ordered by signature to leading monomial ratio (plus a
     /// disambiguation integer, to allow for elements with same key).
-    ///
-    /// TODO: to search for a reducer and for a high base divisor, maybe this
-    /// should be a n-D index (like R*-tree), indexing both the leading monomial
-    /// variables and the signature/leading monomial ratio.
     pub(super) by_sign_lm_ratio:
         BTreeMap<(PointedCmp<Ratio<O, I, P>>, u32), *const SignPoly<O, I, C, P>>,
-    pub(super) by_sign_lm_ratio_new: RatioMonomialIndex<O, I, C, P>,
-    // TODO: create an n-D index specifically for rewrite criterion and low base
+
+    /// Basis indexed both by sinature/LM ratio and LM. Used in multidimensional
+    /// search for reducer and high base divisor.
+    pub(super) by_sign_lm_ratio_and_lm: RatioMonomialIndex<O, I, C, P>,
+    // TODO: create an n-D index specifically for singular criterion and low base
     // divisor, indexing both signature/leading monomial ratio and signature
     // monomial variables.
 }
@@ -57,7 +52,7 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display> KnownB
         ratio: &Ratio<O, I, P>,
         monomial: MaskedMonomialRef<O, I, P>,
     ) -> Option<&SignPoly<O, I, C, P>> {
-        self.by_sign_lm_ratio_new
+        self.by_sign_lm_ratio_and_lm
             .find_a_reducer(ratio, monomial)
             .map(|ptr| unsafe { &*ptr })
     }
@@ -92,16 +87,6 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
 {
     /// Creates a new basis calculator.
     pub fn new(num_vars: usize) -> Self {
-        let lowest_monomial_ratio = Cell::new(Monomial {
-            product: (0..num_vars)
-                .map(|idx| VariablePower {
-                    id: I::from_idx(idx),
-                    power: P::min_value(),
-                })
-                .collect(),
-            total_power: P::min_value(),
-            _phantom_ordering: PhantomData,
-        });
         let max_exp = MaximumExponentsTracker::new(num_vars);
         let div_map = DivMap::new(&max_exp);
         let by_sign_lm_ratio_new = RatioMonomialIndex::new(num_vars, &div_map, Vec::new());
@@ -111,8 +96,7 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
                 max_exp,
                 polys: Vec::new(),
                 by_sign_lm_ratio: BTreeMap::new(),
-                by_sign_lm_ratio_new,
-                lowest_monomial_ratio,
+                by_sign_lm_ratio_and_lm: by_sign_lm_ratio_new,
             },
             syzygies: SyzygySet::new(),
             spairs: s_pairs::SPairTriangle::new(),
@@ -185,7 +169,7 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
             sign_poly.as_ref(),
         );
         self.basis
-            .by_sign_lm_ratio_new
+            .by_sign_lm_ratio_and_lm
             .insert(&self.basis.div_map, sign_poly.as_ref());
 
         self.basis.polys.push(sign_poly);
@@ -265,7 +249,7 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
         }
 
         // Recreate the index for reductions.
-        self.basis.by_sign_lm_ratio_new = RatioMonomialIndex::new(
+        self.basis.by_sign_lm_ratio_and_lm = RatioMonomialIndex::new(
             self.basis.max_exp.len(),
             div_map,
             self.basis.polys.iter().map(|p| addr_of!(**p)).collect(),
@@ -287,6 +271,13 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
         for var in monomial.product.iter() {
             self.basis.max_exp.add_var(var);
         }
+    }
+
+    pub fn print_statistics(&self) {
+        println!(
+            "* singular criterion eliminations: {}",
+            self.spairs.get_singular_criterion_counter()
+        )
     }
 }
 

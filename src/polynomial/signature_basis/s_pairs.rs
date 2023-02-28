@@ -1,12 +1,6 @@
 //! S-pairs data structures.
 
-use std::{
-    cmp::max,
-    collections::BinaryHeap,
-    fmt::Display,
-    marker::PhantomData,
-    ops::Index,
-};
+use std::{cmp::max, collections::BinaryHeap, fmt::Display, marker::PhantomData, ops::Index};
 
 use bitvec::prelude::BitVec;
 use itertools::Itertools;
@@ -16,8 +10,8 @@ use crate::polynomial::{
 };
 
 use super::{
-    basis_calculator::SyzygySet, contains_divisor, test_singular_criterion, DivMask, KnownBasis,
-    MaskedMonomialRef, MaskedSignature, PointedCmp, Ratio, SignPoly, Signature, SignedExponent,
+    basis_calculator::SyzygySet, contains_divisor, DivMask, KnownBasis, MaskedMonomialRef,
+    MaskedSignature, PointedCmp, Ratio, SignPoly, Signature, SignedExponent,
 };
 
 /// Calculate monomial factor that is multiplied to base to get the S-pair.
@@ -287,7 +281,7 @@ impl<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> HighBaseDivisor<'a, O,
         let lm = sign_poly.leading_monomial();
 
         basis
-            .by_sign_lm_ratio_new
+            .by_sign_lm_ratio_and_lm
             .find_high_base_divisor(&sign_poly.sign_to_lm_ratio, lm)
             .map(|ptr| Self(unsafe { &*ptr }))
     }
@@ -545,6 +539,9 @@ pub struct SPairTriangle<O: Ordering, I: Id, P: SignedExponent> {
 
     /// Tells if an S-pair is a syzygy.
     reduces_to_zero: SyzygyTriangle,
+
+    /// Counter for singular criterion eliminations.
+    singular_criterion_counter: usize,
 }
 
 impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
@@ -552,6 +549,7 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
         SPairTriangle {
             heads: BinaryHeap::new(),
             reduces_to_zero: SyzygyTriangle::new(),
+            singular_criterion_counter: 0,
         }
     }
 
@@ -692,9 +690,14 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
             match chosen_spair {
                 Ok(spair) => {
                     // We found a potential S-pair. Apply singular criterion.
-                    if !test_singular_criterion(&m_sign, &spair, basis) {
+                    if !basis
+                        .by_sign_lm_ratio_and_lm
+                        .test_singular_criterion(&m_sign, &spair.leading_term.monomial)
+                    {
                         // S-pair was kept.
                         return Some((m_sign, spair.complete(), same_sign_spairs));
+                    } else {
+                        self.singular_criterion_counter += 1;
                     }
                 }
                 Err(eliminated_by_signature) => {
@@ -723,5 +726,9 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
         for idx in indices {
             self.reduces_to_zero.set(*idx, true);
         }
+    }
+
+    pub fn get_singular_criterion_counter(&self) -> usize {
+        self.singular_criterion_counter
     }
 }
