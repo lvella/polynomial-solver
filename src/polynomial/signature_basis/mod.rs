@@ -187,28 +187,6 @@ impl<O: Ordering, I: Id, C: Field, P: SignedExponent> SignPoly<O, I, C, P> {
     }
 }
 
-struct PointedCmp<T>(*const T);
-
-impl<T: PartialEq> PartialEq for PointedCmp<T> {
-    fn eq(&self, other: &Self) -> bool {
-        unsafe { *self.0 == *other.0 }
-    }
-}
-
-impl<T: Eq> Eq for PointedCmp<T> {}
-
-impl<T: PartialOrd> PartialOrd for PointedCmp<T> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        unsafe { (*self.0).partial_cmp(&*other.0) }
-    }
-}
-
-impl<T: Ord> Ord for PointedCmp<T> {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        unsafe { (*self.0).cmp(&*other.0) }
-    }
-}
-
 /// The 3 possible results of a regular reduction.
 enum RegularReductionResult<O: Ordering, I: Id, C: Field, P: SignedExponent> {
     /// Polynomial was singular top reducible
