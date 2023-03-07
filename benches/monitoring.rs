@@ -17,12 +17,35 @@ use std::{
     path::Path,
     process::{ChildStdout, Command, ExitStatus, Stdio},
     sync::mpsc::sync_channel,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 const TIMEOUT: Duration = Duration::from_secs(300);
 
+/// Instant this process started. This is initialized at the very beginning of
+/// main(), so the variable is always initialized and safe to read through the
+/// execution.
+static mut START_TIME: MaybeUninit<Instant> = MaybeUninit::uninit();
+
+fn get_secs_since_start() -> u64 {
+    (Instant::now() - unsafe { *START_TIME.assume_init_ref() }).as_secs()
+}
+
+macro_rules! tprintln {
+    ($($arg:tt)*) => {
+        eprintln!(
+            "[{:06}] {}",
+            get_secs_since_start(),
+            format!($($arg)*)
+        );
+    };
+}
+
 fn main() {
+    unsafe {
+        START_TIME.write(Instant::now());
+    }
+
     // Set the working directory to a convenient place.
     std::env::set_current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/monitoring-cases")).unwrap();
 
@@ -204,6 +227,7 @@ fn child_runner(
     mut command: Command,
     output_processor: impl FnOnce(BufReader<ChildStdout>) -> (RunOutcome, Option<f64>, u32),
 ) -> RunStatistics {
+    tprintln!("Starting {}", case_name);
     let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -223,10 +247,12 @@ fn child_runner(
     let timeout_watcher = std::thread::spawn(move || {
         // Block for at most TIMEOUT, but may be unblocked early by the
         // other thread.
+        tprintln!("Waiting for case to finish");
         let unblock_reason = waiter.recv_timeout(TIMEOUT).unwrap_err();
 
         // Kill the child process 😢. Might be a zombie at this point, but
         // should not have been collected yet.
+        tprintln!("Done waiting, sending kill signal");
         let _ = child.kill();
 
         match unblock_reason {
@@ -254,10 +280,11 @@ fn child_runner(
     let (usage, wait_status) = unsafe {
         use libc::{c_int, pid_t, rusage};
 
-        let pid: pid_t = std::mem::transmute(child_pid);
+        let pid = child_pid as pid_t;
         let mut status = MaybeUninit::<c_int>::uninit();
         let mut rusage = MaybeUninit::<rusage>::uninit();
 
+        tprintln!("Collecting the case's zombie process");
         libc::wait4(pid, status.as_mut_ptr(), 0, rusage.as_mut_ptr());
 
         (rusage.assume_init(), status.assume_init())
