@@ -4,15 +4,15 @@ use crate::polynomial::{divmask::DivMaskTestResult, monomial_ordering::Ordering,
 
 use super::{DivMap, DivMask, MaskedMonomialRef, SignedExponent};
 
-mod monomial_index;
+pub(crate) mod monomial_index;
 pub(crate) mod ratio_monomial_index;
 
 /// Wraps together a divmask and a corresponding monomial, allowing for
 /// accelerated divisibility test.
 #[derive(Debug, Clone)]
 pub(super) struct MaskedMonomial<O: Ordering, I: Id, E: SignedExponent> {
-    divmask: DivMask,
-    monomial: Monomial<O, I, E>,
+    pub divmask: DivMask,
+    pub monomial: Monomial<O, I, E>,
 }
 
 impl<O: Ordering, I: Id, E: SignedExponent> MaskedMonomial<O, I, E> {

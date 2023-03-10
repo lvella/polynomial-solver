@@ -13,7 +13,7 @@ use std::{
     ops::Mul,
 };
 
-use self::basis_calculator::{BasisCalculator, KnownBasis, SyzygySet};
+use self::basis_calculator::{BasisCalculator, KnownBasis};
 
 use super::{
     division::Field,
@@ -38,25 +38,6 @@ fn get_var_exp_from_monomial<O: Ordering, I: Id, E: SignedExponent>(
         Ok(idx) => m[idx].power.clone(),
         Err(_) => E::zero(),
     }
-}
-
-/// Tests if a set contains a divisor for a signature.
-///
-/// This is basically the implementation of signature criterion.
-fn contains_divisor<O: Ordering, I: Id, P: SignedExponent>(
-    msign: &MaskedSignature<O, I, P>,
-    set: &SyzygySet<O, I, P>,
-) -> bool {
-    let masked_dividend = &msign.monomial();
-
-    for maybe_divisor in set.iter() {
-        let masked_divisor = MaskedMonomialRef(&maybe_divisor.1, &maybe_divisor.0);
-        if masked_divisor.divides(masked_dividend) {
-            return true;
-        }
-    }
-
-    false
 }
 
 /// The Power type must be signed for this algorithm to work,

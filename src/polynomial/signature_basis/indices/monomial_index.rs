@@ -46,6 +46,7 @@ pub struct MonomialIndex<O: Ordering, I: Id, E: SignedExponent>(
 );
 
 impl<O: Ordering, I: Id, E: SignedExponent> MonomialIndex<O, I, E> {
+    /// Creates a (somewhat balanced) new tree index from known elements.
     pub(in crate::polynomial::signature_basis) fn new(
         num_dimensions: usize,
         div_map: &DivMap<E>,
@@ -106,5 +107,15 @@ impl<O: Ordering, I: Id, E: SignedExponent> MonomialIndex<O, I, E> {
         );
 
         found_divisor
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub(in crate::polynomial::signature_basis) fn to_vec(
+        &mut self,
+    ) -> Vec<MaskedMonomial<O, I, E>> {
+        self.0.to_vec()
     }
 }

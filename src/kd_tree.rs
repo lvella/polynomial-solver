@@ -8,6 +8,7 @@ use std::mem::MaybeUninit;
 /// up the user may store in each branch node to help in the search.
 pub struct KDTree<E: Entry, NodeData: Clone> {
     num_dimensions: usize,
+    num_elems: usize,
     root: Option<Node<E, NodeData>>,
 }
 
@@ -28,6 +29,7 @@ impl<E: Entry, NodeData: Clone> KDTree<E, NodeData> {
         map: &impl Fn(&E) -> NodeData,
         accum: &impl Fn(NodeData, &NodeData) -> NodeData,
     ) -> Self {
+        let num_elems = elems.len();
         let root = if elems.is_empty() {
             None
         } else {
@@ -36,6 +38,7 @@ impl<E: Entry, NodeData: Clone> KDTree<E, NodeData> {
 
         Self {
             num_dimensions,
+            num_elems,
             root,
         }
     }
@@ -55,6 +58,7 @@ impl<E: Entry, NodeData: Clone> KDTree<E, NodeData> {
         map: &impl Fn(&E) -> NodeData,
         accum: &impl Fn(NodeData, &NodeData) -> NodeData,
     ) {
+        self.num_elems += 1;
         if let Some(root) = &mut self.root {
             root.insert(new_entry, self.num_dimensions, 0, map, accum);
         } else {
@@ -74,6 +78,27 @@ impl<E: Entry, NodeData: Clone> KDTree<E, NodeData> {
         if let Some(root) = &self.root {
             root.search(discriminator, processor);
         }
+    }
+
+    /// Return the number of entries.
+    pub fn len(&self) -> usize {
+        self.num_elems
+    }
+
+    /// Moves all the elements into a new Vec<E>, leaving the tree empty.
+    ///
+    /// It would be nice to implement a proper iterator, but that is too hard,
+    /// would require up traversal in the tree, and just a Vec<E> is sufficient
+    /// for now.
+    pub fn to_vec(&mut self) -> Vec<E> {
+        let mut result = Vec::new();
+        if let Some(root) = std::mem::replace(&mut self.root, None) {
+            self.num_elems = 0;
+            result.reserve(self.num_elems);
+            root.to_vec(&mut result);
+        }
+
+        result
     }
 }
 
@@ -331,6 +356,16 @@ impl<E: Entry, NodeData: Clone> Node<E, NodeData> {
                 }
             }
             NodePath::Leaf(elems) => elems.iter().all(processor),
+        }
+    }
+
+    fn to_vec(self, vec: &mut Vec<E>) {
+        match self.path {
+            NodePath::Branch(bifurcation) => {
+                bifurcation.less_branch.to_vec(vec);
+                bifurcation.greater_or_equal_branch.to_vec(vec);
+            }
+            NodePath::Leaf(mut elems) => vec.append(&mut elems),
         }
     }
 }

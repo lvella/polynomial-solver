@@ -10,7 +10,7 @@ use crate::polynomial::{
 };
 
 use super::{
-    basis_calculator::SyzygySet, contains_divisor, DivMask, KnownBasis, MaskedMonomialRef,
+    basis_calculator::SyzygySet, indices::MaskedMonomial, DivMask, KnownBasis, MaskedMonomialRef,
     MaskedSignature, Ratio, SignPoly, Signature, SignedExponent,
 };
 
@@ -94,7 +94,7 @@ impl<O: Ordering, I: Id, P: SignedExponent> HalfSPair<O, I, P> {
         };
 
         // Early test for signature criterion:
-        if contains_divisor(&masked_signature, syzygies) {
+        if syzygies.contains_divisor(masked_signature.monomial()) {
             return Err(true);
         } else {
             Ok(HalfSPair {
@@ -635,7 +635,7 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
                 Err(false)
             } else {
                 // Late test for signature criterion:
-                if contains_divisor(&m_sign, &syzygies) {
+                if syzygies.contains_divisor(m_sign.monomial()) {
                     // Eliminated by signature criterion
                     Err(true)
                 } else {
@@ -695,7 +695,13 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
                     // polynomial pair discarded because this signature we are
                     // adding necessarily divides all of them.
                     if !eliminated_by_signature {
-                        syzygies.push((m_sign.signature.monomial, m_sign.divmask));
+                        syzygies.insert(
+                            &basis.div_map,
+                            MaskedMonomial {
+                                monomial: m_sign.signature.monomial,
+                                divmask: m_sign.divmask,
+                            },
+                        );
                     }
 
                     // Mark every popped S-pair as reducing to zero.
