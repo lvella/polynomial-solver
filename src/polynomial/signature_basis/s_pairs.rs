@@ -658,20 +658,13 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
                 signature: spair.signature,
             };
 
-            // Test for relativelly prime criterion.
-            let mut chosen_spair = if spair.lms_are_relativelly_prime {
-                // Eliminated by the relativelly prime criterion.
-                Err(false)
-            } else {
-                // Late test for signature criterion:
-                if contains_divisor(&m_sign, &syzygies) {
-                    // Eliminated by signature criterion
-                    Err(true)
+            // Test for relativelly prime criterion and late test for singular criterion.
+            let mut chosen_spair =
+                if !spair.lms_are_relativelly_prime && !contains_divisor(&m_sign, &syzygies) {
+                    Some(PartialSPair::new(spair.build_info, &basis.polys))
                 } else {
-                    // Either we get an S-pair, or it was not eliminated by signature.
-                    Ok(PartialSPair::new(spair.build_info, &basis.polys))
-                }
-            };
+                    None
+                };
 
             // Duplicate signature criterion: only one of all S-pairs of the
             // same signature must be chosen, the one with the smallest
@@ -685,10 +678,10 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
                 same_sign_spairs.push(new_spair.build_info.idx_pair());
 
                 // Only process the new S-pair if no other of same signature has been eliminated.
-                if let Ok(spair) = &mut chosen_spair {
+                if let Some(spair) = &mut chosen_spair {
                     if new_spair.lms_are_relativelly_prime {
                         // Eliminated by the relativelly prime criterion.
-                        chosen_spair = Err(false)
+                        chosen_spair = None;
                     } else {
                         let new_spair = PartialSPair::new(new_spair.build_info, &basis.polys);
 
@@ -702,27 +695,16 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
             // All S-pairs of this signature have been consumed, and there
             // is at most one remaining.
             match chosen_spair {
-                Ok(spair) => {
+                Some(spair) => {
                     // We found a potential S-pair. Apply singular criterion.
                     if !test_singular_criterion(&m_sign, &spair, basis) {
                         // S-pair was kept.
                         return Some((m_sign, spair.complete(), same_sign_spairs));
                     }
                 }
-                Err(eliminated_by_signature) => {
-                    // The current S-pair has been eliminated. If it was not
-                    // eliminated by signature, we stumbled upon a Koszul
-                    // sygyzy, so we add its signature to help eliminating
-                    // future cases.
-                    //
-                    // We don't need to add the Koszul signature for every
-                    // polynomial pair discarded because this signature we are
-                    // adding necessarily divides all of them.
-                    if !eliminated_by_signature {
-                        syzygies.push((m_sign.signature.monomial, m_sign.divmask));
-                    }
-
-                    // Mark every popped S-pair as reducing to zero.
+                None => {
+                    // The current S-pair has been eliminated. Mark every popped
+                    // S-pair as reducing to zero.
                     self.mark_as_syzygy(&same_sign_spairs[..]);
                 }
             };
