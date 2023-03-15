@@ -3,10 +3,10 @@
 use std::{cmp::max, collections::BinaryHeap, fmt::Display, marker::PhantomData, ops::Index};
 
 use bitvec::prelude::BitVec;
-use itertools::Itertools;
 
 use crate::polynomial::{
-    division::Field, monomial_ordering::Ordering, Id, Monomial, Polynomial, Term, VariablePower,
+    division::Field, divmask::MaximumExponentsTracker, monomial_ordering::Ordering, Id, Monomial,
+    Polynomial, Term, VariablePower,
 };
 
 use super::{
@@ -381,9 +381,9 @@ impl<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> LowBaseDivisor<'a, O, 
         // will be useful in querying the BTreeMap below, and will be the
         // basis of the discriminator.
         let max_monomial = Monomial {
-            product: (0..basis.max_exp.len())
+            product: (0..basis.num_vars)
                 .map(|idx| VariablePower {
-                    id: I::from_idx(basis.max_exp.len() - 1 - idx),
+                    id: I::from_idx(basis.num_vars - 1 - idx),
                     power: P::max_value(),
                 })
                 .collect(),
@@ -444,6 +444,7 @@ impl<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> LowBaseDivisor<'a, O, 
             let multivar = multivar_iter.next().unwrap();
 
             // We have a, b and p, do the comparison:
+            use itertools::Itertools;
             let (a, b, p) = multivar.1.into_iter().next_tuple().unwrap();
             if b > p {
                 var.power = max(p, a);
@@ -611,6 +612,7 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
         &mut self,
         basis: &KnownBasis<O, I, C, P>,
         syzygies: &mut SyzygySet<O, I, P>,
+        max_exp: &mut MaximumExponentsTracker<P>,
     ) -> Option<(
         MaskedSignature<O, I, P>,
         Polynomial<O, I, C, P>,
@@ -695,6 +697,7 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
                     // polynomial pair discarded because this signature we are
                     // adding necessarily divides all of them.
                     if !eliminated_by_signature {
+                        max_exp.update(&m_sign.signature.monomial);
                         syzygies.insert(
                             &basis.div_map,
                             MaskedMonomial {

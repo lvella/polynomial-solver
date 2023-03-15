@@ -1,8 +1,7 @@
 use std::{fmt::Display, ptr::addr_of};
 
 use crate::polynomial::{
-    division::Field, divmask::MaximumExponentsTracker, monomial_ordering::Ordering, Id, Monomial,
-    Polynomial,
+    division::Field, divmask::MaximumExponentsTracker, monomial_ordering::Ordering, Id, Polynomial,
 };
 
 use super::{
@@ -17,10 +16,8 @@ use super::{
 /// Everything is public because all fields must be read by the user, and the
 /// user can only get an immutable reference.
 pub struct KnownBasis<O: Ordering, I: Id, C: Field, P: SignedExponent> {
-    /// Tracks the maximum exponent seen for each variable, and the evolution.
-    ///
-    /// TODO: track max_exp independently for basis and syzygies.
-    pub max_exp: MaximumExponentsTracker<P>,
+    /// Number of variables in the system.
+    pub num_vars: usize,
 
     /// Mapping between monomials and divmasks that is dependent on the current
     /// distribution of the monomial.
@@ -71,6 +68,9 @@ pub struct BasisCalculator<O: Ordering, I: Id, C: Field, P: SignedExponent> {
     /// elements
     syzygies: SyzygySet<O, I, P>,
 
+    /// Tracks the maximum exponent seen for each variable, and the evolution.
+    max_exp: MaximumExponentsTracker<P>,
+
     /// Priority queue of the S-pairs pending to be processed.
     /// Elements are represent as pair of indices in "basis" Vec.
     spairs: s_pairs::SPairTriangle<O, I, P>,
@@ -90,11 +90,12 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
         let syzygies = MonomialIndex::new(num_vars, &div_map, vec![]);
         BasisCalculator {
             basis: KnownBasis {
+                num_vars,
                 div_map,
-                max_exp,
                 polys: Vec::new(),
                 by_sign_lm_ratio_and_lm,
             },
+            max_exp,
             syzygies,
             spairs: s_pairs::SPairTriangle::new(),
             ratio_map: CmpMap::new(),
@@ -110,7 +111,8 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
         Polynomial<O, I, C, P>,
         Vec<(u32, u32)>,
     )> {
-        self.spairs.get_next(&self.basis, &mut self.syzygies)
+        self.spairs
+            .get_next(&self.basis, &mut self.syzygies, &mut self.max_exp)
     }
 
     pub fn get_basis(&self) -> &KnownBasis<O, I, C, P> {
@@ -153,9 +155,10 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
 
         let sign_poly = Box::new(sign_poly);
 
-        self.update_max_exp(&sign_poly.masked_signature.signature.monomial);
+        self.max_exp
+            .update(&sign_poly.masked_signature.signature.monomial);
         for term in sign_poly.polynomial.terms.iter() {
-            self.update_max_exp(&term.monomial);
+            self.max_exp.update(&term.monomial);
         }
 
         self.spairs
@@ -213,19 +216,15 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
         const RECALC_PERCENTAGE: u8 = 20;
 
         // If changes are smaller then the give percerntage, do nothing.
-        if !self
-            .basis
-            .max_exp
-            .has_grown_beyond_percentage(RECALC_PERCENTAGE)
-        {
+        if !self.max_exp.has_grown_beyond_percentage(RECALC_PERCENTAGE) {
             return;
         }
 
         println!("Rebuilding indexes.");
 
         // Recreate the div map.
-        self.basis.max_exp.reset_tracking();
-        self.basis.div_map = DivMap::new(&self.basis.max_exp);
+        self.max_exp.reset_tracking();
+        self.basis.div_map = DivMap::new(&self.max_exp);
         let div_map = &self.basis.div_map;
 
         // Recalculate both masks of each polynomial.
@@ -242,22 +241,22 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
         for syzygy in syzygies.iter_mut() {
             syzygy.divmask = div_map.map(&syzygy.monomial);
         }
-        self.syzygies = SyzygySet::new(self.basis.max_exp.len(), &div_map, syzygies);
+        self.syzygies = SyzygySet::new(self.basis.num_vars, &div_map, syzygies);
 
         // Recreate the index for reductions.
         self.basis.by_sign_lm_ratio_and_lm = RatioMonomialIndex::new(
-            self.basis.max_exp.len(),
+            self.basis.num_vars,
             div_map,
             self.basis.polys.iter().map(|p| addr_of!(**p)).collect(),
         );
     }
 
     pub fn clear_syzygies(&mut self) {
-        self.syzygies = MonomialIndex::new(self.basis.max_exp.len(), &self.basis.div_map, vec![]);
+        self.syzygies = MonomialIndex::new(self.basis.num_vars, &self.basis.div_map, vec![]);
     }
 
     fn add_syzygy(&mut self, signature: MaskedSignature<O, I, P>) {
-        self.update_max_exp(&signature.signature.monomial);
+        self.max_exp.update(&signature.signature.monomial);
 
         self.syzygies.insert(
             &self.basis.div_map,
@@ -266,12 +265,6 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
                 monomial: signature.signature.monomial,
             },
         );
-    }
-
-    fn update_max_exp(&mut self, monomial: &Monomial<O, I, P>) {
-        for var in monomial.product.iter() {
-            self.basis.max_exp.add_var(var);
-        }
     }
 
     pub fn print_statistics(&self) {
