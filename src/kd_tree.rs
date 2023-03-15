@@ -90,10 +90,9 @@ impl<E: Entry, NodeData: Clone> KDTree<E, NodeData> {
     /// It would be nice to implement a proper iterator, but that is too hard,
     /// would require up traversal in the tree, and just a Vec<E> is sufficient
     /// for now.
-    pub fn to_vec(&mut self) -> Vec<E> {
+    pub fn to_vec(self) -> Vec<E> {
         let mut result = Vec::new();
-        if let Some(root) = std::mem::replace(&mut self.root, None) {
-            self.num_elems = 0;
+        if let Some(root) = self.root {
             result.reserve(self.num_elems);
             root.to_vec(&mut result);
         }
@@ -176,6 +175,10 @@ impl<E: Entry, NodeData: Clone> Node<E, NodeData> {
         accum: &impl Fn(NodeData, &NodeData) -> NodeData,
     ) -> Self {
         assert!(!elems.is_empty());
+
+        if elems.len() <= MAX_LEAF_SIZE {
+            return Self::make_leaf_node(elems, map, accum);
+        }
 
         // Sort the elements by each dimension of the key vector.
         let mut sorted_by_dim = Vec::new();
