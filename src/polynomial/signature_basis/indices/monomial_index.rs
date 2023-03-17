@@ -12,6 +12,22 @@ use crate::{
 
 use super::{make_dense_monomial, node_data_builder, MaskedMonomial, SignedExponent};
 
+/// Optimization parameter: ideally, this should be the size where linear searching the large vector for
+/// a divisor outweighs the increased cost of inserting on a kD-tree.
+const MAX_VEC_SIZE: usize = 2048;
+
+/// Optimization parameter: ideally, this should be the size where log searching
+/// the kD-tree becomes faster than linear searching a vector.
+///
+/// TODO: maybe this optimization should be implemented inside the kD-tree, and
+/// only split a Vec node when searching.
+const MIN_VEC_SIZE: usize = 128;
+
+/// Optimization parameter: ideally, this should be the minimum number of
+/// searches per each insertion that makes it faster to use a kD-tree instead of
+/// a plain vector.
+const MIN_SEARCHES_PER_INSERTIONS: i64 = 10;
+
 impl<O: Ordering, I: Id, E: SignedExponent> kd_tree::Entry for MaskedMonomial<O, I, E> {
     type KeyElem = VariablePower<I, E>;
 
@@ -46,7 +62,12 @@ impl<I: Id, E: SignedExponent> kd_tree::KeyElem for VariablePower<I, E> {
 /// from the Vec<> elements.
 enum Alternatives<O: Ordering, I: Id, E: SignedExponent> {
     Empty,
-    Flat(Vec<MaskedMonomial<O, I, E>>),
+    Flat {
+        /// The weighted balance between insertions and lookups, so that when it is
+        /// positive, it should be more worth to use a tree instead of a vec.
+        usage_balance: i64,
+        vec: Vec<MaskedMonomial<O, I, E>>,
+    },
     Tree(kd_tree::KDTree<MaskedMonomial<O, I, E>, MaskedMonomial<O, I, E>>),
 }
 
@@ -65,7 +86,10 @@ pub struct MonomialIndex<O: Ordering, I: Id, E: SignedExponent>(Cell<Alternative
 impl<O: Ordering, I: Id, E: SignedExponent> MonomialIndex<O, I, E> {
     /// Creates a new lazy tree index from known elements.
     pub(in crate::polynomial::signature_basis) fn new(elems: Vec<MaskedMonomial<O, I, E>>) -> Self {
-        Self(Cell::new(Alternatives::Flat(elems)))
+        Self(Cell::new(Alternatives::Flat {
+            usage_balance: -MIN_SEARCHES_PER_INSERTIONS,
+            vec: elems,
+        }))
     }
 
     pub(in crate::polynomial::signature_basis) fn insert(
@@ -74,11 +98,17 @@ impl<O: Ordering, I: Id, E: SignedExponent> MonomialIndex<O, I, E> {
         elem: MaskedMonomial<O, I, E>,
     ) {
         match self.0.get_mut() {
-            Alternatives::Flat(vec) => vec.push(elem),
+            Alternatives::Flat { vec, usage_balance } => {
+                *usage_balance -= MIN_SEARCHES_PER_INSERTIONS;
+                vec.push(elem);
+            }
             Alternatives::Tree(tree) => tree.insert(elem, &|e| e.clone(), &|a, b| {
                 node_data_builder(div_map, a, b)
             }),
-            Alternatives::Empty => self.0.set(Alternatives::Flat(vec![elem])),
+            Alternatives::Empty => self.0.set(Alternatives::Flat {
+                vec: vec![elem],
+                usage_balance: -MIN_SEARCHES_PER_INSERTIONS,
+            }),
         }
     }
 
@@ -91,10 +121,20 @@ impl<O: Ordering, I: Id, E: SignedExponent> MonomialIndex<O, I, E> {
         let alts = self.0.take();
         let tree = match alts {
             Alternatives::Empty => return false,
-            Alternatives::Flat(vec) => {
-                KDTree::new(num_dimensions, vec, &|entry| entry.clone(), &|a, b| {
-                    node_data_builder(div_map, a, b)
-                })
+            Alternatives::Flat { vec, usage_balance } => {
+                let len = vec.len();
+                if len > MIN_VEC_SIZE && (len > MAX_VEC_SIZE || usage_balance > 0) {
+                    KDTree::new(num_dimensions, vec, &|entry| entry.clone(), &|a, b| {
+                        node_data_builder(div_map, a, b)
+                    })
+                } else {
+                    let result = vec.iter().any(|elem| elem.divides(&monomial));
+                    self.0.set(Alternatives::Flat {
+                        vec,
+                        usage_balance: usage_balance + 1,
+                    });
+                    return result;
+                }
             }
             Alternatives::Tree(tree) => tree,
         };
@@ -139,7 +179,10 @@ impl<O: Ordering, I: Id, E: SignedExponent> MonomialIndex<O, I, E> {
         let alts = self.0.take();
         let len = match &alts {
             Alternatives::Empty => 0,
-            Alternatives::Flat(vec) => vec.len(),
+            Alternatives::Flat {
+                vec,
+                usage_balance: _,
+            } => vec.len(),
             Alternatives::Tree(tree) => tree.len(),
         };
         self.0.set(alts);
@@ -153,7 +196,10 @@ impl<O: Ordering, I: Id, E: SignedExponent> MonomialIndex<O, I, E> {
         let alts = self.0.take();
         match alts {
             Alternatives::Empty => vec![],
-            Alternatives::Flat(vec) => vec,
+            Alternatives::Flat {
+                vec,
+                usage_balance: _,
+            } => vec,
             Alternatives::Tree(tree) => tree.to_vec(),
         }
     }
