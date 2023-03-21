@@ -277,6 +277,7 @@ impl<E: Entry, NodeData: Clone> Node<E, NodeData> {
         map: &impl Fn(&E) -> NodeData,
         accum: &impl Fn(NodeData, &NodeData) -> NodeData,
     ) {
+        self.node_data = accum(map(&new_elem), &self.node_data);
         match &mut self.path {
             NodePath::Branch(b) => {
                 let path = match new_elem.cmp_dim(&b.split_value) {
@@ -284,7 +285,6 @@ impl<E: Entry, NodeData: Clone> Node<E, NodeData> {
                     _ => &mut b.greater_or_equal_branch,
                 };
 
-                self.node_data = accum(map(&new_elem), &self.node_data);
                 path.insert(
                     new_elem,
                     num_dimensions,
@@ -316,16 +316,12 @@ impl<E: Entry, NodeData: Clone> Node<E, NodeData> {
 
                         let l = Self::make_leaf_node(std::mem::take(elems), map, accum);
                         let ge = Self::make_leaf_node(greater_or_equal, map, accum);
-                        let node_data = accum(l.node_data.clone(), &ge.node_data);
 
-                        *self = Node {
-                            node_data,
-                            path: NodePath::Branch(Box::new(Bifurcation {
-                                split_value,
-                                less_branch: l,
-                                greater_or_equal_branch: ge,
-                            })),
-                        };
+                        self.path = NodePath::Branch(Box::new(Bifurcation {
+                            split_value,
+                            less_branch: l,
+                            greater_or_equal_branch: ge,
+                        }));
 
                         return;
                     }
