@@ -27,6 +27,7 @@ pest = "2.0"
 pest_derive = "2.0"
 bitvec = "1"
 rand = "0.8"
+replace_with = "0.1"
 r1cs-file = { git = "https://github.com/lvella/zeropool-utils.git" }
 
 [dependencies.rug]

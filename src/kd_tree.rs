@@ -1,6 +1,8 @@
 use std::cmp::Ordering;
 use std::mem::MaybeUninit;
 
+use replace_with::replace_with_or_abort;
+
 /// Implementation of the classical data structure k-dimensional tree for
 /// multidimensional indexing.
 ///
@@ -60,7 +62,15 @@ impl<E: Entry, NodeData: Clone> KDTree<E, NodeData> {
     ) {
         self.num_elems += 1;
         if let Some(root) = &mut self.root {
-            root.insert(new_entry, self.num_dimensions, 0, map, accum);
+            let new_node_data = map(&new_entry);
+            root.insert(
+                new_entry,
+                &new_node_data,
+                self.num_dimensions,
+                0,
+                map,
+                accum,
+            );
         } else {
             self.root = Some(Node::new(self.num_dimensions, vec![new_entry], map, accum));
         }
@@ -272,12 +282,15 @@ impl<E: Entry, NodeData: Clone> Node<E, NodeData> {
     fn insert(
         &mut self,
         new_elem: E,
+        new_node_data: &NodeData,
         num_dimensions: usize,
         next_dim: usize,
         map: &impl Fn(&E) -> NodeData,
         accum: &impl Fn(NodeData, &NodeData) -> NodeData,
     ) {
-        self.node_data = accum(map(&new_elem), &self.node_data);
+        replace_with_or_abort(&mut self.node_data, |node_data| {
+            accum(node_data, new_node_data)
+        });
         match &mut self.path {
             NodePath::Branch(b) => {
                 let path = match new_elem.cmp_dim(&b.split_value) {
@@ -287,6 +300,7 @@ impl<E: Entry, NodeData: Clone> Node<E, NodeData> {
 
                 path.insert(
                     new_elem,
+                    new_node_data,
                     num_dimensions,
                     b.split_value.dim_index() + 1,
                     map,
