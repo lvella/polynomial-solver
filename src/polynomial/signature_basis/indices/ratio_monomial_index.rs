@@ -1,7 +1,10 @@
 //! This module uses a k-d tree to provide a multidimensional index on signature
 //! to leading monomial ratio and the exponents of the leading monomial.
 
-use crate::kd_tree::{self, KDTree, SearchPath};
+use std::marker::PhantomData;
+use std::rc::Rc;
+
+use crate::kd_tree::{self, DataOperations, KDTree, SearchPath};
 use crate::polynomial::divmask::DivMaskTestResult;
 use crate::polynomial::signature_basis::{
     get_var_exp_from_monomial, MaskedMonomialRef, MaskedSignature, Ratio, SignPoly,
@@ -9,7 +12,7 @@ use crate::polynomial::signature_basis::{
 use crate::polynomial::Monomial;
 use crate::polynomial::{division::Field, monomial_ordering::Ordering, Id, VariablePower};
 
-use super::{make_dense_monomial, node_data_builder, DivMap, MaskedMonomial, SignedExponent};
+use super::{make_dense_monomial, DivMap, MaskedMonomial, SignedExponent};
 
 /// The entries stored in the leafs are raw pointers to SignPoly.
 struct Entry<O: Ordering, I: Id, F: Field, E: SignedExponent>(*const SignPoly<O, I, F, E>);
@@ -83,6 +86,30 @@ impl<O: Ordering, I: Id, E: SignedExponent> kd_tree::KeyElem for KeyElem<O, I, E
     }
 }
 
+/// Struct implementing the operations needed on building the kD-Tree.
+struct Operations<O: Ordering, I: Id, F: Field, E: SignedExponent> {
+    div_map: Rc<DivMap<E>>,
+    _phantom: PhantomData<(O, I, F)>,
+}
+
+impl<O: Ordering, I: Id, F: Field, E: SignedExponent> DataOperations for Operations<O, I, F, E> {
+    type Entry = Entry<O, I, F, E>;
+
+    type NodeData = MaskedMonomial<O, I, E>;
+
+    /// Creates a monomial mask from the leading monomial of the entry.
+    fn map(&self, entry: &Self::Entry) -> Self::NodeData {
+        let monomial = unsafe { (*entry.0).polynomial.terms[0].monomial.clone() };
+        let divmask = self.div_map.map(&monomial);
+        MaskedMonomial { divmask, monomial }
+    }
+
+    /// GCD between NodeData
+    fn accum(&self, a: Self::NodeData, other: &Self::NodeData) -> Self::NodeData {
+        a.gcd(other, &self.div_map)
+    }
+}
+
 /// A k-dimensional tree index, indexed by the signatures/leading monomial ratio
 /// and the exponents of the leading monomial.
 ///
@@ -90,40 +117,29 @@ impl<O: Ordering, I: Id, E: SignedExponent> kd_tree::KeyElem for KeyElem<O, I, E
 /// contained elements, to quickly rule out the branch on search for a divisor,
 /// using the fact that if a divides b then GCD(a, c) also divides b, for any c.
 pub struct RatioMonomialIndex<O: Ordering, I: Id, F: Field, E: SignedExponent>(
-    KDTree<Entry<O, I, F, E>, MaskedMonomial<O, I, E>>,
+    KDTree<Operations<O, I, F, E>>,
 );
-
-/// Maps a tree entry to its NodeData.
-fn node_data_map<O: Ordering, I: Id, F: Field, E: SignedExponent>(
-    div_map: &DivMap<E>,
-    &Entry(p): &Entry<O, I, F, E>,
-) -> MaskedMonomial<O, I, E> {
-    let monomial = unsafe { (*p).polynomial.terms[0].monomial.clone() };
-    let divmask = div_map.map(&monomial);
-    MaskedMonomial { divmask, monomial }
-}
 
 impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F, E> {
     pub fn new(
         num_variables: usize,
-        div_map: &DivMap<E>,
+        div_map: Rc<DivMap<E>>,
         elems: Vec<*const SignPoly<O, I, F, E>>,
     ) -> Self {
         let entries = elems.into_iter().map(|e| Entry(e)).collect();
         Self(KDTree::new(
             num_variables + 1,
             entries,
-            &|e| node_data_map(div_map, e),
-            &|a, b| node_data_builder(div_map, a, b),
+            Operations {
+                div_map,
+                _phantom: PhantomData {},
+            },
         ))
     }
 
-    pub fn insert(&mut self, div_map: &DivMap<E>, elem: *const SignPoly<O, I, F, E>) {
+    pub fn insert(&mut self, elem: *const SignPoly<O, I, F, E>) {
         let new_entry = Entry(elem);
-        self.0
-            .insert(new_entry, &|e| node_data_map(div_map, e), &|a, b| {
-                node_data_builder(div_map, a, b)
-            })
+        self.0.insert(new_entry)
     }
 
     pub(in crate::polynomial::signature_basis) fn find_high_base_divisor(

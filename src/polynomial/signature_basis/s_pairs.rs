@@ -698,13 +698,10 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
                     // adding necessarily divides all of them.
                     if !eliminated_by_signature {
                         max_exp.update(&m_sign.signature.monomial);
-                        syzygies.insert(
-                            &basis.div_map,
-                            MaskedMonomial {
-                                monomial: m_sign.signature.monomial,
-                                divmask: m_sign.divmask,
-                            },
-                        );
+                        syzygies.insert(MaskedMonomial {
+                            monomial: m_sign.signature.monomial,
+                            divmask: m_sign.divmask,
+                        });
                     }
 
                     // Mark every popped S-pair as reducing to zero.

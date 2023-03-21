@@ -1,5 +1,5 @@
+use std::cell::Cell;
 use std::cmp::Ordering;
-use std::mem::MaybeUninit;
 
 use replace_with::replace_with_or_abort;
 
@@ -8,37 +8,32 @@ use replace_with::replace_with_or_abort;
 ///
 /// Entry is the value stored in the leafs. Node data is some data built bottom
 /// up the user may store in each branch node to help in the search.
-pub struct KDTree<E: Entry, NodeData: Clone> {
+pub struct KDTree<O: DataOperations> {
+    ops: O,
     num_dimensions: usize,
     num_elems: usize,
-    root: Option<Node<E, NodeData>>,
+    root: Option<Node<O>>,
 }
 
-impl<E: Entry, NodeData: Clone> KDTree<E, NodeData> {
+impl<O: DataOperations> KDTree<O> {
     /// Creates a new KD-Tree with a given dimension.
     ///
     /// # Arguments:
     ///
     /// * `num_dimensions` - Number of dimensions of the indexed data.
     /// * `elems` - The elements to build the tree from.
-    /// * `map` - A function translating an entry to a NodeData.
-    /// * `accum` - A commutative and associative function to accumulate two
-    ///   NodeData into one, so that the data from a node is build as the
-    ///   accumulation of all NodeData below it.
-    pub fn new(
-        num_dimensions: usize,
-        elems: Vec<E>,
-        map: &impl Fn(&E) -> NodeData,
-        accum: &impl Fn(NodeData, &NodeData) -> NodeData,
-    ) -> Self {
+    /// * `data_operations` - An object implementing DataOperations trait that
+    ///   is stored for the whole lifetime of the KDTree.
+    pub fn new(num_dimensions: usize, elems: Vec<O::Entry>, data_operations: O) -> Self {
         let num_elems = elems.len();
-        let root = if elems.is_empty() {
-            None
+        let root = if num_elems > 0 {
+            Some(Node::new(&data_operations, elems))
         } else {
-            Some(Node::new(num_dimensions, elems, map, accum))
+            None
         };
 
         Self {
+            ops: data_operations,
             num_dimensions,
             num_elems,
             root,
@@ -50,29 +45,13 @@ impl<E: Entry, NodeData: Clone> KDTree<E, NodeData> {
     /// # Arguments
     ///
     /// * `new_entry` - The new entry to be inserted.
-    /// * `map` - A function translating an entry to a NodeData.
-    /// * `accum` - A commutative and associative function to accumulate two
-    ///   NodeData into one, so that the data from a node is build as the
-    ///   accumulation of all NodeData below it.
-    pub fn insert(
-        &mut self,
-        new_entry: E,
-        map: &impl Fn(&E) -> NodeData,
-        accum: &impl Fn(NodeData, &NodeData) -> NodeData,
-    ) {
+    pub fn insert(&mut self, new_entry: O::Entry) {
         self.num_elems += 1;
         if let Some(root) = &mut self.root {
-            let new_node_data = map(&new_entry);
-            root.insert(
-                new_entry,
-                &new_node_data,
-                self.num_dimensions,
-                0,
-                map,
-                accum,
-            );
+            let new_node_data = self.ops.map(&new_entry);
+            root.insert(&self.ops, new_entry, &new_node_data);
         } else {
-            self.root = Some(Node::new(self.num_dimensions, vec![new_entry], map, accum));
+            self.root = Some(Node::new(&self.ops, vec![new_entry]));
         }
     }
 
@@ -80,13 +59,23 @@ impl<E: Entry, NodeData: Clone> KDTree<E, NodeData> {
     /// which branch of the tree to search, and a function to process every
     /// entry found (which returns true if the search must continue, false
     /// otherwise).
+    ///
+    /// This function may actually modify the structure: if a searched leaf is
+    /// bigger than some limit, it will be broken down into new branches.
+    ///
+    /// # Arguments
+    ///
+    /// * `discriminator` - A function that tells, from the KeyElem and
+    ///   NodeData, which branches of a node must be searched.
+    /// * `processor` - A function that is called for every leaf node reached.
+    ///   Must return true if the search is to continue.
     pub fn search(
         &self,
-        discriminator: &impl Fn(&E::KeyElem, &NodeData) -> SearchPath,
-        processor: &mut impl FnMut(&E) -> bool,
+        discriminator: &impl Fn(&<O::Entry as Entry>::KeyElem, &O::NodeData) -> SearchPath,
+        processor: &mut impl FnMut(&O::Entry) -> bool,
     ) {
         if let Some(root) = &self.root {
-            root.search(discriminator, processor);
+            root.search(&self, 0, discriminator, processor);
         }
     }
 
@@ -100,8 +89,9 @@ impl<E: Entry, NodeData: Clone> KDTree<E, NodeData> {
     /// It would be nice to implement a proper iterator, but that is too hard,
     /// would require up traversal in the tree, and just a Vec<E> is sufficient
     /// for now.
-    pub fn to_vec(self) -> Vec<E> {
-        let mut result = Vec::new();
+    pub fn to_vec(self) -> Vec<O::Entry> {
+        let mut result = Vec::with_capacity(self.num_elems);
+
         if let Some(root) = self.root {
             result.reserve(self.num_elems);
             root.to_vec(&mut result);
@@ -111,6 +101,8 @@ impl<E: Entry, NodeData: Clone> KDTree<E, NodeData> {
     }
 }
 
+/// A leaf is actually a Vec with entries, that if bigger than this limit, will
+/// be broken down upon searching.
 const MAX_LEAF_SIZE: usize = 64;
 
 /// What side of the branch a search must take.
@@ -122,21 +114,31 @@ pub enum SearchPath {
     Both,
 }
 
-struct Node<E: Entry, NodeData: Clone> {
-    node_data: NodeData,
-    path: NodePath<E, NodeData>,
+struct Node<O: DataOperations> {
+    node_data: O::NodeData,
+    /// Either a leaf or the two children of a binary tree. This must be a Cell
+    /// because during a query/search, a leaf may be broken down into branch if
+    /// it is too big.
+    path: Cell<NodePath<O>>,
 }
 
-enum NodePath<E: Entry, NodeData: Clone> {
-    Branch(Box<Bifurcation<E, NodeData>>),
-    Leaf(Vec<E>),
+/// The possible kinds of tree nodes.
+enum NodePath<O: DataOperations> {
+    Branch(Box<Bifurcation<O>>),
+    Leaf(Vec<O::Entry>),
 }
-struct Bifurcation<E: Entry, NodeData: Clone> {
-    split_value: E::KeyElem,
-    less_branch: Node<E, NodeData>,
-    greater_or_equal_branch: Node<E, NodeData>,
+struct Bifurcation<O: DataOperations> {
+    split_value: <O::Entry as Entry>::KeyElem,
+    less_branch: Node<O>,
+    greater_or_equal_branch: Node<O>,
 }
 
+/// Given an slice ordered by some dimension, searches for the point that best
+/// divides the slice in two in the most balanced way, so that all equal keys
+/// remains together.
+///
+/// I.e: `[aabbbc]` is split into `[aa]` and `[bbbc]`, which is better than
+/// `[aabbb]` and `[c]`.
 fn optimal_partition_value<E: Entry>(dim: usize, sorted_list: &[E]) -> (usize, E::KeyElem) {
     // Find the splitting point. Start from the middle
     // and search for the splitting point that best balance
@@ -177,249 +179,146 @@ fn optimal_partition_value<E: Entry>(dim: usize, sorted_list: &[E]) -> (usize, E
     (split_idx, split_value)
 }
 
-impl<E: Entry, NodeData: Clone> Node<E, NodeData> {
-    fn new(
-        num_dimensions: usize,
-        elems: Vec<E>,
-        map: &impl Fn(&E) -> NodeData,
-        accum: &impl Fn(NodeData, &NodeData) -> NodeData,
-    ) -> Self {
-        assert!(!elems.is_empty());
-
-        if elems.len() <= MAX_LEAF_SIZE {
-            return Self::make_leaf_node(elems, map, accum);
-        }
-
-        // Sort the elements by each dimension of the key vector.
-        let mut sorted_by_dim = Vec::new();
-        sorted_by_dim.resize(num_dimensions, elems);
-        for (idx, s) in sorted_by_dim.iter_mut().enumerate() {
-            s.sort_unstable_by(|a, b| a.cmp_dim(&b.get_key_elem(idx)));
-        }
-
-        // Recursively build the tree.
-        let sorted_by_dim: Vec<(usize, &mut [E])> = sorted_by_dim
-            .iter_mut()
-            .enumerate()
-            .map(|(dim, v)| (dim, &mut v[..]))
-            .collect();
-        Self::build_tree(sorted_by_dim, map, accum)
-    }
-
-    fn make_leaf_node(
-        list: Vec<E>,
-        map: &impl Fn(&E) -> NodeData,
-        accum: &impl Fn(NodeData, &NodeData) -> NodeData,
-    ) -> Self {
-        let mut iter = list.iter().map(map);
-        let init = iter.next().unwrap().clone();
-        let node_data = iter.fold(init, |a, b| accum(a, &b));
+impl<O: DataOperations> Node<O> {
+    fn new(ops: &O, elems: Vec<O::Entry>) -> Self {
+        let mut iter = elems.iter().map(|e| ops.map(e));
+        let init = iter.next().unwrap();
+        let node_data = iter.fold(init, |a, b| ops.accum(a, &b));
         Node {
             node_data,
-            path: NodePath::Leaf(list),
+            path: Cell::new(NodePath::Leaf(elems)),
         }
     }
 
-    /// Gets the set of elements to be inserted on the list sorted by each one
-    /// of the key dimension and build the tree.
-    fn build_tree(
-        sorted_by_dim: Vec<(usize, &mut [E])>,
-        map: &impl Fn(&E) -> NodeData,
-        accum: &impl Fn(NodeData, &NodeData) -> NodeData,
-    ) -> Self {
-        let mut iter = sorted_by_dim.into_iter();
-        let (dim, working_list) = iter.next().unwrap();
-
-        // Handle leaf case
-        if working_list.len() <= MAX_LEAF_SIZE {
-            return Self::make_leaf_node(working_list.to_vec(), map, accum);
-        }
-
-        // Maybe eliminate this dimension if the elements are all equal on it.
-        if working_list
-            .first()
-            .unwrap()
-            .cmp_dim(&working_list.last().unwrap().get_key_elem(dim))
-            == Ordering::Equal
-        {
-            // All the elements have the same key on this dimension, so there is
-            // no point indexing by it. Recurse with only the other dimensions.
-            return Self::build_tree(iter.collect(), map, accum);
-        }
-
-        let (split_idx, split_value) = optimal_partition_value(dim, working_list);
-
-        // Stable partition each sorted list by split_value
-        let (mut less, mut greater_or_equal): (Vec<_>, Vec<_>) = iter
-            .map(|(sorted_dim, sorted_list)| {
-                let (less, greater_or_equal) =
-                    stable_partition(sorted_list, |e| e.cmp_dim(&split_value) == Ordering::Less);
-                assert!(less.len() == split_idx);
-                ((sorted_dim, less), (sorted_dim, greater_or_equal))
-            })
-            .unzip();
-
-        // Insert current dimension split at the end, so to be the last to be
-        // processed again.
-        let (l, ge) = working_list.split_at_mut(split_idx);
-        less.push((dim, l));
-        greater_or_equal.push((dim, ge));
-
-        let l_branch = Self::build_tree(less, map, accum);
-        let ge_branch = Self::build_tree(greater_or_equal, map, accum);
-        let node_data = accum(l_branch.node_data.clone(), &ge_branch.node_data);
-
-        Node {
-            node_data,
-            path: NodePath::Branch(Box::new(Bifurcation {
-                split_value,
-                less_branch: l_branch,
-                greater_or_equal_branch: ge_branch,
-            })),
-        }
-    }
-
-    fn insert(
-        &mut self,
-        new_elem: E,
-        new_node_data: &NodeData,
-        num_dimensions: usize,
-        next_dim: usize,
-        map: &impl Fn(&E) -> NodeData,
-        accum: &impl Fn(NodeData, &NodeData) -> NodeData,
-    ) {
+    fn insert(&mut self, ops: &O, new_elem: O::Entry, new_node_data: &O::NodeData) {
         replace_with_or_abort(&mut self.node_data, |node_data| {
-            accum(node_data, new_node_data)
+            ops.accum(node_data, new_node_data)
         });
-        match &mut self.path {
+        match self.path.get_mut() {
             NodePath::Branch(b) => {
                 let path = match new_elem.cmp_dim(&b.split_value) {
                     Ordering::Less => &mut b.less_branch,
                     _ => &mut b.greater_or_equal_branch,
                 };
 
-                path.insert(
-                    new_elem,
-                    new_node_data,
-                    num_dimensions,
-                    b.split_value.dim_index() + 1,
-                    map,
-                    accum,
-                );
+                path.insert(ops, new_elem, new_node_data);
             }
-            NodePath::Leaf(elems) => {
-                elems.push(new_elem);
-                if elems.len() > MAX_LEAF_SIZE {
-                    for i in 0..num_dimensions {
-                        let dim = (i + next_dim) % num_dimensions;
-                        elems.sort_unstable_by(|a, b| a.cmp_dim(&b.get_key_elem(dim)));
-
-                        if let Ordering::Equal = elems
-                            .first()
-                            .unwrap()
-                            .cmp_dim(&elems.last().unwrap().get_key_elem(dim))
-                        {
-                            // Can't distinguish the elements by this dimension.
-                            continue;
-                        }
-
-                        let split_value = optimal_partition_value(dim, &elems).1;
-                        let greater_or_equal = elems
-                            .drain_filter(|e| e.cmp_dim(&split_value) != Ordering::Less)
-                            .collect();
-
-                        let l = Self::make_leaf_node(std::mem::take(elems), map, accum);
-                        let ge = Self::make_leaf_node(greater_or_equal, map, accum);
-
-                        self.path = NodePath::Branch(Box::new(Bifurcation {
-                            split_value,
-                            less_branch: l,
-                            greater_or_equal_branch: ge,
-                        }));
-
-                        return;
-                    }
-                    panic!("this k-d tree implementation does not support repeated elements");
-                }
-            }
+            NodePath::Leaf(elems) => elems.push(new_elem),
         }
     }
 
     fn search(
         &self,
-        discriminator: &impl Fn(&E::KeyElem, &NodeData) -> SearchPath,
-        processor: &mut impl FnMut(&E) -> bool,
+        kd: &KDTree<O>,
+        next_dim: usize,
+        discriminator: &impl Fn(&<O::Entry as Entry>::KeyElem, &O::NodeData) -> SearchPath,
+        processor: &mut impl FnMut(&O::Entry) -> bool,
     ) -> bool {
-        match &self.path {
-            NodePath::Branch(bifurcation) => {
-                match discriminator(&bifurcation.split_value, &self.node_data) {
-                    SearchPath::None => true,
-                    SearchPath::LessThan => {
-                        bifurcation.less_branch.search(discriminator, processor)
-                    }
-                    SearchPath::GreaterOrEqualThan => bifurcation
-                        .greater_or_equal_branch
-                        .search(discriminator, processor),
-                    SearchPath::Both => {
-                        bifurcation.less_branch.search(discriminator, processor)
-                            && bifurcation
-                                .greater_or_equal_branch
-                                .search(discriminator, processor)
-                    }
+        // Take the path out of the Cell, temporarily replacing with an
+        // empty one (I hope this to be optimized away).
+        let path = self.path.replace(NodePath::Leaf(Vec::new()));
+
+        let (result, new_path) = match path {
+            NodePath::Branch(bifurcation) => (
+                self.branch_search(kd, &bifurcation, discriminator, processor),
+                NodePath::Branch(bifurcation),
+            ),
+            NodePath::Leaf(elems) => {
+                if elems.len() <= MAX_LEAF_SIZE {
+                    (elems.iter().all(processor), NodePath::Leaf(elems))
+                } else {
+                    // The leaf is too big and must be broken up.
+                    let bifurcation = Self::bifurcate(&kd.ops, next_dim, kd.num_dimensions, elems);
+
+                    // Do the search on the newly generated branches:
+                    let result = self.branch_search(kd, &bifurcation, discriminator, processor);
+
+                    (result, NodePath::Branch(bifurcation))
                 }
             }
-            NodePath::Leaf(elems) => elems.iter().all(processor),
+        };
+
+        self.path.set(new_path);
+
+        result
+    }
+
+    fn branch_search(
+        &self,
+        kd: &KDTree<O>,
+        bifurcation: &Bifurcation<O>,
+        discriminator: &impl Fn(&<O::Entry as Entry>::KeyElem, &O::NodeData) -> SearchPath,
+        processor: &mut impl FnMut(&O::Entry) -> bool,
+    ) -> bool {
+        let next_dim = bifurcation.split_value.dim_index() + 1;
+        match discriminator(&bifurcation.split_value, &self.node_data) {
+            SearchPath::None => true,
+            SearchPath::LessThan => {
+                bifurcation
+                    .less_branch
+                    .search(kd, next_dim, discriminator, processor)
+            }
+            SearchPath::GreaterOrEqualThan => {
+                bifurcation
+                    .greater_or_equal_branch
+                    .search(kd, next_dim, discriminator, processor)
+            }
+            SearchPath::Both => {
+                bifurcation
+                    .less_branch
+                    .search(kd, next_dim, discriminator, processor)
+                    && bifurcation.greater_or_equal_branch.search(
+                        kd,
+                        next_dim,
+                        discriminator,
+                        processor,
+                    )
+            }
         }
     }
 
-    fn to_vec(self, vec: &mut Vec<E>) {
-        match self.path {
+    fn bifurcate(
+        ops: &O,
+        next_dim: usize,
+        num_dimensions: usize,
+        mut elems: Vec<O::Entry>,
+    ) -> Box<Bifurcation<O>> {
+        // Attempt attempt to bifurcate on every dimension, starting from
+        // next_dim, until we find one that partition the vector in two. It will
+        // most likely succeed on the first iteration.
+        for i in 0..num_dimensions {
+            let dim = (next_dim + i) % num_dimensions;
+
+            elems.sort_unstable_by(|a, b| a.cmp_dim(&b.get_key_elem(dim)));
+            if elems[0].cmp_dim(&elems.last().unwrap().get_key_elem(dim)) != Ordering::Equal {
+                // Fist element is different from the last at this dimension, so
+                // we can use this dim for partitioning.
+                let (split_point, split_value) = optimal_partition_value(dim, &elems);
+
+                let gt_eq = elems.split_off(split_point);
+                // TODO: maybe elems.shrink_to_fit() ? If doing it, it would be
+                // better to do it after all the recursive splits.
+                //elems.shrink_to_fit();
+
+                return Box::new(Bifurcation {
+                    split_value,
+                    less_branch: Node::new(ops, elems),
+                    greater_or_equal_branch: Node::new(ops, gt_eq),
+                });
+            }
+        }
+
+        panic!("this k-d tree implementation does not support repeated elements");
+    }
+
+    fn to_vec(self, vec: &mut Vec<O::Entry>) {
+        match self.path.into_inner() {
             NodePath::Branch(bifurcation) => {
                 bifurcation.less_branch.to_vec(vec);
                 bifurcation.greater_or_equal_branch.to_vec(vec);
             }
             NodePath::Leaf(mut elems) => vec.append(&mut elems),
         }
-    }
-}
-
-/// Partition a slice in two according to a predicate, preserving the relative
-/// order. Returns two slices, the first with the elements matching the
-/// predicate, and the second with the elements not matching.
-fn stable_partition<T, P: Fn(&T) -> bool>(list: &mut [T], predicate: P) -> (&mut [T], &mut [T]) {
-    let mut src = 0;
-    let mut dst = 0;
-
-    unsafe {
-        // During the partition, we will need to temporarily vacate an array
-        // position, when its previous occupant is moved to a new place but
-        // hasn't already been replaced. To allow for uninitialized "vacancies",
-        // we transmute the array to MaybeUninit.
-        let list: &mut [MaybeUninit<T>] = std::mem::transmute(list);
-        let mut tmp = Vec::new();
-        while src < list.len() {
-            if predicate(list[src].assume_init_ref()) {
-                list[dst] = std::mem::replace(&mut list[src], MaybeUninit::uninit());
-                dst += 1;
-            } else {
-                tmp.push(std::mem::replace(&mut list[src], MaybeUninit::uninit()));
-            }
-            src += 1;
-        }
-
-        // All uninitialized elements will be in the unmatching side:
-        assert_eq!(dst, list.len() - tmp.len());
-        let (matching, unmatching) = list.split_at_mut(dst);
-
-        // Fill all the uninitialized elements with elements from tmp:
-        for (dest, src) in unmatching.iter_mut().zip(tmp.into_iter()) {
-            *dest = src;
-        }
-
-        (
-            MaybeUninit::slice_assume_init_mut(matching),
-            MaybeUninit::slice_assume_init_mut(unmatching),
-        )
     }
 }
 
@@ -451,8 +350,33 @@ pub trait KeyElem {
     fn dim_index(&self) -> usize;
 }
 
+/// Trait defining the data types and operations to build the tree nodes.
+///
+/// Unlike Rust's std collections, this is an actual object passed to the
+/// kD-tree, which allows for greater flexibility (this is one thing Rust did
+/// worse than C++, not having comparator objects for the data structures).
+pub trait DataOperations {
+    /// The entry this node data is built from.
+    type Entry: Entry;
+
+    /// The user defined data stored in every Node to help in the search. It is
+    /// built from the entries stored below the node, using the functions
+    /// defined in this trait.
+    type NodeData: Clone;
+
+    /// Translates an Entry to a NodeData.
+    fn map(&self, entry: &Self::Entry) -> Self::NodeData;
+
+    /// Commutative and associative function to accumulate two NodeData into
+    /// one, so that the data from a node is build as the accumulation of all
+    /// NodeData below it.
+    fn accum(&self, a: Self::NodeData, other: &Self::NodeData) -> Self::NodeData;
+}
+
 #[cfg(test)]
 mod tests {
+
+    use std::marker::PhantomData;
 
     use rand::{
         distributions::{Alphanumeric, DistString},
@@ -474,7 +398,20 @@ mod tests {
         Int { dim: u8, val: i8 },
     }
 
-    type TestKDTree<'a> = KDTree<TestEntry<'a>, ()>;
+    /// The implementation of DataOperation trait.
+    struct TestOps<'a>(PhantomData<&'a ()>);
+
+    impl<'a> DataOperations for TestOps<'a> {
+        type Entry = TestEntry<'a>;
+
+        type NodeData = ();
+
+        fn map(&self, _: &Self::Entry) -> Self::NodeData {}
+
+        fn accum(&self, _: Self::NodeData, _: &Self::NodeData) -> Self::NodeData {}
+    }
+
+    type TestKDTree<'a> = KDTree<TestOps<'a>>;
 
     impl<'a> Entry for TestEntry<'a> {
         type KeyElem = TestKeyElement<'a>;
@@ -549,17 +486,17 @@ mod tests {
         // Build the k-d tree with only the first 8000 elements and run the
         // query test.
         let originals = &elem_vec[..8000];
-        let mut kdtree = TestKDTree::new(10, originals.iter().collect(), &|_| (), &|_, _| ());
+        let mut kdtree = TestKDTree::new(10, originals.iter().collect(), TestOps(PhantomData {}));
         query_test(&kdtree, originals);
 
         // Insert the remaining elements and redo the query test.
         for e in elem_vec[8000..].iter() {
-            kdtree.insert(e, &|_| (), &|_, _| ());
+            kdtree.insert(e);
         }
         query_test(&kdtree, &elem_vec);
     }
 
-    fn query_test(kdtree: &KDTree<TestEntry, ()>, elems: &[TestValue]) {
+    fn query_test(kdtree: &TestKDTree, elems: &[TestValue]) {
         // Search all elements less than or equal the reference:
         let reference: TestValue = ("Q".into(), [-12, 0, -7, 18, 40, -3, -39, 30, 30]);
 

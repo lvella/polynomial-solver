@@ -1,4 +1,4 @@
-use std::{fmt::Display, ptr::addr_of};
+use std::{fmt::Display, ptr::addr_of, rc::Rc};
 
 use crate::polynomial::{
     division::Field, divmask::MaximumExponentsTracker, monomial_ordering::Ordering, Id, Polynomial,
@@ -21,7 +21,7 @@ pub struct KnownBasis<O: Ordering, I: Id, C: Field, P: SignedExponent> {
 
     /// Mapping between monomials and divmasks that is dependent on the current
     /// distribution of the monomial.
-    pub div_map: DivMap<P>,
+    pub div_map: Rc<DivMap<P>>,
 
     /// Owns the basis polynomials, ordered by insertion order (which is
     /// important to the spair triangle).
@@ -85,8 +85,9 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
     /// Creates a new basis calculator.
     pub fn new(num_vars: usize) -> Self {
         let max_exp = MaximumExponentsTracker::new(num_vars);
-        let div_map = DivMap::new(&max_exp);
-        let by_sign_lm_ratio_and_lm = RatioMonomialIndex::new(num_vars, &div_map, Vec::new());
+        let div_map = Rc::new(DivMap::new(&max_exp));
+        let by_sign_lm_ratio_and_lm =
+            RatioMonomialIndex::new(num_vars, div_map.clone(), Vec::new());
         let syzygies = MonomialIndex::new(vec![]);
         BasisCalculator {
             basis: KnownBasis {
@@ -166,7 +167,7 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
 
         self.basis
             .by_sign_lm_ratio_and_lm
-            .insert(&self.basis.div_map, sign_poly.as_ref());
+            .insert(sign_poly.as_ref());
 
         self.basis.polys.push(sign_poly);
     }
@@ -228,8 +229,8 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
 
         // Recreate the div map.
         self.max_exp.reset_tracking();
-        self.basis.div_map = DivMap::new(&self.max_exp);
-        let div_map = &self.basis.div_map;
+        self.basis.div_map = Rc::new(DivMap::new(&self.max_exp));
+        let div_map = self.basis.div_map.clone();
 
         // Recalculate both masks of each polynomial.
         for poly in self.basis.polys.iter_mut() {
@@ -262,13 +263,10 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
     fn add_syzygy(&mut self, signature: MaskedSignature<O, I, P>) {
         self.max_exp.update(&signature.signature.monomial);
 
-        self.syzygies.insert(
-            &self.basis.div_map,
-            MaskedMonomial {
-                divmask: signature.divmask,
-                monomial: signature.signature.monomial,
-            },
-        );
+        self.syzygies.insert(MaskedMonomial {
+            divmask: signature.divmask,
+            monomial: signature.signature.monomial,
+        });
     }
 
     pub fn print_statistics(&self) {

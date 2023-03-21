@@ -1,7 +1,7 @@
-use std::cell::Cell;
+use std::{cell::Cell, marker::PhantomData, rc::Rc};
 
 use crate::{
-    kd_tree::{self, KDTree, SearchPath},
+    kd_tree::{self, DataOperations, KDTree, SearchPath},
     polynomial::{
         divmask::DivMaskTestResult,
         monomial_ordering::Ordering,
@@ -10,7 +10,7 @@ use crate::{
     },
 };
 
-use super::{make_dense_monomial, node_data_builder, MaskedMonomial, SignedExponent};
+use super::{make_dense_monomial, MaskedMonomial, SignedExponent};
 
 /// Optimization parameter: ideally, this should be the size where linear searching the large vector for
 /// a divisor outweighs the increased cost of inserting on a kD-tree.
@@ -57,6 +57,28 @@ impl<I: Id, E: SignedExponent> kd_tree::KeyElem for VariablePower<I, E> {
     }
 }
 
+/// Struct implementing the operations needed on building the kD-Tree.
+struct Operations<O: Ordering, I: Id, E: SignedExponent> {
+    div_map: Rc<DivMap<E>>,
+    _phantom: PhantomData<(O, I)>,
+}
+
+impl<O: Ordering, I: Id, E: SignedExponent> DataOperations for Operations<O, I, E> {
+    type Entry = MaskedMonomial<O, I, E>;
+
+    type NodeData = MaskedMonomial<O, I, E>;
+
+    /// Creates a monomial mask from the leading monomial of the entry.
+    fn map(&self, entry: &Self::Entry) -> Self::NodeData {
+        entry.clone()
+    }
+
+    /// GCD between NodeData
+    fn accum(&self, a: Self::NodeData, other: &Self::NodeData) -> Self::NodeData {
+        a.gcd(other, &self.div_map)
+    }
+}
+
 /// Alternative implementations of monomial index. For performance reasons, it
 /// starts as a flat Vec<>, and only upon the first search a kD-tree is built
 /// from the Vec<> elements.
@@ -68,7 +90,7 @@ enum Alternatives<O: Ordering, I: Id, E: SignedExponent> {
         usage_balance: i64,
         vec: Vec<MaskedMonomial<O, I, E>>,
     },
-    Tree(kd_tree::KDTree<MaskedMonomial<O, I, E>, MaskedMonomial<O, I, E>>),
+    Tree(kd_tree::KDTree<Operations<O, I, E>>),
 }
 
 impl<O: Ordering, I: Id, E: SignedExponent> Default for Alternatives<O, I, E> {
@@ -92,19 +114,13 @@ impl<O: Ordering, I: Id, E: SignedExponent> MonomialIndex<O, I, E> {
         }))
     }
 
-    pub(in crate::polynomial::signature_basis) fn insert(
-        &mut self,
-        div_map: &DivMap<E>,
-        elem: MaskedMonomial<O, I, E>,
-    ) {
+    pub(in crate::polynomial::signature_basis) fn insert(&mut self, elem: MaskedMonomial<O, I, E>) {
         match self.0.get_mut() {
             Alternatives::Flat { vec, usage_balance } => {
                 *usage_balance -= MIN_SEARCHES_PER_INSERTIONS;
                 vec.push(elem);
             }
-            Alternatives::Tree(tree) => tree.insert(elem, &|e| e.clone(), &|a, b| {
-                node_data_builder(div_map, a, b)
-            }),
+            Alternatives::Tree(tree) => tree.insert(elem),
             Alternatives::Empty => self.0.set(Alternatives::Flat {
                 vec: vec![elem],
                 usage_balance: -MIN_SEARCHES_PER_INSERTIONS,
@@ -114,7 +130,7 @@ impl<O: Ordering, I: Id, E: SignedExponent> MonomialIndex<O, I, E> {
 
     pub(in crate::polynomial::signature_basis) fn contains_divisor(
         &self,
-        div_map: &DivMap<E>,
+        div_map: &Rc<DivMap<E>>,
         num_dimensions: usize,
         monomial: MaskedMonomialRef<O, I, E>,
     ) -> bool {
@@ -124,9 +140,14 @@ impl<O: Ordering, I: Id, E: SignedExponent> MonomialIndex<O, I, E> {
             Alternatives::Flat { vec, usage_balance } => {
                 let len = vec.len();
                 if len > MIN_VEC_SIZE && (len > MAX_VEC_SIZE || usage_balance > 0) {
-                    KDTree::new(num_dimensions, vec, &|entry| entry.clone(), &|a, b| {
-                        node_data_builder(div_map, a, b)
-                    })
+                    KDTree::new(
+                        num_dimensions,
+                        vec,
+                        Operations {
+                            div_map: div_map.clone(),
+                            _phantom: PhantomData {},
+                        },
+                    )
                 } else {
                     let result = vec.iter().any(|elem| elem.divides(&monomial));
                     self.0.set(Alternatives::Flat {
