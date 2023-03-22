@@ -1,5 +1,7 @@
 use std::{fmt::Display, ptr::addr_of, rc::Rc};
 
+use replace_with::replace_with_or_abort;
+
 use crate::polynomial::{
     division::Field, divmask::MaximumExponentsTracker, monomial_ordering::Ordering, Id, Polynomial,
 };
@@ -88,7 +90,7 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
         let div_map = Rc::new(DivMap::new(&max_exp));
         let by_sign_lm_ratio_and_lm =
             RatioMonomialIndex::new(num_vars, div_map.clone(), Vec::new());
-        let syzygies = MonomialIndex::new(vec![]);
+        let syzygies = MonomialIndex::new(num_vars, div_map.clone(), vec![]);
         BasisCalculator {
             basis: KnownBasis {
                 num_vars,
@@ -202,11 +204,7 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
 
             let masked_signature = MaskedSignature { divmask, signature };
             // Do not add redundant koszul syzygies:
-            if !self.syzygies.contains_divisor(
-                &self.basis.div_map,
-                self.basis.num_vars,
-                masked_signature.monomial(),
-            ) {
+            if !self.syzygies.contains_divisor(masked_signature.monomial()) {
                 self.add_syzygy(masked_signature);
                 // DO NOT mark the original S-pair as syzygy, because it is not!
                 // Except in special cases that have already been handled,
@@ -242,11 +240,13 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
         }
 
         // Recalculates the mask and recreates the index for syzygy basis.
-        let mut syzygies = self.syzygies.to_vec();
-        for syzygy in syzygies.iter_mut() {
-            syzygy.divmask = div_map.map(&syzygy.monomial);
-        }
-        self.syzygies = SyzygySet::new(syzygies);
+        replace_with_or_abort(&mut self.syzygies, |syzygies| {
+            let mut syzygies = syzygies.to_vec();
+            for syzygy in syzygies.iter_mut() {
+                syzygy.divmask = div_map.map(&syzygy.monomial);
+            }
+            SyzygySet::new(self.basis.num_vars, div_map.clone(), syzygies)
+        });
 
         // Recreate the index for reductions.
         self.basis.by_sign_lm_ratio_and_lm = RatioMonomialIndex::new(
@@ -257,7 +257,7 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
     }
 
     pub fn clear_syzygies(&mut self) {
-        self.syzygies = SyzygySet::new(vec![]);
+        self.syzygies = SyzygySet::new(self.basis.num_vars, self.basis.div_map.clone(), vec![]);
     }
 
     fn add_syzygy(&mut self, signature: MaskedSignature<O, I, P>) {

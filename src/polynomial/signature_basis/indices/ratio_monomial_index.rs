@@ -138,8 +138,7 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
     }
 
     pub fn insert(&mut self, elem: *const SignPoly<O, I, F, E>) {
-        let new_entry = Entry(elem);
-        self.0.insert(new_entry)
+        self.0.insert(Entry(elem))
     }
 
     pub(in crate::polynomial::signature_basis) fn find_high_base_divisor(

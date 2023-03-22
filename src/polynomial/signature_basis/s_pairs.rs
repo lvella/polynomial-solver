@@ -94,7 +94,7 @@ impl<O: Ordering, I: Id, P: SignedExponent> HalfSPair<O, I, P> {
         };
 
         // Early test for signature criterion:
-        if syzygies.contains_divisor(&basis.div_map, basis.num_vars, masked_signature.monomial()) {
+        if syzygies.contains_divisor(masked_signature.monomial()) {
             return Err(true);
         } else {
             Ok(HalfSPair {
@@ -637,7 +637,7 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
                 Err(false)
             } else {
                 // Late test for signature criterion:
-                if syzygies.contains_divisor(&basis.div_map, basis.num_vars, m_sign.monomial()) {
+                if syzygies.contains_divisor(m_sign.monomial()) {
                     // Eliminated by signature criterion
                     Err(true)
                 } else {
