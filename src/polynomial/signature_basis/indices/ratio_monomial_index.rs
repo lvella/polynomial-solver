@@ -17,12 +17,22 @@ use super::{make_dense_monomial, DivMap, MaskedMonomial, SignedExponent};
 /// The entries stored in the leafs are raw pointers to SignPoly.
 struct Entry<O: Ordering, I: Id, F: Field, E: SignedExponent>(*const SignPoly<O, I, F, E>);
 
+impl<O: Ordering, I: Id, F: Field, E: SignedExponent> Entry<O, I, F, E> {
+    fn poly(&self) -> &SignPoly<O, I, F, E> {
+        unsafe { &(*self.0) }
+    }
+
+    fn lm(&self) -> &Monomial<O, I, E> {
+        &self.poly().polynomial.terms[0].monomial
+    }
+}
+
 impl<O: Ordering, I: Id, F: Field, E: SignedExponent> kd_tree::Entry for Entry<O, I, F, E> {
     type KeyElem = KeyElem<O, I, E>;
     type PartitionFilter = PartitionFilter<O, I, F, E>;
 
     fn get_key_elem(&self, dim: usize) -> Self::KeyElem {
-        let poly = unsafe { &(*self.0) };
+        let poly = self.poly();
         if dim == 0 {
             KeyElem::S2LMRatio(&poly.sign_to_lm_ratio)
         } else {
@@ -33,8 +43,8 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> kd_tree::Entry for Entry<O
     }
 
     fn average_filter(&self, other: &Self, dim: usize) -> Self::PartitionFilter {
-        let a = unsafe { &(*self.0) };
-        let b = unsafe { &(*other.0) };
+        let a = self.poly();
+        let b = other.poly();
         if dim == 0 {
             // The tree elements must have accelerated ratio comparers, so these
             // unwrap must not panic:
@@ -57,7 +67,7 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> kd_tree::Entry for Entry<O
     }
 
     fn cmp_dim(&self, other: &Self::KeyElem) -> std::cmp::Ordering {
-        let poly = unsafe { &(*self.0) };
+        let poly = self.poly();
         match other {
             KeyElem::S2LMRatio(ratio) => poly.sign_to_lm_ratio.cmp(unsafe { &(**ratio) }),
             KeyElem::MonomialVar(var) => get_var_exp_from_lm(poly, &var.id).cmp(&var.power),
@@ -103,12 +113,11 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> kd_tree::PartitionFilter
     type Entry = Entry<O, I, F, E>;
 
     fn is_less(&self, e: &Self::Entry) -> bool {
-        let poly = unsafe { &(*e.0) };
         match self {
             PartitionFilter::S2LMRatio(comparer, _) => {
-                poly.sign_to_lm_ratio.get_comparer().unwrap() < *comparer
+                e.poly().sign_to_lm_ratio.get_comparer().unwrap() < *comparer
             }
-            PartitionFilter::MonomialVar(var) => get_var_exp_from_lm(poly, &var.id) < var.power,
+            PartitionFilter::MonomialVar(var) => get_var_exp_from_lm(e.poly(), &var.id) < var.power,
         }
     }
 
@@ -128,19 +137,17 @@ struct Operations<O: Ordering, I: Id, F: Field, E: SignedExponent> {
 
 impl<O: Ordering, I: Id, F: Field, E: SignedExponent> DataOperations for Operations<O, I, F, E> {
     type Entry = Entry<O, I, F, E>;
-
     type NodeData = MaskedMonomial<O, I, E>;
 
-    /// Creates a monomial mask from the leading monomial of the entry.
-    fn map(&self, entry: &Self::Entry) -> Self::NodeData {
-        let monomial = unsafe { (*entry.0).polynomial.terms[0].monomial.clone() };
-        let divmask = self.div_map.map(&monomial);
-        MaskedMonomial { divmask, monomial }
+    /// Calculate the GCD of leading monomials among all given entries.
+    fn make(&self, entries: &[Self::Entry]) -> Self::NodeData {
+        MaskedMonomial::gcd_all(entries.iter().map(|e| e.lm()), &self.div_map).unwrap()
     }
 
-    /// GCD between NodeData
-    fn accum(&self, a: Self::NodeData, other: &Self::NodeData) -> Self::NodeData {
-        a.gcd(other, &self.div_map)
+    /// Update a node_data with the GCD of itself and the leading monomial of a
+    /// new entry.
+    fn update(&self, node_data: &mut Self::NodeData, new_entry: &Self::Entry) {
+        node_data.gcd_update(new_entry.lm(), &self.div_map);
     }
 }
 

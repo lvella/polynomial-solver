@@ -1,5 +1,7 @@
 //! Indices used to accelerate searches in the signature basis algorithm.
 
+use replace_with::replace_with_or_abort;
+
 use crate::polynomial::{divmask::DivMaskTestResult, monomial_ordering::Ordering, Id, Monomial};
 
 use super::{DivMap, DivMask, MaskedMonomialRef, SignedExponent};
@@ -15,7 +17,7 @@ pub(super) struct MaskedMonomial<O: Ordering, I: Id, E: SignedExponent> {
     pub monomial: Monomial<O, I, E>,
 }
 
-impl<O: Ordering, I: Id, E: SignedExponent> MaskedMonomial<O, I, E> {
+impl<'a, O: Ordering + 'a, I: Id + 'a, E: SignedExponent + 'a> MaskedMonomial<O, I, E> {
     pub(super) fn divides(&self, other: &MaskedMonomialRef<O, I, E>) -> bool {
         match self.divmask.divides(other.0) {
             DivMaskTestResult::NotDivisible => false,
@@ -23,14 +25,27 @@ impl<O: Ordering, I: Id, E: SignedExponent> MaskedMonomial<O, I, E> {
         }
     }
 
-    /// Greatest common denominator between self and other.
-    pub(super) fn gcd(self, other: &Self, div_map: &DivMap<E>) -> Self {
-        let gcd = self.monomial.gcd(&other.monomial);
-        let divmask = div_map.map(&gcd);
-        MaskedMonomial {
-            divmask,
-            monomial: gcd,
-        }
+    /// Creates masked monomial from GCD of all given monomials.
+    ///
+    /// Returns None if input iter is empty.
+    pub(super) fn gcd_all(
+        mut iter: impl Iterator<Item = &'a Monomial<O, I, E>>,
+        div_map: &DivMap<E>,
+    ) -> Option<Self> {
+        let start = iter.next()?.clone();
+
+        let monomial = iter.fold(start, |a, b| a.gcd(b));
+
+        Some(MaskedMonomial {
+            divmask: div_map.map(&monomial),
+            monomial,
+        })
+    }
+
+    /// Updates itself with the GCD of self and the given monomial.
+    pub(super) fn gcd_update(&mut self, other: &Monomial<O, I, E>, div_map: &DivMap<E>) {
+        replace_with_or_abort(&mut self.monomial, |old_value| old_value.gcd(other));
+        self.divmask = div_map.map(&self.monomial);
     }
 }
 

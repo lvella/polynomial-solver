@@ -1,8 +1,6 @@
 use std::cell::Cell;
 use std::cmp::Ordering;
 
-use replace_with::replace_with_or_abort;
-
 /// Implementation of the classical data structure k-dimensional tree for
 /// multidimensional indexing.
 ///
@@ -48,8 +46,7 @@ impl<O: DataOperations> KDTree<O> {
     pub fn insert(&mut self, new_entry: O::Entry) {
         self.num_elems += 1;
         if let Some(root) = &mut self.root {
-            let new_node_data = self.ops.map(&new_entry);
-            root.insert(&self.ops, new_entry, &new_node_data);
+            root.insert(&self.ops, new_entry);
         } else {
             self.root = Some(Node::new(&self.ops, vec![new_entry]));
         }
@@ -135,19 +132,15 @@ struct Bifurcation<O: DataOperations> {
 
 impl<O: DataOperations> Node<O> {
     fn new(ops: &O, elems: Vec<O::Entry>) -> Self {
-        let mut iter = elems.iter().map(|e| ops.map(e));
-        let init = iter.next().unwrap();
-        let node_data = iter.fold(init, |a, b| ops.accum(a, &b));
         Node {
-            node_data,
+            node_data: ops.make(&elems),
             path: Cell::new(NodePath::Leaf(elems)),
         }
     }
 
-    fn insert(&mut self, ops: &O, new_elem: O::Entry, new_node_data: &O::NodeData) {
-        replace_with_or_abort(&mut self.node_data, |node_data| {
-            ops.accum(node_data, new_node_data)
-        });
+    fn insert(&mut self, ops: &O, new_elem: O::Entry) {
+        ops.update(&mut self.node_data, &new_elem);
+
         match self.path.get_mut() {
             NodePath::Branch(b) => {
                 let path = match new_elem.cmp_dim(&b.split_value) {
@@ -155,7 +148,7 @@ impl<O: DataOperations> Node<O> {
                     _ => &mut b.greater_or_equal_branch,
                 };
 
-                path.insert(ops, new_elem, new_node_data);
+                path.insert(ops, new_elem);
             }
             NodePath::Leaf(elems) => elems.push(new_elem),
         }
@@ -368,15 +361,15 @@ pub trait DataOperations {
     /// The user defined data stored in every Node to help in the search. It is
     /// built from the entries stored below the node, using the functions
     /// defined in this trait.
-    type NodeData: Clone;
+    type NodeData;
 
-    /// Translates an Entry to a NodeData.
-    fn map(&self, entry: &Self::Entry) -> Self::NodeData;
+    /// Makes a node data from the set of entries below that node.
+    ///
+    /// The given slice `entries` is guaranteed to have at least 1 element.
+    fn make(&self, entries: &[Self::Entry]) -> Self::NodeData;
 
-    /// Commutative and associative function to accumulate two NodeData into
-    /// one, so that the data from a node is build as the accumulation of all
-    /// NodeData below it.
-    fn accum(&self, a: Self::NodeData, other: &Self::NodeData) -> Self::NodeData;
+    /// Update the node data with a new entry inserted below that node.
+    fn update(&self, node_data: &mut Self::NodeData, new_entry: &Self::Entry);
 }
 
 #[cfg(test)]
@@ -441,9 +434,9 @@ mod tests {
 
         type NodeData = ();
 
-        fn map(&self, _: &Self::Entry) -> Self::NodeData {}
+        fn make(&self, _: &[Self::Entry]) -> Self::NodeData {}
 
-        fn accum(&self, _: Self::NodeData, _: &Self::NodeData) -> Self::NodeData {}
+        fn update(&self, _: &mut Self::NodeData, _: &Self::Entry) {}
     }
 
     pub enum TestFilter<'a> {

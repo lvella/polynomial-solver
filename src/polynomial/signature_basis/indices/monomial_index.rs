@@ -70,17 +70,16 @@ struct Operations<O: Ordering, I: Id, E: SignedExponent> {
 
 impl<O: Ordering, I: Id, E: SignedExponent> DataOperations for Operations<O, I, E> {
     type Entry = MaskedMonomial<O, I, E>;
-
     type NodeData = MaskedMonomial<O, I, E>;
 
-    /// Creates a monomial mask from the leading monomial of the entry.
-    fn map(&self, entry: &Self::Entry) -> Self::NodeData {
-        entry.clone()
+    /// Calculate the GCD among all given entries.
+    fn make(&self, entries: &[Self::Entry]) -> Self::NodeData {
+        MaskedMonomial::gcd_all(entries.iter().map(|e| &e.monomial), &self.div_map).unwrap()
     }
 
-    /// GCD between NodeData
-    fn accum(&self, a: Self::NodeData, other: &Self::NodeData) -> Self::NodeData {
-        a.gcd(other, &self.div_map)
+    /// Update a node_data with the GCD of itself and the new entry.
+    fn update(&self, node_data: &mut Self::NodeData, new_entry: &Self::Entry) {
+        node_data.gcd_update(&new_entry.monomial, &self.div_map);
     }
 }
 
