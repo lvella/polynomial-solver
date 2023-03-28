@@ -133,52 +133,6 @@ struct Bifurcation<O: DataOperations> {
     greater_or_equal_branch: Node<O>,
 }
 
-/// Given an slice ordered by some dimension, searches for the point that best
-/// divides the slice in two in the most balanced way, so that all equal keys
-/// remains together.
-///
-/// I.e: `[aabbbc]` is split into `[aa]` and `[bbbc]`, which is better than
-/// `[aabbb]` and `[c]`.
-fn optimal_partition_value<E: Entry>(dim: usize, sorted_list: &[E]) -> (usize, E::KeyElem) {
-    // Find the splitting point. Start from the middle
-    // and search for the splitting point that best balance
-    // both sides of the tree.
-    let middle = sorted_list.len() / 2;
-    let middle_elem = sorted_list[middle].get_key_elem(dim);
-
-    // The default value for split_idx is for when there is an odd number of
-    // elements, and all the elements are equal except for the last.
-    let mut split_idx = sorted_list.len() - 1;
-    for (low, high) in (0..middle).rev().zip(middle..) {
-        match sorted_list[low].cmp_dim(&middle_elem) {
-            Ordering::Less => {
-                split_idx = low + 1;
-                break;
-            }
-            Ordering::Equal => {}
-            Ordering::Greater => unreachable!(),
-        }
-
-        match sorted_list[high].cmp_dim(&middle_elem) {
-            Ordering::Less => unreachable!(),
-            Ordering::Equal => {}
-            Ordering::Greater => {
-                split_idx = high;
-                break;
-            }
-        }
-    }
-    drop(middle_elem);
-
-    let split_value = sorted_list[split_idx].get_key_elem(dim);
-    assert!(
-        sorted_list[split_idx - 1].cmp_dim(&split_value) == Ordering::Less,
-        "bug: k-d tree splitting point is at the wrong place"
-    );
-
-    (split_idx, split_value)
-}
-
 impl<O: DataOperations> Node<O> {
     fn new(ops: &O, elems: Vec<O::Entry>) -> Self {
         let mut iter = elems.iter().map(|e| ops.map(e));
@@ -289,22 +243,57 @@ impl<O: DataOperations> Node<O> {
         for i in 0..num_dimensions {
             let dim = (next_dim + i) % num_dimensions;
 
-            elems.sort_unstable_by(|a, b| a.cmp_dim(&b.get_key_elem(dim)));
-            if elems[0].cmp_dim(&elems.last().unwrap().get_key_elem(dim)) != Ordering::Equal {
-                // Fist element is different from the last at this dimension, so
-                // we can use this dim for partitioning.
-                let (split_point, split_value) = optimal_partition_value(dim, &elems);
+            let mut iter = elems.iter();
+            let mut max = iter.next().unwrap();
+            let mut min = max;
+            for e in iter {
+                let key = e.get_key_elem(dim);
+                if let Ordering::Greater = min.cmp_dim(&key) {
+                    min = e;
+                }
+                if let Ordering::Less = max.cmp_dim(&key) {
+                    max = e;
+                }
+            }
 
-                let gt_eq = elems.split_off(split_point);
-                // TODO: maybe elems.shrink_to_fit() ? If doing it, it would be
-                // better to do it after all the recursive splits.
-                //elems.shrink_to_fit();
+            match min.cmp_dim(&max.get_key_elem(dim)) {
+                Ordering::Less => {
+                    // Fist element is different from the last at this dimension, so
+                    // we can use this dim for partitioning.
+                    let avg_filter = min.average_filter(max, dim);
 
-                return Box::new(Bifurcation {
-                    split_value,
-                    less_branch: Node::new(ops, elems),
-                    greater_or_equal_branch: Node::new(ops, gt_eq),
-                });
+                    let less_than: Vec<_> = elems.drain_filter(|e| avg_filter.is_less(e)).collect();
+                    // TODO: maybe elems.shrink_to_fit() ? If doing it, it would be
+                    // better to do it after all the recursive splits.
+                    //elems.shrink_to_fit();
+
+                    let split_value = match avg_filter.into_key() {
+                        Some(key) => key,
+                        None => {
+                            // Use as partition key the smallest element in the equal or greater side.
+                            let mut iter = elems.iter();
+                            let split_value = iter.next().unwrap();
+                            let mut key = split_value.get_key_elem(dim);
+                            for e in iter {
+                                if let Ordering::Less = e.cmp_dim(&key) {
+                                    key = e.get_key_elem(dim);
+                                }
+                            }
+                            key
+                        }
+                    };
+
+                    return Box::new(Bifurcation {
+                        split_value,
+                        less_branch: Node::new(ops, less_than),
+                        greater_or_equal_branch: Node::new(ops, elems),
+                    });
+                }
+                Ordering::Equal => {
+                    // This dimension can't be used for partitioning, continue
+                    // the loop to use the next.
+                }
+                Ordering::Greater => unreachable!(),
             }
         }
 
@@ -322,22 +311,39 @@ impl<O: DataOperations> Node<O> {
     }
 }
 
+/// Filter that tell if entries are less than some KeyElem.
+pub trait PartitionFilter: Sized {
+    type Entry: Entry;
+
+    /// Returns true if entry is less.
+    fn is_less(&self, e: &Self::Entry) -> bool;
+
+    /// Turn the filter into a key that is greater than all elements that would
+    /// have been classified as less, and only them.
+    ///
+    /// If None, the classification must be sound: all the less elements must be
+    /// smaller than the greater elements.
+    fn into_key(self) -> Option<<Self::Entry as Entry>::KeyElem>;
+}
+
 /// A k-dimensional vector entry for the k-dimensional tree.
 ///
-/// This will be copied a lot, so make sure it is a small object.
-pub trait Entry: Clone {
+/// This will be moved a lot.
+pub trait Entry {
     type KeyElem: KeyElem;
+    type PartitionFilter: PartitionFilter<Entry = Self>;
 
     fn get_key_elem(&self, dim: usize) -> Self::KeyElem;
 
-    /// Returns a key element in dimension dim in the range defined by
-    /// (self, other], i.e. at dimension dim it must be greater than self
-    /// and less than or equal other, preferably the average between the two.
+    /// Returns a partition filter that splits elements at dim, on the average
+    /// between `self` and `other`.
     ///
-    /// `other.get_key_elem(dim);` is always a valid implementation, but if
-    /// averaging is possible between key elements, it will give a slightly more
-    /// balanced tree.
-    fn average_key_elem(&self, other: &Self, dim: usize) -> Self::KeyElem;
+    /// `self` and `other` are guaranteed to be distinct, and the resulting
+    /// filter must classify `self` as less and `other` as not less.
+    ///
+    /// The closer the filter splits the space at the average between `self` and
+    /// `other`, the more balanced the tree will be.
+    fn average_filter(&self, other: &Self, dim: usize) -> Self::PartitionFilter;
 
     /// Compares the corresponding key element inside this entry with the
     /// provided key element.
@@ -378,6 +384,7 @@ mod tests {
 
     use std::marker::PhantomData;
 
+    use itertools::Itertools;
     use rand::{
         distributions::{Alphanumeric, DistString},
         rngs::StdRng,
@@ -385,6 +392,34 @@ mod tests {
     };
 
     use super::*;
+
+    /// Characters used in the string part of the key:
+    const CHARS: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+    const fn alphanumeric_rev_map() -> [char; CHARS.len() + 1] {
+        let mut ret = ['\0'; CHARS.len() + 1];
+
+        let mut i = 0;
+        while i < CHARS.len() {
+            ret[i + 1] = CHARS[i] as char;
+            i += 1;
+        }
+
+        ret
+    }
+
+    /// Maps characters used in the key to ints in order to calculate average.
+    const fn alphanumeric_map() -> [u8; 'z' as usize + 1] {
+        let mut ret = [0; 'z' as usize + 1];
+
+        let mut i = 0;
+        while i < CHARS.len() {
+            ret[CHARS[i] as usize] = i as u8 + 1;
+            i += 1;
+        }
+
+        ret
+    }
 
     /// Defines a 10 dimensional value with 1 string and 9 integers.
     type TestValue = (String, [i8; 9]);
@@ -411,10 +446,34 @@ mod tests {
         fn accum(&self, _: Self::NodeData, _: &Self::NodeData) -> Self::NodeData {}
     }
 
+    pub enum TestFilter<'a> {
+        Str(String, PhantomData<&'a ()>),
+        Int { dim: u8, val: i8 },
+    }
+
+    impl<'a> PartitionFilter for TestFilter<'a> {
+        type Entry = TestEntry<'a>;
+
+        fn is_less(&self, e: &Self::Entry) -> bool {
+            match self {
+                TestFilter::Str(s, _) => e.0 < *s,
+                TestFilter::Int { dim, val } => e.1[(dim - 1) as usize] < *val,
+            }
+        }
+
+        fn into_key(self) -> Option<<Self::Entry as Entry>::KeyElem> {
+            match self {
+                TestFilter::Str(_, _) => None,
+                TestFilter::Int { dim, val } => Some(TestKeyElement::Int { dim, val }),
+            }
+        }
+    }
+
     type TestKDTree<'a> = KDTree<TestOps<'a>>;
 
     impl<'a> Entry for TestEntry<'a> {
         type KeyElem = TestKeyElement<'a>;
+        type PartitionFilter = TestFilter<'a>;
 
         fn get_key_elem(&self, dim: usize) -> Self::KeyElem {
             if dim == 0 {
@@ -427,15 +486,42 @@ mod tests {
             }
         }
 
-        fn average_key_elem(&self, other: &Self, dim: usize) -> Self::KeyElem {
+        fn average_filter(&self, other: &Self, dim: usize) -> Self::PartitionFilter {
             if dim == 0 {
-                // Too hard to average two strings, just return the bigger one.
-                other.get_key_elem(0)
+                // To average 2 substrings find the common prefix (it will be
+                // part of the result) then average the next different
+                // character.
+                const MAP: [u8; 123] = alphanumeric_map();
+                const REV_MAP: [char; 63] = alphanumeric_rev_map();
+
+                let iter = self.0.chars().zip_longest(other.0.chars());
+                let mut avg_str = String::with_capacity(iter.size_hint().0);
+
+                for pair in iter {
+                    let (a, b) = match pair {
+                        itertools::EitherOrBoth::Both(a, b) => {
+                            if a == b {
+                                avg_str.push(a);
+                                continue;
+                            } else {
+                                (MAP[a as usize], MAP[b as usize])
+                            }
+                        }
+                        itertools::EitherOrBoth::Right(b) => (0, MAP[b as usize]),
+                        itertools::EitherOrBoth::Left(_) => unreachable!(),
+                    };
+
+                    let avg = (a + b + 1) / 2;
+                    assert!(avg > 0);
+                    avg_str.push(REV_MAP[avg as usize]);
+                    break;
+                }
+                TestFilter::Str(avg_str, PhantomData {})
             } else {
                 let lower = self.1[dim - 1];
                 let higher = other.1[dim - 1];
 
-                TestKeyElement::Int {
+                TestFilter::Int {
                     dim: dim as u8,
                     val: div_up(lower + higher, 2),
                 }

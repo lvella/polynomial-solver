@@ -121,6 +121,10 @@ impl<T: Ord + Clone> FastCompared<T> {
         &self.value
     }
 
+    pub fn get_comparer(&self) -> Option<u32> {
+        self.comparer
+    }
+
     /// Return the stored value.
     pub fn into_inner(self) -> T {
         self.value

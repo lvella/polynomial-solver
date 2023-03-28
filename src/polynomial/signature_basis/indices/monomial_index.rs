@@ -1,7 +1,7 @@
 use std::{marker::PhantomData, rc::Rc};
 
 use crate::{
-    kd_tree::{self, DataOperations, KDTree, SearchPath},
+    kd_tree::{self, DataOperations, Entry, KDTree, SearchPath},
     polynomial::{
         divmask::DivMaskTestResult,
         monomial_ordering::Ordering,
@@ -14,6 +14,7 @@ use super::{make_dense_monomial, MaskedMonomial, SignedExponent};
 
 impl<O: Ordering, I: Id, E: SignedExponent> kd_tree::Entry for MaskedMonomial<O, I, E> {
     type KeyElem = VariablePower<I, E>;
+    type PartitionFilter = PartitionFilter<O, I, E>;
 
     fn get_key_elem(&self, dim: usize) -> Self::KeyElem {
         let id = I::from_idx(dim);
@@ -21,13 +22,13 @@ impl<O: Ordering, I: Id, E: SignedExponent> kd_tree::Entry for MaskedMonomial<O,
         VariablePower { id, power }
     }
 
-    fn average_key_elem(&self, other: &Self, dim: usize) -> Self::KeyElem {
+    fn average_filter(&self, other: &Self, dim: usize) -> Self::PartitionFilter {
         let id = I::from_idx(dim);
 
         let exp_a = get_var_exp_from_monomial(&self.monomial, &id);
         let exp_b = get_var_exp_from_monomial(&other.monomial, &id);
         let avg = (exp_a + exp_b + E::one()) / E::from(2);
-        VariablePower { id, power: avg }
+        PartitionFilter(VariablePower { id, power: avg }, PhantomData {})
     }
 
     fn cmp_dim(&self, other: &Self::KeyElem) -> std::cmp::Ordering {
@@ -38,6 +39,26 @@ impl<O: Ordering, I: Id, E: SignedExponent> kd_tree::Entry for MaskedMonomial<O,
 impl<I: Id, E: SignedExponent> kd_tree::KeyElem for VariablePower<I, E> {
     fn dim_index(&self) -> usize {
         self.id.to_idx()
+    }
+}
+
+/// The partition filter is just a wrapper around VariablePower, plus a
+/// PhantomData to contain the extra needed generic arguments.
+pub(in crate::polynomial::signature_basis) struct PartitionFilter<
+    O: Ordering,
+    I: Id,
+    E: SignedExponent,
+>(VariablePower<I, E>, PhantomData<O>);
+
+impl<O: Ordering, I: Id, E: SignedExponent> kd_tree::PartitionFilter for PartitionFilter<O, I, E> {
+    type Entry = MaskedMonomial<O, I, E>;
+
+    fn is_less(&self, e: &Self::Entry) -> bool {
+        e.cmp_dim(&self.0) == std::cmp::Ordering::Less
+    }
+
+    fn into_key(self) -> Option<<Self::Entry as kd_tree::Entry>::KeyElem> {
+        Some(self.0)
     }
 }
 
