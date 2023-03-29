@@ -1,13 +1,16 @@
-use std::{cell::Cell, collections::BTreeMap, fmt::Display, marker::PhantomData};
+use std::{fmt::Display, ptr::addr_of, rc::Rc};
+
+use replace_with::replace_with_or_abort;
 
 use crate::polynomial::{
-    division::Field, divmask::MaximumExponentsTracker, monomial_ordering::Ordering, Id, Monomial,
-    Polynomial, VariablePower,
+    division::Field, divmask::MaximumExponentsTracker, monomial_ordering::Ordering, Id, Polynomial,
 };
 
 use super::{
-    contains_divisor, s_pairs, CmpMap, DivMap, DivMask, MaskedMonomialRef, MaskedSignature,
-    PointedCmp, Ratio, SignPoly, SignedExponent,
+    indices::{
+        monomial_index::MonomialIndex, ratio_monomial_index::RatioMonomialIndex, MaskedMonomial,
+    },
+    s_pairs, CmpMap, DivMap, MaskedMonomialRef, MaskedSignature, Ratio, SignPoly, SignedExponent,
 };
 
 /// Stores all the basis elements known and processed so far.
@@ -15,30 +18,21 @@ use super::{
 /// Everything is public because all fields must be read by the user, and the
 /// user can only get an immutable reference.
 pub struct KnownBasis<O: Ordering, I: Id, C: Field, P: SignedExponent> {
-    /// Lowest possible monomial ratio with these variables, useful in the
-    /// search for rewriter/singular criterion. Two copies are necessary.
-    pub lowest_monomial_ratio: Cell<Monomial<O, I, P>>,
-
-    /// Tracks the maximum exponent seen for each variable, and the evolution.
-    pub max_exp: MaximumExponentsTracker<P>,
+    /// Number of variables in the system.
+    pub num_vars: usize,
 
     /// Mapping between monomials and divmasks that is dependent on the current
     /// distribution of the monomial.
-    pub div_map: DivMap<P>,
+    pub div_map: Rc<DivMap<P>>,
 
     /// Owns the basis polynomials, ordered by insertion order (which is
     /// important to the spair triangle).
     pub polys: Vec<Box<SignPoly<O, I, C, P>>>,
 
-    /// Basis ordered by signature to leading monomial ratio (plus a
-    /// disambiguation integer, to allow for elements with same key).
-    ///
-    /// TODO: to search for a reducer and for a high base divisor, maybe this
-    /// should be a n-D index (like R*-tree), indexing both the leading monomial
-    /// variables and the signature/leading monomial ratio.
-    pub(super) by_sign_lm_ratio:
-        BTreeMap<(PointedCmp<Ratio<O, I, P>>, u32), *const SignPoly<O, I, C, P>>,
-    // TODO: create an n-D index specifically for rewrite criterion and low base
+    /// Basis indexed both by sinature/LM ratio and LM. Used in multidimensional
+    /// search for reducer and high base divisor.
+    pub(super) by_sign_lm_ratio_and_lm: RatioMonomialIndex<O, I, C, P>,
+    // TODO: create an n-D index specifically for singular criterion and low base
     // divisor, indexing both signature/leading monomial ratio and signature
     // monomial variables.
 }
@@ -56,25 +50,13 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display> KnownB
         ratio: &Ratio<O, I, P>,
         monomial: MaskedMonomialRef<O, I, P>,
     ) -> Option<&SignPoly<O, I, C, P>> {
-        // Filter out the unsuitable ratios:
-        let suitable = self
-            .by_sign_lm_ratio
-            .range(..=(PointedCmp(ratio), u32::MAX));
-
-        // Search all the suitable range for a divisor of term.
-        for (_, elem) in suitable {
-            let next = unsafe { &**elem };
-
-            if next.leading_monomial().divides(&monomial) {
-                return Some(next);
-            }
-        }
-
-        None
+        self.by_sign_lm_ratio_and_lm
+            .find_a_reducer(ratio, monomial)
+            .map(|ptr| unsafe { &*ptr })
     }
 }
 
-pub type SyzygySet<O, I, P> = Vec<(Monomial<O, I, P>, DivMask)>;
+pub type SyzygySet<O, I, E> = MonomialIndex<O, I, E>;
 
 /// Hold together the structures that must be coherent during the algorithm execution
 pub struct BasisCalculator<O: Ordering, I: Id, C: Field, P: SignedExponent> {
@@ -84,11 +66,12 @@ pub struct BasisCalculator<O: Ordering, I: Id, C: Field, P: SignedExponent> {
     /// For each new input polynomial processed, this is a set of signatures of
     /// polynomials know to reduce to zero, for that signature index.
     ///
-    /// TODO: use a proper multidimensional index.
-    ///
     /// TODO: maybe periodically remove elements that are divisible by other
     /// elements
     syzygies: SyzygySet<O, I, P>,
+
+    /// Tracks the maximum exponent seen for each variable, and the evolution.
+    max_exp: MaximumExponentsTracker<P>,
 
     /// Priority queue of the S-pairs pending to be processed.
     /// Elements are represent as pair of indices in "basis" Vec.
@@ -104,25 +87,19 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
     /// Creates a new basis calculator.
     pub fn new(num_vars: usize) -> Self {
         let max_exp = MaximumExponentsTracker::new(num_vars);
-        let lowest_monomial_ratio = Cell::new(Monomial {
-            product: (0..num_vars)
-                .map(|idx| VariablePower {
-                    id: I::from_idx(idx),
-                    power: P::min_value(),
-                })
-                .collect(),
-            total_power: P::min_value(),
-            _phantom_ordering: PhantomData,
-        });
+        let div_map = Rc::new(DivMap::new(&max_exp));
+        let by_sign_lm_ratio_and_lm =
+            RatioMonomialIndex::new(num_vars, div_map.clone(), Vec::new());
+        let syzygies = MonomialIndex::new(num_vars, div_map.clone(), vec![]);
         BasisCalculator {
             basis: KnownBasis {
-                div_map: DivMap::new(&max_exp),
-                max_exp,
+                num_vars,
+                div_map,
                 polys: Vec::new(),
-                by_sign_lm_ratio: BTreeMap::new(),
-                lowest_monomial_ratio,
+                by_sign_lm_ratio_and_lm,
             },
-            syzygies: SyzygySet::new(),
+            max_exp,
+            syzygies,
             spairs: s_pairs::SPairTriangle::new(),
             ratio_map: CmpMap::new(),
         }
@@ -137,7 +114,8 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
         Polynomial<O, I, C, P>,
         Vec<(u32, u32)>,
     )> {
-        self.spairs.get_next(&self.basis, &mut self.syzygies)
+        self.spairs
+            .get_next(&self.basis, &mut self.syzygies, &mut self.max_exp)
     }
 
     pub fn get_basis(&self) -> &KnownBasis<O, I, C, P> {
@@ -180,18 +158,18 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
 
         let sign_poly = Box::new(sign_poly);
 
-        self.update_max_exp(&sign_poly.masked_signature.signature.monomial);
+        self.max_exp
+            .update(&sign_poly.masked_signature.signature.monomial);
         for term in sign_poly.polynomial.terms.iter() {
-            self.update_max_exp(&term.monomial);
+            self.max_exp.update(&term.monomial);
         }
 
         self.spairs
             .add_column(&sign_poly, &self.basis, &self.syzygies);
 
-        self.basis.by_sign_lm_ratio.insert(
-            (PointedCmp(&sign_poly.sign_to_lm_ratio), sign_poly.idx),
-            sign_poly.as_ref(),
-        );
+        self.basis
+            .by_sign_lm_ratio_and_lm
+            .insert(sign_poly.as_ref());
 
         self.basis.polys.push(sign_poly);
     }
@@ -225,7 +203,8 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
             let divmask = self.basis.div_map.map(&signature.monomial);
 
             let masked_signature = MaskedSignature { divmask, signature };
-            if !contains_divisor(&masked_signature, &self.syzygies) {
+            // Do not add redundant koszul syzygies:
+            if !self.syzygies.contains_divisor(masked_signature.monomial()) {
                 self.add_syzygy(masked_signature);
                 // DO NOT mark the original S-pair as syzygy, because it is not!
                 // Except in special cases that have already been handled,
@@ -235,24 +214,21 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
         }
     }
 
-    pub fn maybe_recalculate_divmasks(&mut self) {
+    /// Recalculate divmaps and rebalance indexes.
+    pub fn maybe_rebuild_structures(&mut self) {
         const RECALC_PERCENTAGE: u8 = 20;
 
         // If changes are smaller then the give percerntage, do nothing.
-        if !self
-            .basis
-            .max_exp
-            .has_grown_beyond_percentage(RECALC_PERCENTAGE)
-        {
+        if !self.max_exp.has_grown_beyond_percentage(RECALC_PERCENTAGE) {
             return;
         }
 
-        println!("Recalculating divmasks.");
+        println!("Rebuilding indexes.");
 
         // Recreate the div map.
-        self.basis.max_exp.reset_tracking();
-        self.basis.div_map = DivMap::new(&self.basis.max_exp);
-        let div_map = &self.basis.div_map;
+        self.max_exp.reset_tracking();
+        self.basis.div_map = Rc::new(DivMap::new(&self.max_exp));
+        let div_map = self.basis.div_map.clone();
 
         // Recalculate both masks of each polynomial.
         for poly in self.basis.polys.iter_mut() {
@@ -263,27 +239,45 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
             poly.as_mut().masked_signature.divmask = sign_divmask;
         }
 
-        // Recalculate the mask of each syzygy.
-        for (monomial, divmask) in self.syzygies.iter_mut() {
-            *divmask = div_map.map(&monomial);
-        }
+        // Recalculates the mask and recreates the index for syzygy basis.
+        replace_with_or_abort(&mut self.syzygies, |syzygies| {
+            let mut syzygies = syzygies.to_vec();
+            for syzygy in syzygies.iter_mut() {
+                syzygy.divmask = div_map.map(&syzygy.monomial);
+            }
+            SyzygySet::new(self.basis.num_vars, div_map.clone(), syzygies)
+        });
+
+        // Recreate the index for reductions.
+        self.basis.by_sign_lm_ratio_and_lm = RatioMonomialIndex::new(
+            self.basis.num_vars,
+            div_map,
+            self.basis.polys.iter().map(|p| addr_of!(**p)).collect(),
+        );
     }
 
     pub fn clear_syzygies(&mut self) {
-        self.syzygies.clear();
+        self.syzygies = SyzygySet::new(self.basis.num_vars, self.basis.div_map.clone(), vec![]);
     }
 
     fn add_syzygy(&mut self, signature: MaskedSignature<O, I, P>) {
-        self.update_max_exp(&signature.signature.monomial);
+        self.max_exp.update(&signature.signature.monomial);
 
-        self.syzygies
-            .push((signature.signature.monomial, signature.divmask));
+        self.syzygies.insert(MaskedMonomial {
+            divmask: signature.divmask,
+            monomial: signature.signature.monomial,
+        });
     }
 
-    fn update_max_exp(&mut self, monomial: &Monomial<O, I, P>) {
-        for var in monomial.product.iter() {
-            self.basis.max_exp.add_var(var);
-        }
+    pub fn print_statistics(&self) {
+        println!(
+            "* singular criterion eliminations: {}",
+            self.spairs.get_singular_criterion_counter()
+        );
+        println!(
+            "* low base divisors found: {}",
+            self.spairs.get_lbd_counter()
+        );
     }
 }
 

@@ -264,8 +264,8 @@ fn child_runner(
     // Parse child output:
     let (outcome, self_reported_time, max_progress) = output_processor(output);
 
-    // Stdout is closed. The process is either dead or dying, so we don't need
-    // the timeout thread anymore:
+    // All output was parsed and stdout is closed. So the process is either dead
+    // or dying, and we don't need the timeout thread anymore:
     drop(signal_timeout);
     let timed_out = timeout_watcher.join().unwrap();
     let outcome = match timed_out {

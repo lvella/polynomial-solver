@@ -8,7 +8,7 @@
 use bitvec::macros::internal::funty::Unsigned;
 use std::marker::PhantomData;
 
-use super::{Exponent, Id, Monomial, VariablePower};
+use super::{monomial_ordering::Ordering, Exponent, Id, Monomial};
 
 /// Divmap is the function used to generate the divmask from a monomial.
 /// Divmasks are only compatible if generated from the same divmap. The
@@ -130,20 +130,22 @@ impl<P: Exponent> MaximumExponentsTracker<P> {
         self.max_exponents.len()
     }
 
-    /// Maybe update the maximum seen exponent for some given variable.
+    /// Update the maximum seen exponent for each variable in the given monomial.
     ///
-    /// The variable must have id smaller than the num_vars given at tracker
+    /// The variables must have ids smaller than the num_vars given at tracker
     /// creation.
-    pub fn add_var<I: Id>(&mut self, var: &VariablePower<I, P>) {
-        let idx = var.id.to_idx();
-        if self.max_exponents[idx] >= var.power {
-            return;
-        }
-        let mut delta = var.power.clone();
-        delta -= &self.max_exponents[idx];
-        self.total += delta;
+    pub fn update<O: Ordering, I: Id>(&mut self, monomial: &Monomial<O, I, P>) {
+        for var in monomial.get_product() {
+            let idx = var.id.to_idx();
+            if self.max_exponents[idx] >= var.power {
+                return;
+            }
+            let mut delta = var.power.clone();
+            delta -= &self.max_exponents[idx];
+            self.total += delta;
 
-        self.max_exponents[idx] = var.power.clone();
+            self.max_exponents[idx] = var.power.clone();
+        }
     }
 
     pub fn has_grown_beyond_percentage(&self, percentage: u8) -> bool {

@@ -4,19 +4,16 @@
 //! http://www.broune.com/papers/issac2012.html
 
 mod basis_calculator;
+mod indices;
 mod s_pairs;
-mod signature_monomial_index;
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fmt::Display,
-    ops::{Bound::Excluded, Mul},
+    ops::Mul,
 };
 
-use self::{
-    basis_calculator::{BasisCalculator, KnownBasis, SyzygySet},
-    s_pairs::PartialSPair,
-};
+use self::basis_calculator::{BasisCalculator, KnownBasis};
 
 use super::{
     division::Field,
@@ -29,23 +26,18 @@ use num_traits::{One, Signed};
 type CmpMap<O, I, P> = crate::fast_compare::ComparerMap<Signature<O, I, P>>;
 type Ratio<O, I, P> = crate::fast_compare::FastCompared<Signature<O, I, P>>;
 
-/// Tests if a set contains a divisor for a signature.
-///
-/// This is basically the implementation of signature criterion.
-fn contains_divisor<O: Ordering, I: Id, P: SignedExponent>(
-    msign: &MaskedSignature<O, I, P>,
-    set: &SyzygySet<O, I, P>,
-) -> bool {
-    let masked_dividend = &msign.monomial();
-
-    for maybe_divisor in set.iter() {
-        let masked_divisor = MaskedMonomialRef(&maybe_divisor.1, &maybe_divisor.0);
-        if masked_divisor.divides(masked_dividend) {
-            return true;
-        }
+/// Returns the exponent of a variable inside a monomial.
+fn get_var_exp_from_monomial<O: Ordering, I: Id, E: SignedExponent>(
+    monomial: &Monomial<O, I, E>,
+    id: &I,
+) -> E {
+    let m = &monomial.product;
+    // Is binary search better than linear?
+    // TODO: Maybe create a dense monomial to skip this search?
+    match m.binary_search_by(|v| id.cmp(&v.id)) {
+        Ok(idx) => m[idx].power.clone(),
+        Err(_) => E::zero(),
     }
-
-    false
 }
 
 /// The Power type must be signed for this algorithm to work,
@@ -58,8 +50,8 @@ type DivMaskSize = u32;
 type DivMap<P> = divmask::DivMap<DivMaskSize, P>;
 type DivMask = divmask::DivMask<DivMaskSize>;
 
-/// Wraps together a divmask and a (hopefully) corresponding monomial, wrapping
-/// the divisibility test.
+/// Like MaskedMonomial, but stores individual references for the monomial and
+/// its divmask.
 struct MaskedMonomialRef<'a, O: Ordering, I: Id, P: SignedExponent>(
     &'a DivMask,
     &'a Monomial<O, I, P>,
@@ -190,28 +182,6 @@ impl<O: Ordering, I: Id, C: Field, P: SignedExponent> SignPoly<O, I, C, P> {
     }
 }
 
-struct PointedCmp<T>(*const T);
-
-impl<T: PartialEq> PartialEq for PointedCmp<T> {
-    fn eq(&self, other: &Self) -> bool {
-        unsafe { *self.0 == *other.0 }
-    }
-}
-
-impl<T: Eq> Eq for PointedCmp<T> {}
-
-impl<T: PartialOrd> PartialOrd for PointedCmp<T> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        unsafe { (*self.0).partial_cmp(&*other.0) }
-    }
-}
-
-impl<T: Ord> Ord for PointedCmp<T> {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        unsafe { (*self.0).cmp(&*other.0) }
-    }
-}
-
 /// The 3 possible results of a regular reduction.
 enum RegularReductionResult<O: Ordering, I: Id, C: Field, P: SignedExponent> {
     /// Polynomial was singular top reducible
@@ -222,79 +192,6 @@ enum RegularReductionResult<O: Ordering, I: Id, C: Field, P: SignedExponent> {
     NonZeroConstant(Polynomial<O, I, C, P>),
     /// Polynomial was reduced to some non singular top reducible polynomial.
     Reduced(SignPoly<O, I, C, P>),
-}
-
-/// Tests for singular criterion: searches the basis members for an element
-/// that would make the S-pair redundant.
-///
-/// Returns true if the S-pair is singular and must be eliminated.
-fn test_singular_criterion<O: Ordering, I: Id, C: Field, P: SignedExponent>(
-    m_sign: &MaskedSignature<O, I, P>,
-    s_pair: &PartialSPair<O, I, C, P>,
-    basis: &KnownBasis<O, I, C, P>,
-) -> bool {
-    // All this trickery with inner function just to avoid copying the
-    // lowest_monomial_ratio from basis to create upper_limit.
-    //
-    // TODO: fix this very ugly hack
-    fn inner<O: Ordering, I: Id, C: Field, P: SignedExponent>(
-        upper_limit: &Ratio<O, I, P>,
-        m_sign: &MaskedSignature<O, I, P>,
-        s_pair: &PartialSPair<O, I, C, P>,
-        basis: &KnownBasis<O, I, C, P>,
-    ) -> bool {
-        // Limit search to elements whose signature/lm ratio are greater than the
-        // current candidate we have, in descending order, so that the first match
-        // we find will be the one with the smallest leading monomial.
-        let lower_limit = sign_to_monomial_ratio(&m_sign.signature, &s_pair.leading_term.monomial);
-        let search_range = basis
-            .by_sign_lm_ratio
-            .range((
-                Excluded((PointedCmp(&lower_limit), u32::MAX)),
-                Excluded((PointedCmp(upper_limit), u32::MIN)),
-            ))
-            .rev();
-
-        let masked_sig_monomial = m_sign.monomial();
-
-        for (_, singular) in search_range {
-            let singular = unsafe { &**singular };
-            assert!(singular.signature().idx == m_sign.signature.idx);
-            // Test singular criterion: if we find some element p whose signature
-            // divides the S-pair's signature, it means there is some f such that
-            // f*e has the same signature. Since we only search greater sign/LM
-            // ratio, f*e will necessarily have smaller LM than the S-pair, which
-            // means that this S-pair can be eliminated immediately, according to
-            // Section 3.2 of the paper.
-            if singular
-                .masked_signature
-                .monomial()
-                .divides(&masked_sig_monomial)
-            {
-                return true;
-            }
-        }
-
-        false
-    }
-
-    let upper_limit = Ratio::new(
-        None,
-        Signature {
-            // The higher index will limit the search to smaller indices.
-            idx: m_sign.signature.idx + 1,
-            monomial: basis.lowest_monomial_ratio.replace(Monomial::one()),
-        },
-    )
-    .unwrap();
-
-    let ret = inner(&upper_limit, m_sign, s_pair, basis);
-
-    basis
-        .lowest_monomial_ratio
-        .set(upper_limit.into_inner().monomial);
-
-    ret
 }
 
 /// Regular reduction, as defined in the paper.
@@ -497,10 +394,10 @@ fn handle_reduction_result<
         }
     }
 
-    // Something was added to the basis calculator, be it polynomial or
-    // syzygy, so the monomials might have changed enough to justify
-    // a recalculation of the divmasks.
-    c.maybe_recalculate_divmasks();
+    // Something was added to the basis calculator, be it polynomial or syzygy,
+    // so the monomials might have changed enough to justify a recalculation of
+    // the divmasks and indices.
+    c.maybe_rebuild_structures();
 
     Ok(())
 }
@@ -600,6 +497,8 @@ pub fn grobner_basis<
         // divisible by the currently known syzygies.
         c.clear_syzygies();
     }
+
+    c.print_statistics();
 
     // Return the polynomials from the basis.
     c.into_iter().collect()
