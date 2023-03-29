@@ -249,6 +249,7 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
     ) -> Option<*const SignPoly<O, I, F, E>> {
         let dense_monomial = make_dense_monomial(lm.1);
         let mut found = None;
+        let mut found_idx = u32::MAX;
         self.0.search(
             &|key, contained_gcd| {
                 if let DivMaskTestResult::NotDivisible = contained_gcd.divmask.divides(lm.0) {
@@ -276,15 +277,18 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
             &mut |Entry(poly_ptr)| {
                 let poly = unsafe { &**poly_ptr };
                 let ord = poly.sign_to_lm_ratio.cmp(s_lm_ratio);
-                if ord != std::cmp::Ordering::Greater && poly.leading_monomial().divides(&lm) {
-                    found = Some(*poly_ptr);
-                    // Keep searching if ratios are equal (meaning this find is
-                    // a singular reducer), otherwise stop searching (this find
-                    // is a regular reducer, which takes precedence).
-                    ord == std::cmp::Ordering::Equal
-                } else {
-                    true
+                if !ord.is_gt() && poly.leading_monomial().divides(&lm) {
+                    if ord.is_lt() {
+                        if poly.idx < found_idx {
+                            found_idx = poly.idx;
+                            found = Some(*poly_ptr);
+                        }
+                    } else if found.is_none() {
+                        found = Some(*poly_ptr);
+                    }
                 }
+
+                true
             },
         );
 
