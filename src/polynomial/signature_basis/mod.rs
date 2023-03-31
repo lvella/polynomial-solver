@@ -233,10 +233,11 @@ fn regular_reduce<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Di
             monomial: m,
         };
 
-        // Skip searching for a divisor for 1 and (maybe) save some time.
-        if term.monomial.is_one() {
+        // Early stop reduction if we already have a leading term (or if such
+        // term is constant).
+        if !reduced_terms.is_empty() || term.monomial.is_one() {
             reduced_terms.push(term);
-            break;
+            continue;
         }
 
         // Calculate the divmask for the term to be reduced:
