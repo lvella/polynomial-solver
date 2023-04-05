@@ -1,6 +1,14 @@
 //! S-pairs data structures.
 
-use std::{cmp::max, collections::BinaryHeap, fmt::Display, marker::PhantomData, ops::Index};
+use std::{
+    cell::{Ref, RefCell},
+    cmp::max,
+    collections::BinaryHeap,
+    fmt::Display,
+    marker::PhantomData,
+    ops::Index,
+    rc::Rc,
+};
 
 use bitvec::prelude::BitVec;
 
@@ -59,9 +67,9 @@ impl<O: Ordering, I: Id, P: SignedExponent> HalfSPair<O, I, P> {
             std::cmp::Ordering::Less => {
                 // Test for high-ratio base divisor criterion:
                 if let Some(bd) = &base_divisors.high {
-                    if bd.0.idx != other.idx
-                        && triangle[(bd.0.idx, other.idx)]
-                        && other.sign_to_lm_ratio > bd.0.sign_to_lm_ratio
+                    if bd.idx != other.idx
+                        && triangle[(bd.idx, other.idx)]
+                        && other.sign_to_lm_ratio > bd.sign_to_lm_ratio
                     {
                         return Err(true);
                     }
@@ -178,7 +186,7 @@ impl<O: Ordering, I: Id, P: SignedExponent> SPairInfo<O, I, P> {
         basis: &KnownBasis<O, I, C, P>,
     ) -> Self {
         let a_poly = basis.polys[half_spair.idx as usize].as_ref();
-        Self::new(b_poly, a_poly, Some(half_spair.signature))
+        Self::new(b_poly, &a_poly.borrow(), Some(half_spair.signature))
     }
 }
 
@@ -222,16 +230,16 @@ impl<O: Ordering, I: Id, P: SignedExponent> Ord for SPairColumn<O, I, P> {
 /// S-Pair where only the leading term has been evaluated.
 pub struct PartialSPair<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> {
     pub leading_term: Term<O, I, C, P>,
-    origin_poly: &'a SignPoly<O, I, C, P>,
+    origin_poly: Ref<'a, SignPoly<O, I, C, P>>,
     build_info: SPairBuildInfo<O, I, P>,
 }
 
 impl<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> PartialSPair<'a, O, I, C, P> {
     fn new(
         build_info: SPairBuildInfo<O, I, P>,
-        basis: &'a [Box<SignPoly<O, I, C, P>>],
+        basis: &'a [Rc<RefCell<SignPoly<O, I, C, P>>>],
     ) -> PartialSPair<'a, O, I, C, P> {
-        let origin_poly = basis[build_info.base_idx as usize].as_ref();
+        let origin_poly = basis[build_info.base_idx as usize].borrow();
         let mut leading_term = origin_poly.polynomial.terms[0].clone();
         leading_term.monomial = leading_term.monomial * build_info.multiplier.clone();
 
@@ -259,32 +267,19 @@ impl<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> PartialSPair<'a, O, I,
 /// TODO: Test without this criterion again when a proper multidimensional index
 /// have been implemented, because right now it makes things worse, not better.
 struct BaseDivisors<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> {
-    high: Option<HighBaseDivisor<'a, O, I, C, P>>,
+    high: Option<Ref<'a, SignPoly<O, I, C, P>>>,
     low: Option<LowBaseDivisor<'a, O, I, C, P>>,
 }
 
-impl<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> BaseDivisors<'a, O, I, C, P> {
-    fn new(sign_poly: &SignPoly<O, I, C, P>, basis: &'a KnownBasis<O, I, C, P>) -> Self {
-        Self {
-            high: HighBaseDivisor::new(sign_poly, basis),
-            low: LowBaseDivisor::new(sign_poly, basis),
-        }
-    }
-}
+fn get_high_base_divisor<O: Ordering, I: Id, C: Field, P: SignedExponent>(
+    sign_poly: &SignPoly<O, I, C, P>,
+    basis: &KnownBasis<O, I, C, P>,
+) -> Option<Rc<RefCell<SignPoly<O, I, C, P>>>> {
+    let lm = sign_poly.leading_monomial();
 
-struct HighBaseDivisor<'a, O: Ordering, I: Id, C: Field, P: SignedExponent>(
-    &'a SignPoly<O, I, C, P>,
-);
-
-impl<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> HighBaseDivisor<'a, O, I, C, P> {
-    fn new(sign_poly: &SignPoly<O, I, C, P>, basis: &KnownBasis<O, I, C, P>) -> Option<Self> {
-        let lm = sign_poly.leading_monomial();
-
-        basis
-            .by_sign_lm_ratio_and_lm
-            .find_high_base_divisor(&sign_poly.sign_to_lm_ratio, lm)
-            .map(|ptr| Self(unsafe { &*ptr }))
-    }
+    basis
+        .by_sign_lm_ratio_and_lm
+        .find_high_base_divisor(&sign_poly.sign_to_lm_ratio, lm)
 }
 
 /// An iterator aggregating multiple VariablePower iterators, assumed to be in
@@ -367,16 +362,18 @@ impl<'a, I: 'a + Id, P: 'a + SignedExponent> Iterator for MultiVarWalk<'a, I, P>
 
 /// Low base divisor information
 struct LowBaseDivisor<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> {
-    divisor: &'a SignPoly<O, I, C, P>,
+    divisor: Ref<'a, SignPoly<O, I, C, P>>,
     /// The x^v in the paper.
     discriminator: Monomial<O, I, P>,
     discriminator_mask: DivMask,
 }
 
 impl<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> LowBaseDivisor<'a, O, I, C, P> {
-    /// For low base divisor, find the polynomial with maximum sign/lm ratio
-    /// whose signature divides sign_poly's.
-    fn new(sign_poly: &SignPoly<O, I, C, P>, basis: &'a KnownBasis<O, I, C, P>) -> Option<Self> {
+    fn new(
+        sign_poly: &SignPoly<O, I, C, P>,
+        basis: &KnownBasis<O, I, C, P>,
+        divisor: Ref<'a, SignPoly<O, I, C, P>>,
+    ) -> Self {
         // Creates a monomial where all variables have maximum power. This
         // will be useful in querying the BTreeMap below, and will be the
         // basis of the discriminator.
@@ -403,10 +400,6 @@ impl<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> LowBaseDivisor<'a, O, 
             },
         )
         .unwrap();
-
-        let divisor = basis
-            .by_sign_lm_ratio_and_lm
-            .find_low_base_divisor(sign_poly)?;
 
         // Calculate the discriminant:
         let a = &divisor.polynomial.terms[0].monomial;
@@ -456,11 +449,11 @@ impl<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> LowBaseDivisor<'a, O, 
             true
         });
 
-        Some(LowBaseDivisor {
+        LowBaseDivisor {
             divisor,
             discriminator_mask: basis.div_map.map(&v),
             discriminator: v,
-        })
+        }
     }
 
     fn get_discriminator(&self) -> MaskedMonomialRef<O, I, P> {
@@ -545,17 +538,26 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
         // Base divisors are used in a elimination criterion. We must calculate
         // them beforehand as they are used in every S-pair added in this new
         // column.
-        let base_divisors = BaseDivisors::new(sign_poly, basis);
-        if let Some(_) = &base_divisors.low {
-            self.lbd_counter += 1;
-        }
+        let low = basis
+            .by_sign_lm_ratio_and_lm
+            .find_low_base_divisor(sign_poly);
+        let high = get_high_base_divisor(sign_poly, basis);
+
+        // Borrow the divisors just once:
+        let base_divisors = BaseDivisors {
+            low: low.as_ref().map(|divisor| {
+                self.lbd_counter += 1;
+                LowBaseDivisor::new(sign_poly, basis, divisor.borrow())
+            }),
+            high: high.as_ref().map(|divisor| divisor.borrow()),
+        };
 
         let mut new_spairs = Vec::new();
         let mut reduces_to_zero = BitVec::with_capacity(basis.polys.len());
         for other_poly in basis.polys.iter() {
             let red_to_zero = match HalfSPair::new_if_not_eliminated(
                 sign_poly,
-                other_poly.as_ref(),
+                &other_poly.borrow(),
                 &base_divisors,
                 basis,
                 syzygies,
@@ -587,19 +589,22 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
     }
 
     /// Extract the one of the S-pairs with minimal signature. There can be multiple.
-    fn pop<C: Field>(&mut self, basis: &[Box<SignPoly<O, I, C, P>>]) -> Option<SPairInfo<O, I, P>> {
+    fn pop<C: Field>(
+        &mut self,
+        basis: &[Rc<RefCell<SignPoly<O, I, C, P>>>],
+    ) -> Option<SPairInfo<O, I, P>> {
         // Get the S-pair at the head of the column
         let mut head = self.heads.pop()?;
         let ret = head.head_spair;
 
         // Update the column's head and insert it back into the heap
         if let Some(next_head_idx) = head.column.pop() {
-            let a_poly = basis[head.origin_idx as usize].as_ref();
+            let a_poly = basis[head.origin_idx as usize].borrow();
             assert!(a_poly.idx == head.origin_idx);
-            let b_poly = basis[next_head_idx as usize].as_ref();
+            let b_poly = basis[next_head_idx as usize].borrow();
             assert!(b_poly.idx == next_head_idx);
 
-            head.head_spair = SPairInfo::new(a_poly, b_poly, None);
+            head.head_spair = SPairInfo::new(&a_poly, &b_poly, None);
             self.heads.push(head);
         }
 

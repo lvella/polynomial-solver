@@ -1,6 +1,7 @@
 //! This module uses a k-d tree to provide a multidimensional index on signature
 //! to leading monomial ratio and the exponents of the leading monomial.
 
+use std::cell::{Ref, RefCell};
 use std::marker::PhantomData;
 use std::rc::Rc;
 
@@ -15,36 +16,32 @@ use crate::polynomial::{division::Field, monomial_ordering::Ordering, Id, Variab
 use super::{make_dense_monomial, DivMap, MaskedMonomial, SignedExponent};
 
 /// The entries stored in the leafs are raw pointers to SignPoly.
-struct Entry<O: Ordering, I: Id, F: Field, E: SignedExponent>(*const SignPoly<O, I, F, E>);
+struct Entry<O: Ordering, I: Id, F: Field, E: SignedExponent>(Rc<RefCell<SignPoly<O, I, F, E>>>);
 
 impl<O: Ordering, I: Id, F: Field, E: SignedExponent> Entry<O, I, F, E> {
-    fn poly(&self) -> &SignPoly<O, I, F, E> {
-        unsafe { &(*self.0) }
-    }
-
-    fn lm(&self) -> &Monomial<O, I, E> {
-        &self.poly().polynomial.terms[0].monomial
+    fn lm(&self) -> Ref<Monomial<O, I, E>> {
+        Ref::map(self.0.borrow(), |p| &p.polynomial.terms[0].monomial)
     }
 }
 
 impl<O: Ordering, I: Id, F: Field, E: SignedExponent> kd_tree::Entry for Entry<O, I, F, E> {
-    type KeyElem = KeyElem<O, I, E>;
+    type KeyElem = KeyElem<O, I, F, E>;
     type PartitionFilter = PartitionFilter<O, I, F, E>;
 
     fn get_key_elem(&self, dim: usize) -> Self::KeyElem {
-        let poly = self.poly();
         if dim == 0 {
-            KeyElem::S2LMRatio(&poly.sign_to_lm_ratio)
+            KeyElem::S2LMRatio(Rc::clone(&self.0))
         } else {
+            let poly = self.0.borrow();
             let id = I::from_idx(dim - 1);
-            let power = get_var_exp_from_lm(poly, &id);
+            let power = get_var_exp_from_lm(&poly, &id);
             KeyElem::MonomialVar(VariablePower { id, power })
         }
     }
 
     fn average_filter(&self, other: &Self, dim: usize) -> Self::PartitionFilter {
-        let a = self.poly();
-        let b = other.poly();
+        let a = self.0.borrow();
+        let b = other.0.borrow();
         if dim == 0 {
             // The tree elements must have accelerated ratio comparers, so these
             // unwrap must not panic:
@@ -58,8 +55,8 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> kd_tree::Entry for Entry<O
         } else {
             let id = I::from_idx(dim - 1);
 
-            let exp_a = get_var_exp_from_lm(a, &id);
-            let exp_b = get_var_exp_from_lm(b, &id);
+            let exp_a = get_var_exp_from_lm(&a, &id);
+            let exp_b = get_var_exp_from_lm(&b, &id);
             let avg = (exp_a + exp_b + E::one()) / E::from(2);
 
             PartitionFilter::MonomialVar(VariablePower { id, power: avg })
@@ -67,10 +64,10 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> kd_tree::Entry for Entry<O
     }
 
     fn cmp_dim(&self, other: &Self::KeyElem) -> std::cmp::Ordering {
-        let poly = self.poly();
+        let poly = self.0.borrow();
         match other {
-            KeyElem::S2LMRatio(ratio) => poly.sign_to_lm_ratio.cmp(unsafe { &(**ratio) }),
-            KeyElem::MonomialVar(var) => get_var_exp_from_lm(poly, &var.id).cmp(&var.power),
+            KeyElem::S2LMRatio(other) => poly.sign_to_lm_ratio_cmp(&other.borrow()),
+            KeyElem::MonomialVar(var) => get_var_exp_from_lm(&poly, &var.id).cmp(&var.power),
         }
     }
 }
@@ -85,12 +82,12 @@ fn get_var_exp_from_lm<O: Ordering, I: Id, F: Field, E: SignedExponent>(
 /// The key element 0 is a signature/leading monomial ratio, which is stored as
 /// the integer comparer and a pointer to the original. The other key elements
 /// are variables to some power, factors of the leading monomial.
-enum KeyElem<O: Ordering, I: Id, E: SignedExponent> {
-    S2LMRatio(*const Ratio<O, I, E>),
+enum KeyElem<O: Ordering, I: Id, F: Field, E: SignedExponent> {
+    S2LMRatio(Rc<RefCell<SignPoly<O, I, F, E>>>),
     MonomialVar(VariablePower<I, E>),
 }
 
-impl<O: Ordering, I: Id, E: SignedExponent> kd_tree::KeyElem for KeyElem<O, I, E> {
+impl<O: Ordering, I: Id, F: Field, E: SignedExponent> kd_tree::KeyElem for KeyElem<O, I, F, E> {
     fn dim_index(&self) -> usize {
         match self {
             KeyElem::S2LMRatio(_) => 0,
@@ -113,11 +110,12 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> kd_tree::PartitionFilter
     type Entry = Entry<O, I, F, E>;
 
     fn is_less(&self, e: &Self::Entry) -> bool {
+        let poly = e.0.borrow();
         match self {
             PartitionFilter::S2LMRatio(comparer, _) => {
-                e.poly().sign_to_lm_ratio.get_comparer().unwrap() < *comparer
+                poly.sign_to_lm_ratio.get_comparer().unwrap() < *comparer
             }
-            PartitionFilter::MonomialVar(var) => get_var_exp_from_lm(e.poly(), &var.id) < var.power,
+            PartitionFilter::MonomialVar(var) => get_var_exp_from_lm(&poly, &var.id) < var.power,
         }
     }
 
@@ -147,7 +145,7 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> DataOperations for Operati
     /// Update a node_data with the GCD of itself and the leading monomial of a
     /// new entry.
     fn update(&self, node_data: &mut Self::NodeData, new_entry: &Self::Entry) {
-        node_data.gcd_update(new_entry.lm(), &self.div_map);
+        node_data.gcd_update(&new_entry.lm(), &self.div_map);
     }
 }
 
@@ -165,9 +163,9 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
     pub fn new(
         num_variables: usize,
         div_map: Rc<DivMap<E>>,
-        elems: Vec<*const SignPoly<O, I, F, E>>,
+        elems: &[Rc<RefCell<SignPoly<O, I, F, E>>>],
     ) -> Self {
-        let entries = elems.into_iter().map(|e| Entry(e)).collect();
+        let entries = elems.into_iter().map(|e| Entry(Rc::clone(e))).collect();
         Self(KDTree::new(
             num_variables + 1,
             entries,
@@ -178,7 +176,7 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
         ))
     }
 
-    pub fn insert(&mut self, elem: *const SignPoly<O, I, F, E>) {
+    pub fn insert(&mut self, elem: Rc<RefCell<SignPoly<O, I, F, E>>>) {
         self.0.insert(Entry(elem))
     }
 
@@ -186,8 +184,8 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
         &self,
         s_lm_ratio: &Ratio<O, I, E>,
         lm: MaskedMonomialRef<O, I, E>,
-    ) -> Option<*const SignPoly<O, I, F, E>> {
-        let mut best: Option<*const SignPoly<O, I, F, E>> = None;
+    ) -> Option<Rc<RefCell<SignPoly<O, I, F, E>>>> {
+        let mut best: Option<Rc<RefCell<SignPoly<O, I, F, E>>>> = None;
         let dense_monomial = make_dense_monomial(lm.1);
         self.0.search(
             &|key, contained_gcd| {
@@ -196,12 +194,12 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
                 };
 
                 match key {
-                    KeyElem::S2LMRatio(ratio) => {
+                    KeyElem::S2LMRatio(key) => {
                         // Since the reference polynomial is fully regular
                         // reduced, all possible divisors must have higher
                         // signature/LM ratio, otherwise it would already have
                         // been reduced or eliminated as singular.
-                        if unsafe { *s_lm_ratio < **ratio } {
+                        if *s_lm_ratio < key.borrow().sign_to_lm_ratio {
                             SearchPath::Both
                         } else {
                             SearchPath::GreaterOrEqualThan
@@ -218,20 +216,19 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
                     }
                 }
             },
-            &mut |Entry(poly_ptr)| {
-                let poly = unsafe { &**poly_ptr };
-                if poly.leading_monomial().divides(&lm) {
-                    assert!(poly.sign_to_lm_ratio > *s_lm_ratio);
-                    match best {
+            &mut |Entry(poly)| {
+                let poly_ref = poly.borrow();
+                if poly_ref.leading_monomial().divides(&lm) {
+                    assert!(poly_ref.sign_to_lm_ratio > *s_lm_ratio);
+                    match &best {
                         Some(best_poly) => {
-                            let best_poly = unsafe { &*best_poly };
-                            // The best high base divisor is the one that with
+                            // The best high base divisor is the one with
                             // maximum signature/lead ratio.
-                            if poly.sign_to_lm_ratio > best_poly.sign_to_lm_ratio {
-                                best = Some(*poly_ptr);
+                            if poly_ref.sign_to_lm_ratio > best_poly.borrow().sign_to_lm_ratio {
+                                best = Some(Rc::clone(poly));
                             }
                         }
-                        None => best = Some(*poly_ptr),
+                        None => best = Some(Rc::clone(poly)),
                     }
                 }
 
@@ -242,13 +239,58 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
         best
     }
 
+    /// For low base divisor, find the polynomial with maximum sign/lm ratio
+    /// whose signature divides sign_poly's.
+    pub fn find_low_base_divisor(
+        &self,
+        sign_poly: &SignPoly<O, I, F, E>,
+    ) -> Option<Rc<RefCell<SignPoly<O, I, F, E>>>> {
+        let mut found: Option<Rc<RefCell<SignPoly<O, I, F, E>>>> = None;
+
+        self.0.search(
+            &|key, _| {
+                if let KeyElem::S2LMRatio(key) = key {
+                    let b_sign_idx = key.borrow().signature().idx;
+                    match b_sign_idx.cmp(&sign_poly.signature().idx) {
+                        std::cmp::Ordering::Less => SearchPath::GreaterOrEqualThan,
+                        std::cmp::Ordering::Equal => SearchPath::Both,
+                        std::cmp::Ordering::Greater => SearchPath::LessThan,
+                    }
+                } else {
+                    SearchPath::Both
+                }
+            },
+            &mut |Entry(poly)| {
+                let poly_ref = poly.borrow();
+                if poly_ref.signature().idx == sign_poly.signature().idx
+                    && poly_ref
+                        .masked_signature
+                        .monomial()
+                        .divides(&sign_poly.masked_signature.monomial())
+                {
+                    match &found {
+                        Some(best_match) => {
+                            if poly_ref.sign_to_lm_ratio > best_match.borrow().sign_to_lm_ratio {
+                                found = Some(Rc::clone(poly));
+                            }
+                        }
+                        None => found = Some(Rc::clone(poly)),
+                    }
+                }
+                true
+            },
+        );
+
+        found
+    }
+
     pub(in crate::polynomial::signature_basis) fn find_a_reducer(
         &self,
         s_lm_ratio: &Ratio<O, I, E>,
         lm: MaskedMonomialRef<O, I, E>,
-    ) -> Option<*const SignPoly<O, I, F, E>> {
+    ) -> Option<Rc<RefCell<SignPoly<O, I, F, E>>>> {
         let dense_monomial = make_dense_monomial(lm.1);
-        let mut found = None;
+        let mut found: Option<Rc<RefCell<SignPoly<O, I, F, E>>>> = None;
         self.0.search(
             &|key, contained_gcd| {
                 if let DivMaskTestResult::NotDivisible = contained_gcd.divmask.divides(lm.0) {
@@ -256,8 +298,8 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
                 };
 
                 match key {
-                    KeyElem::S2LMRatio(ratio) => {
-                        if s_lm_ratio < (unsafe { &(**ratio) }) {
+                    KeyElem::S2LMRatio(key) => {
+                        if *s_lm_ratio < key.borrow().sign_to_lm_ratio {
                             SearchPath::LessThan
                         } else {
                             SearchPath::Both
@@ -273,11 +315,11 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
                     }
                 }
             },
-            &mut |Entry(poly_ptr)| {
-                let poly = unsafe { &**poly_ptr };
-                let ord = poly.sign_to_lm_ratio.cmp(s_lm_ratio);
-                if ord != std::cmp::Ordering::Greater && poly.leading_monomial().divides(&lm) {
-                    found = Some(*poly_ptr);
+            &mut |Entry(poly)| {
+                let poly_ref = poly.borrow();
+                let ord = poly_ref.sign_to_lm_ratio.cmp(s_lm_ratio);
+                if ord != std::cmp::Ordering::Greater && poly_ref.leading_monomial().divides(&lm) {
+                    found = Some(Rc::clone(poly));
                     // Keep searching if ratios are equal (meaning this find is
                     // a singular reducer), otherwise stop searching (this find
                     // is a regular reducer, which takes precedence).
@@ -312,8 +354,9 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
         let mut is_singular = false;
         self.0.search(
             &|key, _| {
-                if let KeyElem::S2LMRatio(b_ratio_ptr) = key {
-                    let b_ratio = unsafe { &**b_ratio_ptr }.get_value();
+                if let KeyElem::S2LMRatio(b_ratio) = key {
+                    let b_ratio =
+                        Ref::map(b_ratio.borrow(), |poly| poly.sign_to_lm_ratio.get_value());
                     match b_ratio.idx.cmp(&sign.signature.idx) {
                         std::cmp::Ordering::Less => SearchPath::GreaterOrEqualThan,
                         std::cmp::Ordering::Equal => {
@@ -329,8 +372,8 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
                     SearchPath::Both
                 }
             },
-            &mut |Entry(poly_ptr)| {
-                let poly = unsafe { &**poly_ptr };
+            &mut |Entry(poly)| {
+                let poly = poly.borrow();
                 is_singular = sign.signature.idx == poly.signature().idx
                     && poly
                         .masked_signature
@@ -341,51 +384,6 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
             },
         );
         is_singular
-    }
-
-    /// For low base divisor, find the polynomial with maximum sign/lm ratio
-    /// whose signature divides sign_poly's.
-    pub fn find_low_base_divisor<'a>(
-        &'a self,
-        sign_poly: &SignPoly<O, I, F, E>,
-    ) -> Option<&'a SignPoly<O, I, F, E>> {
-        let mut found: Option<&'a SignPoly<O, I, F, E>> = None;
-
-        self.0.search(
-            &|key, _| {
-                if let KeyElem::S2LMRatio(b_ratio_ptr) = key {
-                    let b_ratio = unsafe { &**b_ratio_ptr }.get_value();
-                    match b_ratio.idx.cmp(&sign_poly.signature().idx) {
-                        std::cmp::Ordering::Less => SearchPath::GreaterOrEqualThan,
-                        std::cmp::Ordering::Equal => SearchPath::Both,
-                        std::cmp::Ordering::Greater => SearchPath::LessThan,
-                    }
-                } else {
-                    SearchPath::Both
-                }
-            },
-            &mut |Entry(poly_ptr)| {
-                let poly = unsafe { &**poly_ptr };
-                if poly.signature().idx == sign_poly.signature().idx
-                    && poly
-                        .masked_signature
-                        .monomial()
-                        .divides(&sign_poly.masked_signature.monomial())
-                {
-                    match found {
-                        Some(best_match) => {
-                            if poly.sign_to_lm_ratio > best_match.sign_to_lm_ratio {
-                                found = Some(poly);
-                            }
-                        }
-                        None => found = Some(poly),
-                    }
-                }
-                true
-            },
-        );
-
-        found
     }
 }
 
