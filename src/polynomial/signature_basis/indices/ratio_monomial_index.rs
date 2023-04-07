@@ -20,7 +20,7 @@ struct Entry<O: Ordering, I: Id, F: Field, E: SignedExponent>(Rc<RefCell<SignPol
 
 impl<O: Ordering, I: Id, F: Field, E: SignedExponent> Entry<O, I, F, E> {
     fn lm(&self) -> Ref<Monomial<O, I, E>> {
-        Ref::map(self.0.borrow(), |p| &p.polynomial.terms[0].monomial)
+        Ref::map(self.0.borrow(), |p| &p.head[0].monomial)
     }
 }
 
@@ -76,7 +76,7 @@ fn get_var_exp_from_lm<O: Ordering, I: Id, F: Field, E: SignedExponent>(
     poly: &SignPoly<O, I, F, E>,
     id: &I,
 ) -> E {
-    get_var_exp_from_monomial(&poly.polynomial.terms[0].monomial, id)
+    get_var_exp_from_monomial(&poly.head[0].monomial, id)
 }
 
 /// The key element 0 is a signature/leading monomial ratio, which is stored as

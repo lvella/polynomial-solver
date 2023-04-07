@@ -3,7 +3,7 @@
 use std::{
     cell::{Ref, RefCell},
     cmp::max,
-    collections::BinaryHeap,
+    collections::{BTreeMap, BinaryHeap},
     fmt::Display,
     marker::PhantomData,
     ops::Index,
@@ -11,10 +11,11 @@ use std::{
 };
 
 use bitvec::prelude::BitVec;
+use itertools::Itertools;
 
 use crate::polynomial::{
     division::Field, divmask::MaximumExponentsTracker, monomial_ordering::Ordering, Id, Monomial,
-    Polynomial, Term, VariablePower,
+    Term, VariablePower,
 };
 
 use super::{
@@ -27,9 +28,7 @@ fn calculate_spair_factor<O: Ordering, I: Id, C: Field, P: SignedExponent>(
     base: &SignPoly<O, I, C, P>,
     other: &SignPoly<O, I, C, P>,
 ) -> Monomial<O, I, P> {
-    other.polynomial.terms[0]
-        .monomial
-        .div_by_gcd(&base.polynomial.terms[0].monomial)
+    other.head[0].monomial.div_by_gcd(&base.head[0].monomial)
 }
 
 /// Half S-pair
@@ -151,9 +150,9 @@ impl<O: Ordering, I: Id, P: SignedExponent> SPairInfo<O, I, P> {
         b_poly: &SignPoly<O, I, C, P>,
         signature: Option<Signature<O, I, P>>,
     ) -> Self {
-        let lms_are_relativelly_prime = !a_poly.polynomial.terms[0]
+        let lms_are_relativelly_prime = !a_poly.head[0]
             .monomial
-            .has_shared_variables(&b_poly.polynomial.terms[0].monomial);
+            .has_shared_variables(&b_poly.head[0].monomial);
 
         // Find what polynomial to calculate the signature from.
         // It is the one with highest signature to LM ratio.
@@ -240,7 +239,7 @@ impl<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> PartialSPair<'a, O, I,
         basis: &'a [Rc<RefCell<SignPoly<O, I, C, P>>>],
     ) -> PartialSPair<'a, O, I, C, P> {
         let origin_poly = basis[build_info.base_idx as usize].borrow();
-        let mut leading_term = origin_poly.polynomial.terms[0].clone();
+        let mut leading_term = origin_poly.head[0].clone();
         leading_term.monomial = leading_term.monomial * build_info.multiplier.clone();
 
         Self {
@@ -250,15 +249,28 @@ impl<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> PartialSPair<'a, O, I,
         }
     }
 
-    pub fn complete(self: Self) -> Polynomial<O, I, C, P> {
-        let mut terms = vec![self.leading_term];
-        terms.extend(self.origin_poly.polynomial.terms[1..].iter().map(|term| {
-            let mut term = term.clone();
-            term.monomial = self.build_info.multiplier.clone() * term.monomial;
-            term
-        }));
+    pub fn complete(self) -> BTreeMap<Monomial<O, I, P>, C> {
+        // Creates a BTreeMap with all the terms: dropping(1) is to skip
+        // calculating the leading monomial, because we already have it
+        // calculated and will insert it later; rev() is because in a few tests
+        // I made, it seemed faster to insert into a BTreeMap in already sorted
+        // order.
+        let mut terms: BTreeMap<Monomial<O, I, P>, C> = self
+            .origin_poly
+            .terms_iter()
+            .dropping(1)
+            .rev()
+            .map(|(monomial, coef)| {
+                (
+                    self.build_info.multiplier.clone() * monomial.clone(),
+                    coef.clone(),
+                )
+            })
+            .collect();
 
-        Polynomial { terms }
+        terms.insert(self.leading_term.monomial, self.leading_term.coefficient);
+
+        terms
     }
 }
 
@@ -402,8 +414,8 @@ impl<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> LowBaseDivisor<'a, O, 
         .unwrap();
 
         // Calculate the discriminant:
-        let a = &divisor.polynomial.terms[0].monomial;
-        let b = &sign_poly.polynomial.terms[0].monomial;
+        let a = &divisor.head[0].monomial;
+        let b = &sign_poly.head[0].monomial;
 
         let p = sign_poly
             .signature()
@@ -437,7 +449,6 @@ impl<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> LowBaseDivisor<'a, O, 
             let multivar = multivar_iter.next().unwrap();
 
             // We have a, b and p, do the comparison:
-            use itertools::Itertools;
             let (a, b, p) = multivar.1.into_iter().next_tuple().unwrap();
             if b > p {
                 var.power = max(p, a);
@@ -620,7 +631,7 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
         max_exp: &mut MaximumExponentsTracker<P>,
     ) -> Option<(
         MaskedSignature<O, I, P>,
-        Polynomial<O, I, C, P>,
+        BTreeMap<Monomial<O, I, P>, C>,
         Vec<(u32, u32)>,
     )> {
         let mut same_sign_spairs = Vec::new();

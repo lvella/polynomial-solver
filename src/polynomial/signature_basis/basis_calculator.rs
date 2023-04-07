@@ -1,9 +1,10 @@
-use std::{cell::RefCell, fmt::Display, rc::Rc};
+use std::{cell::RefCell, collections::BTreeMap, fmt::Display, rc::Rc};
 
 use replace_with::replace_with_or_abort;
 
 use crate::polynomial::{
-    division::Field, divmask::MaximumExponentsTracker, monomial_ordering::Ordering, Id, Polynomial,
+    division::Field, divmask::MaximumExponentsTracker, monomial_ordering::Ordering, Id, Monomial,
+    Polynomial,
 };
 
 use super::{
@@ -37,7 +38,7 @@ pub struct KnownBasis<O: Ordering, I: Id, C: Field, P: SignedExponent> {
     // monomial variables.
 }
 
-impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display> KnownBasis<O, I, C, P> {
+impl<O: Ordering, I: Id, C: Field, P: SignedExponent> KnownBasis<O, I, C, P> {
     /// Returns either a regular reducer (whose factor*reducer has smaller
     /// signature than the reduced) or a singular reducer (where the signature
     /// is the same), in the absence of a regular reducer.
@@ -108,7 +109,7 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
         &mut self,
     ) -> Option<(
         MaskedSignature<O, I, P>,
-        Polynomial<O, I, C, P>,
+        BTreeMap<Monomial<O, I, P>, C>,
         Vec<(u32, u32)>,
     )> {
         self.spairs
@@ -160,8 +161,8 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
 
         {
             let poly_ref = sign_poly.borrow();
-            for term in poly_ref.polynomial.terms.iter() {
-                self.max_exp.update(&term.monomial);
+            for (monomial, _) in poly_ref.terms_iter() {
+                self.max_exp.update(monomial);
             }
 
             self.spairs
@@ -203,8 +204,7 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
                 };
 
                 signature = sign_basis.signature().clone();
-                signature.monomial =
-                    signature.monomial * lm_basis.polynomial.terms[0].monomial.clone();
+                signature.monomial = signature.monomial * lm_basis.head[0].monomial.clone();
                 divmask = self.basis.div_map.map(&signature.monomial);
             }
 
@@ -238,7 +238,7 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
 
         // Recalculate both masks of each polynomial.
         for mut poly in self.basis.polys.iter().map(|p| p.borrow_mut()) {
-            let lm_divmask = div_map.map(&poly.polynomial.terms[0].monomial);
+            let lm_divmask = div_map.map(&poly.head[0].monomial);
             poly.lm_divmask = lm_divmask;
 
             let sign_divmask = div_map.map(&poly.signature().monomial);
@@ -294,9 +294,11 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display> IntoIt
         // Drop the index here otherwise the unwrap of the Rc will fail.
         drop(self.basis.by_sign_lm_ratio_and_lm);
 
-        self.basis
-            .polys
-            .into_iter()
-            .map(|sign_poly| Rc::try_unwrap(sign_poly).unwrap().into_inner().polynomial)
+        self.basis.polys.into_iter().map(|sign_poly| {
+            Rc::try_unwrap(sign_poly)
+                .unwrap()
+                .into_inner()
+                .into_polynomial()
+        })
     }
 }

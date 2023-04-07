@@ -8,6 +8,7 @@ mod indices;
 mod s_pairs;
 
 use std::{
+    cell::Cell,
     collections::{BTreeMap, HashMap, HashSet},
     fmt::Display,
     ops::Mul,
@@ -139,7 +140,17 @@ fn sign_to_monomial_ratio<O: Ordering, I: Id, P: SignedExponent>(
 pub struct SignPoly<O: Ordering, I: Id, C: Field, P: SignedExponent> {
     masked_signature: MaskedSignature<O, I, P>,
 
-    polynomial: Polynomial<O, I, C, P>,
+    /// The initial terms of the polynomial, in descending monomial order.
+    head: Vec<Term<O, I, C, P>>,
+
+    /// The final terms of the polynomial. Notice that you have to reverse
+    /// iterate to get elements in descending order.
+    ///
+    /// Empty if fully reduced.
+    tail: BTreeMap<Monomial<O, I, P>, C>,
+
+    /// Own index inside the basis vector.
+    idx: u32,
 
     /// The divmask fot the leading monomial.
     lm_divmask: DivMask,
@@ -148,12 +159,11 @@ pub struct SignPoly<O: Ordering, I: Id, C: Field, P: SignedExponent> {
     /// during reduction and is expensive to calculate.
     inv_leading_coeff: C,
 
-    /// Own index inside the basis.
-    idx: u32,
-
     /// The signature to leading monomial ratio allows us to quickly find
     /// out what is the signature of a new S-pair calculated.
     sign_to_lm_ratio: Ratio<O, I, P>,
+    // / The number of times this polynomial has been used as reducer.
+    //as_reducer_count: Cell<usize>,
 }
 
 impl<O: Ordering, I: Id, C: Field, P: SignedExponent + Display> Display for SignPoly<O, I, C, P> {
@@ -163,13 +173,22 @@ impl<O: Ordering, I: Id, C: Field, P: SignedExponent + Display> Display for Sign
             "idx {}, sign {}: {} ...({})",
             self.idx,
             self.signature(),
-            self.polynomial.terms[0].monomial,
-            self.polynomial.terms.len() - 1
+            self.head[0].monomial,
+            self.head.len() + self.tail.len() - 1
         )
     }
 }
 
 impl<O: Ordering, I: Id, C: Field, P: SignedExponent> SignPoly<O, I, C, P> {
+    /// Iterate through all the polynomial terms, in descending monomial order,
+    /// chaining together head and tail.
+    fn terms_iter(&self) -> impl DoubleEndedIterator<Item = (&Monomial<O, I, P>, &C)> {
+        self.head
+            .iter()
+            .map(|t| (&t.monomial, &t.coefficient))
+            .chain(self.tail.iter().rev())
+    }
+
     /// Compare SigPolys by signature to leading monomial ratio.
     fn sign_to_lm_ratio_cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.sign_to_lm_ratio.cmp(&other.sign_to_lm_ratio)
@@ -177,11 +196,25 @@ impl<O: Ordering, I: Id, C: Field, P: SignedExponent> SignPoly<O, I, C, P> {
 
     /// Gets the leading monomial for division test.
     fn leading_monomial(&self) -> MaskedMonomialRef<O, I, P> {
-        MaskedMonomialRef(&self.lm_divmask, &self.polynomial.terms[0].monomial)
+        MaskedMonomialRef(&self.lm_divmask, &self.head[0].monomial)
     }
 
     fn signature(&self) -> &Signature<O, I, P> {
         &self.masked_signature.signature
+    }
+
+    fn into_polynomial(self) -> Polynomial<O, I, C, P> {
+        let mut terms = self.head;
+        terms.extend(
+            self.tail
+                .into_iter()
+                .rev()
+                .map(|(monomial, coefficient)| Term {
+                    monomial,
+                    coefficient,
+                }),
+        );
+        Polynomial { terms }
     }
 }
 
@@ -197,51 +230,75 @@ enum RegularReductionResult<O: Ordering, I: Id, C: Field, P: SignedExponent> {
     Reduced(SignPoly<O, I, C, P>),
 }
 
-/// Regular reduction, as defined in the paper.
+/// Regular reduction, as defined in the paper, but only for the head term.
+///
+/// It seems that only reducing the head term often saves us a lot of time.
+fn regular_reduce_head<O: Ordering, I: Id, C: Field, P: SignedExponent>(
+    idx: u32,
+    m_sign: MaskedSignature<O, I, P>,
+    mut to_reduce: BTreeMap<Monomial<O, I, P>, C>,
+    basis: &KnownBasis<O, I, C, P>,
+) -> RegularReductionResult<O, I, C, P> {
+    let mut head = Vec::new();
+
+    let lm_properties = regular_reduce_impl(&m_sign, basis, true, &mut to_reduce, &mut head);
+
+    match lm_properties {
+        Some((sign_to_lm_ratio, lm_divmask)) => RegularReductionResult::Reduced(SignPoly {
+            inv_leading_coeff: head[0].coefficient.clone().inv(),
+            masked_signature: m_sign,
+            head,
+            lm_divmask,
+            idx,
+            sign_to_lm_ratio,
+            tail: to_reduce,
+            //as_reducer_count: Cell::new(0),
+        }),
+        None => {
+            // The only way for lm_properties to be None is when
+            // head is empty or constant.
+            assert!(to_reduce.is_empty());
+            match head.len() {
+                0 => RegularReductionResult::Zero(m_sign),
+                1 => {
+                    let polynomial = Polynomial { terms: head };
+                    assert!(polynomial.is_constant());
+                    RegularReductionResult::NonZeroConstant(polynomial)
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+}
+
+/// Regular reduction algorithm.
+///
+/// if `stop_on_first` is true, the algorithm stops after the first term is
+/// reduced.
 ///
 /// This is analogous to calculate the remainder on a multivariate polynomial
 /// division, but with extra restrictions on what polynomials can be the divisor
 /// according to their signature.
-fn regular_reduce<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>(
-    idx: u32,
-    m_sign: MaskedSignature<O, I, P>,
-    reduced_poly: Polynomial<O, I, C, P>,
+///
+/// The paper suggests splitting the reduced polynomial into a hash map of
+/// monomial -> coefficient, so that we can efficiently sum the new terms, and a
+/// priority queue, so that we know what is the next monomial to be reduced. We
+/// can do both with a single BTreeMap, which is ordered and has fast map
+/// access. I have tested both solutions, and in bigger problems BTreeMap seems
+/// a little better.
+fn regular_reduce_impl<O: Ordering, I: Id, C: Field, P: SignedExponent>(
+    m_sign: &MaskedSignature<O, I, P>,
     basis: &KnownBasis<O, I, C, P>,
-) -> RegularReductionResult<O, I, C, P> {
-    // The paper suggests splitting the reduced polynomial into a hash map of
-    // monomial -> coefficient, so that we can efficiently sum the new terms,
-    // and a priority queue, so that we know what is the next monomial to be
-    // reduced. We can do both with a single BTreeMap, which is ordered and has
-    // fast map access. I have tested both solutions, and in bigger problems
-    // BTreeMap seems a little better.
-
-    // The tree with the terms to be reduced.
-    let mut to_reduce: BTreeMap<Monomial<O, I, P>, C> = reduced_poly
-        .terms
-        .into_iter()
-        // Since this is already reverse sorted, rev() is a little faster, as we
-        // insert the elements in increasing order.
-        .rev()
-        .map(|term| (term.monomial, term.coefficient))
-        .collect();
-
-    // Reduce one term at a time.
-    let mut reduced_terms = Vec::new();
-    let mut lm_properties = None;
-
+    stop_on_first: bool,
+    to_reduce: &mut BTreeMap<Monomial<O, I, P>, C>,
+    reduced_terms_output: &mut Vec<Term<O, I, C, P>>,
+) -> Option<(Ratio<O, I, P>, DivMask)> {
     while let Some((m, c)) = to_reduce.pop_last() {
         // Reassemble the term
         let term = Term {
             coefficient: c,
             monomial: m,
         };
-
-        // Early stop reduction if we already have a leading term (or if such
-        // term is constant).
-        if !reduced_terms.is_empty() || term.monomial.is_one() {
-            reduced_terms.push(term);
-            continue;
-        }
 
         // Calculate the divmask for the term to be reduced:
         let divmask = basis.div_map.map(&term.monomial);
@@ -250,56 +307,59 @@ fn regular_reduce<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Di
         // and possibly store it as the ratio for the leading term.
         let sign_to_term_ratio = sign_to_monomial_ratio(&m_sign.signature, &term.monomial);
 
-        if let Some(reducer) = basis.find_a_reducer(
-            &sign_to_term_ratio,
-            MaskedMonomialRef(&divmask, &term.monomial),
-        ) {
+        if let Some(reducer) = {
+            // Skip searching for a reducer if term is constant, and hopefully save some time.
+            if term.monomial.is_one() {
+                None
+            } else {
+                basis.find_a_reducer(
+                    &sign_to_term_ratio,
+                    MaskedMonomialRef(&divmask, &term.monomial),
+                )
+            }
+        } {
             let reducer = reducer.borrow();
 
             // The reduction is said singular if we are reducing the leading
             // term and the factor*reducer have the same signature as the reduced.
             // This translates to equal signature/monomial ratio. In this case
             // we can stop.
-            if reduced_terms.is_empty() && reducer.sign_to_lm_ratio == sign_to_term_ratio {
-                return RegularReductionResult::Singular;
+            if reduced_terms_output.is_empty() && reducer.sign_to_lm_ratio == sign_to_term_ratio {
+                //return RegularReductionResult::Singular;
+
+                // For now, lets assume this doesn't happen...
+                panic!("singular top reduction");
             }
 
-            let mut iter = reducer.polynomial.terms.iter();
-            let leading_term = iter.next().unwrap();
+            let mut iter = reducer.terms_iter();
+            let (leading_monomial, _) = iter.next().unwrap();
 
             // Calculate the multiplier monomial that will nullify the term.
             // We can unwrap() because we trust "find_a_regular_reducer" to
             // have returned a valid reducer.
-            let monomial = term
-                .monomial
-                .whole_division(&leading_term.monomial)
-                .unwrap();
+            let factor_monomial = term.monomial.whole_division(leading_monomial).unwrap();
 
             // Calculate the multiplier's coefficient using the reducer leading term:
-            let coefficient = term
+            let factor_coefficient = term
                 .coefficient
                 .elimination_factor(&reducer.inv_leading_coeff);
 
-            let factor = Term {
-                coefficient,
-                monomial,
-            };
-
             // Subtract every element of the reducer from the rest of the
             // polynomial.
-            for term in iter {
+            for (monomial, coef) in iter {
                 use std::collections::btree_map::Entry;
 
-                let reducer_term = factor.clone() * term.clone();
+                let reducer_coef = factor_coefficient.clone() * coef;
+                let reducer_monomial = factor_monomial.clone() * monomial.clone();
 
-                match to_reduce.entry(reducer_term.monomial) {
+                match to_reduce.entry(reducer_monomial) {
                     Entry::Vacant(entry) => {
                         // There was no such monomial, just insert:
-                        entry.insert(reducer_term.coefficient);
+                        entry.insert(reducer_coef);
                     }
                     Entry::Occupied(mut entry) => {
                         // Sum the coefficients, and remove if result is zero.
-                        *entry.get_mut() += reducer_term.coefficient;
+                        *entry.get_mut() += reducer_coef;
                         if entry.get().is_zero() {
                             entry.remove_entry();
                         }
@@ -311,46 +371,17 @@ fn regular_reduce<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Di
             // term has been eliminated.
             continue;
         }
-        // No reducer was found.
+        // No reducer was found, the term is fully reduced, so it to the head.
+        // Notice that it maintains the decreasing order.
+        reduced_terms_output.push(term);
 
-        // The term could not be reduced. Store the ratio if this is the
-        // leading term:
-        if let None = lm_properties {
-            assert!(reduced_terms.len() == 0);
-            lm_properties = Some((sign_to_term_ratio, divmask));
-        }
-
-        // And insert it into the output. These terms are already in
-        // decreasing order.
-        reduced_terms.push(term)
-    }
-
-    let polynomial = Polynomial {
-        terms: reduced_terms,
-    };
-
-    match lm_properties {
-        Some((sign_to_lm_ratio, lm_divmask)) => RegularReductionResult::Reduced(SignPoly {
-            inv_leading_coeff: polynomial.terms[0].coefficient.clone().inv(),
-            masked_signature: m_sign,
-            polynomial,
-            lm_divmask,
-            idx,
-            sign_to_lm_ratio,
-        }),
-        None => {
-            // The only way for lm_properties to be None is when
-            // reduced_terms is empty or constant.
-            match polynomial.terms.len() {
-                0 => RegularReductionResult::Zero(m_sign),
-                1 => {
-                    assert!(polynomial.is_constant());
-                    RegularReductionResult::NonZeroConstant(polynomial)
-                }
-                _ => panic!("This should never happen!"),
-            }
+        if stop_on_first {
+            // Return the information about this reduced term.
+            return Some((sign_to_term_ratio, divmask));
         }
     }
+
+    None
 }
 
 /// Handles the result of a reduction, and returns Err(Polynomial) in case of
@@ -478,7 +509,16 @@ pub fn grobner_basis<
 
             // Reduce it:
             let b = c.get_basis();
-            regular_reduce(b.polys.len() as u32, m_sign, p, b)
+            regular_reduce_head(
+                b.polys.len() as u32,
+                m_sign,
+                p.terms
+                    .into_iter()
+                    .rev()
+                    .map(|t| (t.monomial, t.coefficient))
+                    .collect(),
+                b,
+            )
         };
 
         early_ret_err!(handle_reduction_result(&mut c, reduction, &[]));
@@ -494,7 +534,7 @@ pub fn grobner_basis<
             };
 
             let b = c.get_basis();
-            let reduction = regular_reduce(b.polys.len() as u32, m_sign, s_pair, b);
+            let reduction = regular_reduce_head(b.polys.len() as u32, m_sign, s_pair, b);
             early_ret_err!(handle_reduction_result(&mut c, reduction, &indices[..]));
         }
 
