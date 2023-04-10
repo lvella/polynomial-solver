@@ -1,7 +1,6 @@
 //! S-pairs data structures.
 
 use std::{
-    cell::{Ref, RefCell},
     cmp::max,
     collections::{BTreeMap, BinaryHeap},
     fmt::Display,
@@ -19,8 +18,7 @@ use crate::polynomial::{
 };
 
 use super::{
-    basis_calculator::SyzygySet, indices::MaskedMonomial, DivMask, KnownBasis, MaskedMonomialRef,
-    MaskedSignature, Ratio, SignPoly, Signature, SignedExponent,
+    basis_calculator::SyzygySet, KnownBasis, Masked, Ratio, SignPoly, Signature, SignedExponent,
 };
 
 /// Calculate monomial factor that is multiplied to base to get the S-pair.
@@ -28,7 +26,7 @@ fn calculate_spair_factor<O: Ordering, I: Id, C: Field, P: SignedExponent>(
     base: &SignPoly<O, I, C, P>,
     other: &SignPoly<O, I, C, P>,
 ) -> Monomial<O, I, P> {
-    other.head[0].monomial.div_by_gcd(&base.head[0].monomial)
+    other.lm.value.div_by_gcd(&base.lm.value)
 }
 
 /// Half S-pair
@@ -82,7 +80,7 @@ impl<O: Ordering, I: Id, P: SignedExponent> HalfSPair<O, I, P> {
                     if bd.divisor.idx != other.idx
                         && triangle[(bd.divisor.idx, other.idx)]
                         && other.sign_to_lm_ratio < bd.divisor.sign_to_lm_ratio
-                        && other.leading_monomial().divides(&bd.get_discriminator())
+                        && other.lm.divides(&bd.get_discriminator())
                     {
                         return Err(true);
                     }
@@ -95,17 +93,17 @@ impl<O: Ordering, I: Id, P: SignedExponent> HalfSPair<O, I, P> {
         // Calculate the S-pair signature.
         let signature =
             sign_base.signature().clone() * calculate_spair_factor(sign_base, sign_other);
-        let masked_signature = MaskedSignature {
+        let masked_signature = Masked {
             divmask: basis.div_map.map(&signature.monomial),
-            signature,
+            value: signature,
         };
 
         // Early test for signature criterion:
-        if syzygies.contains_divisor(masked_signature.monomial()) {
+        if syzygies.contains_divisor(&masked_signature) {
             return Err(true);
         } else {
             Ok(HalfSPair {
-                signature: masked_signature.signature,
+                signature: masked_signature.value,
                 idx: other.idx,
             })
         }
@@ -150,9 +148,7 @@ impl<O: Ordering, I: Id, P: SignedExponent> SPairInfo<O, I, P> {
         b_poly: &SignPoly<O, I, C, P>,
         signature: Option<Signature<O, I, P>>,
     ) -> Self {
-        let lms_are_relativelly_prime = !a_poly.head[0]
-            .monomial
-            .has_shared_variables(&b_poly.head[0].monomial);
+        let lms_are_relativelly_prime = !a_poly.lm.value.has_shared_variables(&b_poly.lm.value);
 
         // Find what polynomial to calculate the signature from.
         // It is the one with highest signature to LM ratio.
@@ -185,7 +181,7 @@ impl<O: Ordering, I: Id, P: SignedExponent> SPairInfo<O, I, P> {
         basis: &KnownBasis<O, I, C, P>,
     ) -> Self {
         let a_poly = basis.polys[half_spair.idx as usize].as_ref();
-        Self::new(b_poly, &a_poly.borrow(), Some(half_spair.signature))
+        Self::new(b_poly, &a_poly, Some(half_spair.signature))
     }
 }
 
@@ -229,19 +225,20 @@ impl<O: Ordering, I: Id, P: SignedExponent> Ord for SPairColumn<O, I, P> {
 /// S-Pair where only the leading term has been evaluated.
 pub struct PartialSPair<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> {
     pub leading_term: Term<O, I, C, P>,
-    origin_poly: Ref<'a, SignPoly<O, I, C, P>>,
+    origin_poly: &'a SignPoly<O, I, C, P>,
     build_info: SPairBuildInfo<O, I, P>,
 }
 
 impl<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> PartialSPair<'a, O, I, C, P> {
     fn new(
         build_info: SPairBuildInfo<O, I, P>,
-        basis: &'a [Rc<RefCell<SignPoly<O, I, C, P>>>],
+        basis: &'a [Rc<SignPoly<O, I, C, P>>],
     ) -> PartialSPair<'a, O, I, C, P> {
-        let origin_poly = basis[build_info.base_idx as usize].borrow();
-        let mut leading_term = origin_poly.head[0].clone();
-        leading_term.monomial = leading_term.monomial * build_info.multiplier.clone();
-
+        let origin_poly = &*basis[build_info.base_idx as usize];
+        let leading_term = Term {
+            monomial: origin_poly.lm.value.clone() * build_info.multiplier.clone(),
+            coefficient: origin_poly.leading_coeff.clone(),
+        };
         Self {
             leading_term,
             origin_poly,
@@ -250,20 +247,19 @@ impl<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> PartialSPair<'a, O, I,
     }
 
     pub fn complete(self) -> BTreeMap<Monomial<O, I, P>, C> {
-        // Creates a BTreeMap with all the terms: dropping(1) is to skip
-        // calculating the leading monomial, because we already have it
-        // calculated and will insert it later; rev() is because in a few tests
-        // I made, it seemed faster to insert into a BTreeMap in already sorted
-        // order.
+        // Creates a BTreeMap with all the terms: rev() is because in a few
+        // tests I made, it seemed faster to insert into a BTreeMap in already
+        // sorted order.
         let mut terms: BTreeMap<Monomial<O, I, P>, C> = self
             .origin_poly
-            .terms_iter()
-            .dropping(1)
+            .tail
+            .borrow()
+            .iter()
             .rev()
-            .map(|(monomial, coef)| {
+            .map(|t| {
                 (
-                    self.build_info.multiplier.clone() * monomial.clone(),
-                    coef.clone(),
+                    self.build_info.multiplier.clone() * t.monomial.clone(),
+                    t.coefficient.clone(),
                 )
             })
             .collect();
@@ -279,19 +275,17 @@ impl<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> PartialSPair<'a, O, I,
 /// TODO: Test without this criterion again when a proper multidimensional index
 /// have been implemented, because right now it makes things worse, not better.
 struct BaseDivisors<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> {
-    high: Option<Ref<'a, SignPoly<O, I, C, P>>>,
+    high: Option<&'a SignPoly<O, I, C, P>>,
     low: Option<LowBaseDivisor<'a, O, I, C, P>>,
 }
 
 fn get_high_base_divisor<O: Ordering, I: Id, C: Field, P: SignedExponent>(
     sign_poly: &SignPoly<O, I, C, P>,
     basis: &KnownBasis<O, I, C, P>,
-) -> Option<Rc<RefCell<SignPoly<O, I, C, P>>>> {
-    let lm = sign_poly.leading_monomial();
-
+) -> Option<Rc<SignPoly<O, I, C, P>>> {
     basis
         .by_sign_lm_ratio_and_lm
-        .find_high_base_divisor(&sign_poly.sign_to_lm_ratio, lm)
+        .find_high_base_divisor(&sign_poly.sign_to_lm_ratio.borrow(), &sign_poly.lm)
 }
 
 /// An iterator aggregating multiple VariablePower iterators, assumed to be in
@@ -374,17 +368,16 @@ impl<'a, I: 'a + Id, P: 'a + SignedExponent> Iterator for MultiVarWalk<'a, I, P>
 
 /// Low base divisor information
 struct LowBaseDivisor<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> {
-    divisor: Ref<'a, SignPoly<O, I, C, P>>,
+    divisor: &'a SignPoly<O, I, C, P>,
     /// The x^v in the paper.
-    discriminator: Monomial<O, I, P>,
-    discriminator_mask: DivMask,
+    discriminator: Masked<Monomial<O, I, P>>,
 }
 
 impl<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> LowBaseDivisor<'a, O, I, C, P> {
     fn new(
         sign_poly: &SignPoly<O, I, C, P>,
         basis: &KnownBasis<O, I, C, P>,
-        divisor: Ref<'a, SignPoly<O, I, C, P>>,
+        divisor: &'a SignPoly<O, I, C, P>,
     ) -> Self {
         // Creates a monomial where all variables have maximum power. This
         // will be useful in querying the BTreeMap below, and will be the
@@ -414,8 +407,8 @@ impl<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> LowBaseDivisor<'a, O, 
         .unwrap();
 
         // Calculate the discriminant:
-        let a = &divisor.head[0].monomial;
-        let b = &sign_poly.head[0].monomial;
+        let a = &divisor.lm.value;
+        let b = &sign_poly.lm.value;
 
         let p = sign_poly
             .signature()
@@ -462,13 +455,15 @@ impl<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> LowBaseDivisor<'a, O, 
 
         LowBaseDivisor {
             divisor,
-            discriminator_mask: basis.div_map.map(&v),
-            discriminator: v,
+            discriminator: Masked {
+                divmask: basis.div_map.map(&v),
+                value: v,
+            },
         }
     }
 
-    fn get_discriminator(&self) -> MaskedMonomialRef<O, I, P> {
-        MaskedMonomialRef(&self.discriminator_mask, &self.discriminator)
+    fn get_discriminator(&self) -> &Masked<Monomial<O, I, P>> {
+        &self.discriminator
     }
 }
 
@@ -540,7 +535,7 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
         }
     }
 
-    pub fn add_column<C: Field>(
+    pub(super) fn add_column<C: Field>(
         &mut self,
         sign_poly: &SignPoly<O, I, C, P>,
         basis: &KnownBasis<O, I, C, P>,
@@ -558,9 +553,9 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
         let base_divisors = BaseDivisors {
             low: low.as_ref().map(|divisor| {
                 self.lbd_counter += 1;
-                LowBaseDivisor::new(sign_poly, basis, divisor.borrow())
+                LowBaseDivisor::new(sign_poly, basis, &divisor)
             }),
-            high: high.as_ref().map(|divisor| divisor.borrow()),
+            high: high.as_ref().map(|divisor| &**divisor),
         };
 
         let mut new_spairs = Vec::new();
@@ -568,7 +563,7 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
         for other_poly in basis.polys.iter() {
             let red_to_zero = match HalfSPair::new_if_not_eliminated(
                 sign_poly,
-                &other_poly.borrow(),
+                &other_poly,
                 &base_divisors,
                 basis,
                 syzygies,
@@ -600,22 +595,19 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
     }
 
     /// Extract the one of the S-pairs with minimal signature. There can be multiple.
-    fn pop<C: Field>(
-        &mut self,
-        basis: &[Rc<RefCell<SignPoly<O, I, C, P>>>],
-    ) -> Option<SPairInfo<O, I, P>> {
+    fn pop<C: Field>(&mut self, basis: &[Rc<SignPoly<O, I, C, P>>]) -> Option<SPairInfo<O, I, P>> {
         // Get the S-pair at the head of the column
         let mut head = self.heads.pop()?;
         let ret = head.head_spair;
 
         // Update the column's head and insert it back into the heap
         if let Some(next_head_idx) = head.column.pop() {
-            let a_poly = basis[head.origin_idx as usize].borrow();
+            let a_poly = &*basis[head.origin_idx as usize];
             assert!(a_poly.idx == head.origin_idx);
-            let b_poly = basis[next_head_idx as usize].borrow();
+            let b_poly = &*basis[next_head_idx as usize];
             assert!(b_poly.idx == next_head_idx);
 
-            head.head_spair = SPairInfo::new(&a_poly, &b_poly, None);
+            head.head_spair = SPairInfo::new(a_poly, b_poly, None);
             self.heads.push(head);
         }
 
@@ -624,13 +616,13 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
 
     /// Return the next S-pair to be reduced, which is the S-pair of minimal
     /// signature. Or None if there are no more S-pairs.
-    pub fn get_next<'a, C: Field>(
+    pub(super) fn get_next<'a, C: Field>(
         &mut self,
         basis: &KnownBasis<O, I, C, P>,
         syzygies: &mut SyzygySet<O, I, P>,
         max_exp: &mut MaximumExponentsTracker<P>,
     ) -> Option<(
-        MaskedSignature<O, I, P>,
+        Masked<Signature<O, I, P>>,
         BTreeMap<Monomial<O, I, P>, C>,
         Vec<(u32, u32)>,
     )> {
@@ -642,9 +634,9 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
             same_sign_spairs.clear();
             same_sign_spairs.push(spair.build_info.idx_pair());
 
-            let m_sign = MaskedSignature {
+            let m_sign = Masked {
                 divmask: basis.div_map.map(&spair.signature.monomial),
-                signature: spair.signature,
+                value: spair.signature,
             };
 
             // Test for relativelly prime criterion.
@@ -653,7 +645,7 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
                 Err(false)
             } else {
                 // Late test for signature criterion:
-                if syzygies.contains_divisor(m_sign.monomial()) {
+                if syzygies.contains_divisor(&m_sign) {
                     // Eliminated by signature criterion
                     Err(true)
                 } else {
@@ -666,7 +658,7 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
             // same signature must be chosen, the one with the smallest
             // leading monomial.
             while let Some(head) = self.heads.peek() {
-                if head.head_spair.signature != m_sign.signature {
+                if head.head_spair.signature != m_sign.value {
                     break;
                 }
 
@@ -713,9 +705,9 @@ impl<O: Ordering, I: Id, P: SignedExponent + Display> SPairTriangle<O, I, P> {
                     // polynomial pair discarded because this signature we are
                     // adding necessarily divides all of them.
                     if !eliminated_by_signature {
-                        max_exp.update(&m_sign.signature.monomial);
-                        syzygies.insert(MaskedMonomial {
-                            monomial: m_sign.signature.monomial,
+                        max_exp.update(&m_sign.value.monomial);
+                        syzygies.insert(Masked {
+                            value: m_sign.value.monomial,
                             divmask: m_sign.divmask,
                         });
                     }

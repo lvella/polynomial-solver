@@ -5,34 +5,34 @@ use crate::{
     polynomial::{
         divmask::DivMaskTestResult,
         monomial_ordering::Ordering,
-        signature_basis::{get_var_exp_from_monomial, DivMap, MaskedMonomialRef},
-        Id, VariablePower,
+        signature_basis::{get_var_exp_from_monomial, DivMap, HasMonomial, Masked},
+        Id, Monomial, VariablePower,
     },
 };
 
-use super::{make_dense_monomial, MaskedMonomial, SignedExponent};
+use super::{make_dense_monomial, SignedExponent};
 
-impl<O: Ordering, I: Id, E: SignedExponent> kd_tree::Entry for MaskedMonomial<O, I, E> {
+impl<O: Ordering, I: Id, E: SignedExponent> kd_tree::Entry for Masked<Monomial<O, I, E>> {
     type KeyElem = VariablePower<I, E>;
     type PartitionFilter = PartitionFilter<O, I, E>;
 
     fn get_key_elem(&self, dim: usize) -> Self::KeyElem {
         let id = I::from_idx(dim);
-        let power = get_var_exp_from_monomial(&self.monomial, &id);
+        let power = get_var_exp_from_monomial(&self.value, &id);
         VariablePower { id, power }
     }
 
     fn average_filter(&self, other: &Self, dim: usize) -> Self::PartitionFilter {
         let id = I::from_idx(dim);
 
-        let exp_a = get_var_exp_from_monomial(&self.monomial, &id);
-        let exp_b = get_var_exp_from_monomial(&other.monomial, &id);
+        let exp_a = get_var_exp_from_monomial(&self.value, &id);
+        let exp_b = get_var_exp_from_monomial(&other.value, &id);
         let avg = (exp_a + exp_b + E::one()) / E::from(2);
         PartitionFilter(VariablePower { id, power: avg }, PhantomData {})
     }
 
     fn cmp_dim(&self, other: &Self::KeyElem) -> std::cmp::Ordering {
-        get_var_exp_from_monomial(&self.monomial, &other.id).cmp(&other.power)
+        get_var_exp_from_monomial(&self.value, &other.id).cmp(&other.power)
     }
 }
 
@@ -51,10 +51,10 @@ pub(in crate::polynomial::signature_basis) struct PartitionFilter<
 >(VariablePower<I, E>, PhantomData<O>);
 
 impl<O: Ordering, I: Id, E: SignedExponent> kd_tree::PartitionFilter for PartitionFilter<O, I, E> {
-    type Entry = MaskedMonomial<O, I, E>;
+    type Entry = Masked<Monomial<O, I, E>>;
 
     fn is_less(&self, e: &Self::Entry) -> bool {
-        e.cmp_dim(&self.0) == std::cmp::Ordering::Less
+        e.cmp_dim(&self.0).is_lt()
     }
 
     fn into_key(self) -> Option<<Self::Entry as kd_tree::Entry>::KeyElem> {
@@ -69,17 +69,17 @@ struct Operations<O: Ordering, I: Id, E: SignedExponent> {
 }
 
 impl<O: Ordering, I: Id, E: SignedExponent> DataOperations for Operations<O, I, E> {
-    type Entry = MaskedMonomial<O, I, E>;
-    type NodeData = MaskedMonomial<O, I, E>;
+    type Entry = Masked<Monomial<O, I, E>>;
+    type NodeData = Masked<Monomial<O, I, E>>;
 
     /// Calculate the GCD among all given entries.
     fn make(&self, entries: &[Self::Entry]) -> Self::NodeData {
-        MaskedMonomial::gcd_all(entries.iter().map(|e| &e.monomial), &self.div_map).unwrap()
+        Masked::gcd_all(entries.iter().map(|e| &e.value), &self.div_map).unwrap()
     }
 
     /// Update a node_data with the GCD of itself and the new entry.
     fn update(&self, node_data: &mut Self::NodeData, new_entry: &Self::Entry) {
-        node_data.gcd_update(&new_entry.monomial, &self.div_map);
+        node_data.gcd_update(&new_entry.value, &self.div_map);
     }
 }
 
@@ -94,7 +94,7 @@ impl<O: Ordering, I: Id, E: SignedExponent> MonomialIndex<O, I, E> {
     pub(in crate::polynomial::signature_basis) fn new(
         num_variables: usize,
         div_map: Rc<DivMap<E>>,
-        elems: Vec<MaskedMonomial<O, I, E>>,
+        elems: Vec<Masked<Monomial<O, I, E>>>,
     ) -> Self {
         Self(KDTree::new(
             num_variables,
@@ -106,21 +106,28 @@ impl<O: Ordering, I: Id, E: SignedExponent> MonomialIndex<O, I, E> {
         ))
     }
 
-    pub(in crate::polynomial::signature_basis) fn insert(&mut self, elem: MaskedMonomial<O, I, E>) {
+    pub(in crate::polynomial::signature_basis) fn insert(
+        &mut self,
+        elem: Masked<Monomial<O, I, E>>,
+    ) {
         self.0.insert(elem)
     }
 
-    pub(in crate::polynomial::signature_basis) fn contains_divisor(
+    pub(in crate::polynomial::signature_basis) fn contains_divisor<
+        T: HasMonomial<O = O, I = I, E = E>,
+    >(
         &self,
-        monomial: MaskedMonomialRef<O, I, E>,
+        monomial: &Masked<T>,
     ) -> bool {
-        let dense_monomial = make_dense_monomial(monomial.1);
+        let dense_monomial = make_dense_monomial(monomial.value.monomial());
         let mut found_divisor = false;
 
         self.0.search(
             &|key, inner_gcd| {
                 // TODO: is it worth to do a full divisibility test here, instead of only the divmask???
-                if let DivMaskTestResult::NotDivisible = inner_gcd.divmask.divides(monomial.0) {
+                if let DivMaskTestResult::NotDivisible =
+                    inner_gcd.divmask.divides(&monomial.divmask)
+                {
                     return SearchPath::None;
                 }
 
@@ -152,7 +159,7 @@ impl<O: Ordering, I: Id, E: SignedExponent> MonomialIndex<O, I, E> {
         self.0.len()
     }
 
-    pub(in crate::polynomial::signature_basis) fn to_vec(self) -> Vec<MaskedMonomial<O, I, E>> {
+    pub(in crate::polynomial::signature_basis) fn to_vec(self) -> Vec<Masked<Monomial<O, I, E>>> {
         self.0.to_vec()
     }
 }

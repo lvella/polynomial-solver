@@ -8,8 +8,8 @@ mod indices;
 mod s_pairs;
 
 use std::{
-    cell::Cell,
-    collections::{BTreeMap, HashMap, HashSet},
+    cell::{Cell, RefCell},
+    collections::{HashMap, HashSet},
     fmt::Display,
     ops::Mul,
 };
@@ -51,20 +51,38 @@ type DivMaskSize = u32;
 type DivMap<P> = divmask::DivMap<DivMaskSize, P>;
 type DivMask = divmask::DivMask<DivMaskSize>;
 
-/// Like MaskedMonomial, but stores individual references for the monomial and
-/// its divmask.
-struct MaskedMonomialRef<'a, O: Ordering, I: Id, P: SignedExponent>(
-    &'a DivMask,
-    &'a Monomial<O, I, P>,
-);
+trait HasMonomial {
+    type O: Ordering;
+    type I: Id;
+    type E: SignedExponent;
+    fn monomial(&self) -> &Monomial<Self::O, Self::I, Self::E>;
+}
 
-impl<'a, O: Ordering, I: Id, P: SignedExponent> MaskedMonomialRef<'a, O, I, P> {
+impl<O: Ordering, I: Id, E: SignedExponent> HasMonomial for Monomial<O, I, E> {
+    type O = O;
+    type I = I;
+    type E = E;
+
+    fn monomial(&self) -> &Monomial<Self::O, Self::I, Self::E> {
+        self
+    }
+}
+
+/// Wraps together a divmask and a corresponding monomial, allowing for
+/// accelerated divisibility test.
+#[derive(Debug, Clone)]
+struct Masked<T: HasMonomial> {
+    divmask: DivMask,
+    value: T,
+}
+
+impl<T: HasMonomial> Masked<T> {
     /// Uses the fast divmask comparison, and if it fails, uses the slow direct
     /// monomial comparison.
-    fn divides(&self, other: &Self) -> bool {
-        match self.0.divides(other.0) {
+    fn divides<U: HasMonomial<O = T::O, I = T::I, E = T::E>>(&self, other: &Masked<U>) -> bool {
+        match self.divmask.divides(&other.divmask) {
             DivMaskTestResult::NotDivisible => false,
-            DivMaskTestResult::Unsure => self.1.divides(other.1),
+            DivMaskTestResult::Unsure => self.value.monomial().divides(&other.value.monomial()),
         }
     }
 }
@@ -83,6 +101,16 @@ pub struct Signature<O: Ordering, I: Id, P: SignedExponent> {
     monomial: Monomial<O, I, P>,
 }
 
+impl<O: Ordering, I: Id, E: SignedExponent> HasMonomial for Signature<O, I, E> {
+    type O = O;
+    type I = I;
+    type E = E;
+
+    fn monomial(&self) -> &Monomial<Self::O, Self::I, Self::E> {
+        &self.monomial
+    }
+}
+
 impl<O: Ordering, I: Id, P: SignedExponent> Mul<Monomial<O, I, P>> for Signature<O, I, P> {
     type Output = Self;
 
@@ -95,18 +123,6 @@ impl<O: Ordering, I: Id, P: SignedExponent> Mul<Monomial<O, I, P>> for Signature
 impl<O: Ordering, I: Id, P: SignedExponent + Display> Display for Signature<O, I, P> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{{{}, {}}}", self.idx, self.monomial)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MaskedSignature<O: Ordering, I: Id, P: SignedExponent> {
-    divmask: DivMask,
-    signature: Signature<O, I, P>,
-}
-
-impl<O: Ordering, I: Id, P: SignedExponent> MaskedSignature<O, I, P> {
-    fn monomial(&self) -> MaskedMonomialRef<O, I, P> {
-        MaskedMonomialRef(&self.divmask, &self.signature.monomial)
     }
 }
 
@@ -137,20 +153,29 @@ fn sign_to_monomial_ratio<O: Ordering, I: Id, P: SignedExponent>(
 /// (signature, polynomial) is sufficient for all the computations. Other fields
 /// are optimizations.
 #[derive(Debug)]
-pub struct SignPoly<O: Ordering, I: Id, C: Field, P: SignedExponent> {
-    masked_signature: MaskedSignature<O, I, P>,
-
-    /// The initial terms of the polynomial, in descending monomial order.
-    head: Vec<Term<O, I, C, P>>,
-
-    /// The final terms of the polynomial. Notice that you have to reverse
-    /// iterate to get elements in descending order.
-    ///
-    /// Empty if fully reduced.
-    tail: BTreeMap<Monomial<O, I, P>, C>,
-
+struct SignPoly<O: Ordering, I: Id, C: Field, P: SignedExponent> {
     /// Own index inside the basis vector.
     idx: u32,
+
+    /// Holds the signature for this polynomial
+    masked_signature: Masked<Signature<O, I, P>>,
+
+    /// The leading monomial of the polynomial.
+    lm: Masked<Monomial<O, I, P>>,
+
+    /// The leading coefficient of the polynomial.
+    leading_coeff: C,
+
+    /// The remaining terms of the polynomial, in descending order.
+    ///
+    /// This is a RefCell because if this SignPoly is classified as a hot
+    /// reducer, the tail is fully reduced to save time when this polynomial is
+    /// used in further reductions.
+    tail: RefCell<Vec<Term<O, I, C, P>>>,
+
+    /// Tells if this polynomial has been marked as a hot reducer, to prevent it
+    /// to be reinserted in the list of polynomials to be hot reduced.
+    is_hot_reducer: Cell<bool>,
 
     /// The divmask fot the leading monomial.
     lm_divmask: DivMask,
@@ -159,16 +184,16 @@ pub struct SignPoly<O: Ordering, I: Id, C: Field, P: SignedExponent> {
     /// during reduction and is expensive to calculate.
     inv_leading_coeff: C,
 
-    /// The signature to leading monomial ratio allows us to quickly find
-    /// out what is the signature of a new S-pair calculated.
-    sign_to_lm_ratio: Ratio<O, I, P>,
+    /// The signature to leading monomial ratio allows us to quickly find out
+    /// what is the signature of a new S-pair calculated.
+    ///
+    /// This is a RefCell because on every insertion new SignPoly inserted on
+    /// the basis, there might be a need to recalculate the comparer (integer
+    /// used for accelerated ord comparision).
+    sign_to_lm_ratio: RefCell<Ratio<O, I, P>>,
 
     /// The number of times this polynomial has been used as reducer.
     as_reducer_count: Cell<usize>,
-
-    /// Tells if this polynomial has been marked as a hot reducer, to prevent it
-    /// to be reinserted in the list of polynomials to be hot reduced.
-    is_hot_reducer: Cell<bool>,
 }
 
 impl<O: Ordering, I: Id, C: Field, P: SignedExponent + Display> Display for SignPoly<O, I, C, P> {
@@ -178,46 +203,30 @@ impl<O: Ordering, I: Id, C: Field, P: SignedExponent + Display> Display for Sign
             "idx {}, sign {}: {} ...({})",
             self.idx,
             self.signature(),
-            self.head[0].monomial,
-            self.head.len() + self.tail.len() - 1
+            self.lm.value,
+            self.tail.borrow().len()
         )
     }
 }
 
 impl<O: Ordering, I: Id, C: Field, P: SignedExponent> SignPoly<O, I, C, P> {
-    /// Iterate through all the polynomial terms, in descending monomial order,
-    /// chaining together head and tail.
-    fn terms_iter(&self) -> impl DoubleEndedIterator<Item = (&Monomial<O, I, P>, &C)> {
-        self.head
-            .iter()
-            .map(|t| (&t.monomial, &t.coefficient))
-            .chain(self.tail.iter().rev())
-    }
-
     /// Compare SigPolys by signature to leading monomial ratio.
     fn sign_to_lm_ratio_cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.sign_to_lm_ratio.cmp(&other.sign_to_lm_ratio)
     }
 
-    /// Gets the leading monomial for division test.
-    fn leading_monomial(&self) -> MaskedMonomialRef<O, I, P> {
-        MaskedMonomialRef(&self.lm_divmask, &self.head[0].monomial)
-    }
-
     fn signature(&self) -> &Signature<O, I, P> {
-        &self.masked_signature.signature
+        &self.masked_signature.value
     }
 
     fn into_polynomial(self) -> Polynomial<O, I, C, P> {
-        let mut terms = self.head;
-        terms.extend(
-            self.tail
-                .into_iter()
-                .rev()
-                .map(|(monomial, coefficient)| Term {
-                    monomial,
-                    coefficient,
-                }),
+        let mut terms = self.tail.into_inner();
+        terms.insert(
+            0,
+            Term {
+                coefficient: self.leading_coeff,
+                monomial: self.lm.value,
+            },
         );
         Polynomial { terms }
     }
@@ -269,11 +278,6 @@ fn handle_reduction_result<
             return Err(vec![polynomial]);
         }
     }
-
-    // Something was added to the basis calculator, be it polynomial or syzygy,
-    // so the monomials might have changed enough to justify a recalculation of
-    // the divmasks and indices.
-    c.maybe_rebuild_structures();
 
     Ok(())
 }
@@ -338,9 +342,9 @@ pub fn grobner_basis<
         let reduction = {
             // Assemble the signature for the new polynomial:
             let monomial = Monomial::one();
-            let m_sign = MaskedSignature {
+            let m_sign = Masked {
                 divmask: c.get_basis().div_map.map(&monomial),
-                signature: Signature {
+                value: Signature {
                     idx: i as u32,
                     monomial,
                 },
@@ -375,9 +379,12 @@ pub fn grobner_basis<
             let reduction = c.regular_reduce_head(b.polys.len() as u32, m_sign, s_pair);
             early_ret_err!(handle_reduction_result(&mut c, reduction, &indices[..]));
 
-            // There might be reducers that are worth fully reducing, do it:
-            // TODO: make it not crash here
-            //c.reducers_optimize();
+            // Something was added to the basis calculator, be it polynomial or syzygy,
+            // so the monomials might have changed enough to justify a recalculation of
+            // the divmasks and indices.
+            //
+            // Also, new reducers might have been classified as hot.
+            c.optimize_structures();
         }
 
         // Syzygies found in this iteration are no longer useful in the next,
