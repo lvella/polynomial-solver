@@ -264,9 +264,6 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
 
     /// Fully reduce hot reducers.
     fn reducers_optimize(&mut self) {
-        // WIP TODO: remove the line below.
-        self.to_fully_reduce.clear();
-
         while let Some(poly) = self.to_fully_reduce.pop() {
             // Borrow mut the tail of the polynomial and fully reduce it:
             replace_with_or_abort(&mut *poly.tail.borrow_mut(), |tail| {
