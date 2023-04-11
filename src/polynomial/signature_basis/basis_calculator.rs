@@ -321,8 +321,7 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
             // succeed because the index is gone by now, so we hold the only
             // reference counter.
             for poly in self.basis.polys.iter_mut().map(|p| Rc::get_mut(p).unwrap()) {
-                let lm_divmask = div_map.map(&poly.lm.value);
-                poly.lm_divmask = lm_divmask;
+                poly.lm.divmask = div_map.map(&poly.lm.value);
 
                 let sign_divmask = div_map.map(&poly.signature().monomial);
                 poly.masked_signature.divmask = sign_divmask;
@@ -393,7 +392,7 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
                         .collect();
 
                     let lm = Masked {
-                        divmask: self.basis.div_map.map(&head.monomial),
+                        divmask: lm_divmask,
                         value: head.monomial,
                     };
 
@@ -402,7 +401,6 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
                         leading_coeff: head.coefficient,
                         lm,
                         masked_signature: m_sign,
-                        lm_divmask,
                         idx,
                         sign_to_lm_ratio: RefCell::new(sign_to_lm_ratio),
                         tail: RefCell::new(tail),

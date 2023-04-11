@@ -177,9 +177,6 @@ struct SignPoly<O: Ordering, I: Id, C: Field, P: SignedExponent> {
     /// to be reinserted in the list of polynomials to be hot reduced.
     is_hot_reducer: Cell<bool>,
 
-    /// The divmask fot the leading monomial.
-    lm_divmask: DivMask,
-
     /// The inverse of the leading term coefficient. This is used repeatedly
     /// during reduction and is expensive to calculate.
     inv_leading_coeff: C,
