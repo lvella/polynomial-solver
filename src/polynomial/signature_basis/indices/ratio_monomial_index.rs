@@ -283,6 +283,7 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
 
     pub(in crate::polynomial::signature_basis) fn find_a_reducer(
         &self,
+        max_sign: Option<&Signature<O, I, E>>,
         s_lm_ratio: &Ratio<O, I, E>,
         lm: &Masked<Monomial<O, I, E>>,
     ) -> Option<Rc<SignPoly<O, I, F, E>>> {
@@ -315,7 +316,14 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
             },
             &mut |Entry(poly)| {
                 let ord = poly.sign_to_lm_ratio.borrow().cmp(s_lm_ratio);
-                if ord.is_le() && poly.lm.divides(&lm) {
+                if ord.is_le()
+                    && poly.lm.divides(&lm)
+                    && (if let Some(max_sign) = max_sign {
+                        poly.signature() < max_sign
+                    } else {
+                        true
+                    })
+                {
                     found = Some(Rc::clone(poly));
                     // Keep searching if ratios are equal (meaning this find is
                     // a singular reducer), otherwise stop searching (this find

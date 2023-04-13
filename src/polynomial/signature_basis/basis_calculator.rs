@@ -59,10 +59,12 @@ impl<O: Ordering, I: Id, C: Field, P: SignedExponent> KnownBasis<O, I, C, P> {
     /// and are very related, I think it saves time to do both here.
     pub(super) fn find_a_reducer(
         &self,
+        max_sign: Option<&Signature<O, I, P>>,
         ratio: &Ratio<O, I, P>,
         monomial: &Masked<Monomial<O, I, P>>,
     ) -> Option<Rc<SignPoly<O, I, C, P>>> {
-        self.by_sign_lm_ratio_and_lm.find_a_reducer(ratio, monomial)
+        self.by_sign_lm_ratio_and_lm
+            .find_a_reducer(max_sign, ratio, monomial)
     }
 }
 
@@ -424,6 +426,12 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
     ) -> ReductionStepResult<O, I, C, P> {
         use ReductionStepResult::*;
 
+        let max_sign = if is_head_reduction {
+            None
+        } else {
+            Some(&m_sign.value)
+        };
+
         while let Some((monomial, coefficient)) = to_reduce.pop_last() {
             // Calculate signature to monomial ratio, to search for a reducer,
             // and possibly store it as the ratio for the leading term.
@@ -440,7 +448,8 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
                 if monomial.value.is_one() {
                     None
                 } else {
-                    self.basis.find_a_reducer(&sign_to_term_ratio, &monomial)
+                    self.basis
+                        .find_a_reducer(max_sign, &sign_to_term_ratio, &monomial)
                 }
             } {
                 // The reduction is said singular if we are reducing the leading
