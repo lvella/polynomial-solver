@@ -46,7 +46,7 @@ terminate with one of the following lines output:
 * `DETERMINISTIC`
 * `UNKNOWN`
 
-An full execution of a small problem would look like:
+A full execution of a small problem would look like:
 ```
 $ ./target/release/check-determinism ../formalbenchmarks/generated/O2/Montgomery2Edwards@montgomery@circomlib.r1cs 
 #(p: 0, s: 0), [] → idx 0, sign {0, 1}: x0 ...(1)
