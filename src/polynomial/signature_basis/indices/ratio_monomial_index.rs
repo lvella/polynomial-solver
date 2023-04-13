@@ -315,12 +315,12 @@ impl<O: Ordering, I: Id, F: Field, E: SignedExponent> RatioMonomialIndex<O, I, F
             },
             &mut |Entry(poly)| {
                 let ord = poly.sign_to_lm_ratio.borrow().cmp(s_lm_ratio);
-                if ord != std::cmp::Ordering::Greater && poly.lm.divides(&lm) {
+                if ord.is_le() && poly.lm.divides(&lm) {
                     found = Some(Rc::clone(poly));
                     // Keep searching if ratios are equal (meaning this find is
                     // a singular reducer), otherwise stop searching (this find
                     // is a regular reducer, which takes precedence).
-                    ord == std::cmp::Ordering::Equal
+                    ord.is_eq()
                 } else {
                     true
                 }

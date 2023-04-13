@@ -19,11 +19,11 @@ use super::{
     SignedExponent,
 };
 
-/// The inverse of the fraction of all term reductions a polynomial must be part
-/// as reducer to be considered hot, and be subject to full reduction. I.e., a
-/// polynomial is fully reduced if its reduction_count * HOT_REDUCER_FACTOR >=
-/// total_reductions.
-const HOT_REDUCER_FACTOR: usize = 20;
+/// The fraction of all term reductions a polynomial must be part as reducer to
+/// be considered hot, and be subject to full reduction. I.e., a polynomial is
+/// fully reduced if its reduction_count >= total_reductions *
+/// HOT_REDUCER_FRACTION.
+const HOT_REDUCER_FRACTION: f64 = 0.75;
 
 /// Stores all the basis elements known and processed so far.
 ///
@@ -92,10 +92,6 @@ pub struct BasisCalculator<O: Ordering, I: Id, C: Field, P: SignedExponent> {
 
     /// Number of term reductions performed so far.
     reduction_count: usize,
-
-    /// List of reducers found to be hot, that must be fully reduced so that
-    /// reductions that use them is cheaper.
-    to_fully_reduce: Vec<Rc<SignPoly<O, I, C, P>>>,
 }
 
 /// The 3 possible results of a regular reduction.
@@ -138,7 +134,6 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
             spairs: s_pairs::SPairTriangle::new(),
             ratio_map: CmpMap::new(),
             reduction_count: 0,
-            to_fully_reduce: Vec::new(),
         }
     }
 
@@ -262,39 +257,8 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
         }
     }
 
-    /// Fully reduce hot reducers.
-    fn reducers_optimize(&mut self) {
-        while let Some(poly) = self.to_fully_reduce.pop() {
-            // Borrow mut the tail of the polynomial and fully reduce it:
-            replace_with_or_abort(&mut *poly.tail.borrow_mut(), |tail| {
-                // Build the BTreeMap used as reduction input. It seems to be
-                // faster if inserted in ascending order, thus the rev().
-                let mut to_reduce: BTreeMap<Monomial<O, I, P>, C> = tail
-                    .into_iter()
-                    .rev()
-                    .map(|t| (t.monomial, t.coefficient))
-                    .collect();
-
-                let mut tail = Vec::new();
-                while let ReductionStepResult::Reduced(term, _, _) =
-                    self.regular_reduce_step(false, &poly.masked_signature, &mut to_reduce)
-                {
-                    tail.push(term);
-                }
-
-                tail
-            });
-        }
-    }
-
     /// Fully reduce hot reducers and recalculate divmaps and rebalance indexes.
     pub fn optimize_structures(&mut self) {
-        // It is essential to optimize reducers before recalculating the
-        // divmasks, because we need to have just one Rc to each polynomial to
-        // be able to modify them, and optimizing reducers will clear all the
-        // Rcs in the list of poly to be optimized.
-        self.reducers_optimize();
-
         const RECALC_PERCENTAGE: u8 = 20;
 
         // If changes are smaller then the give percerntage, do nothing.
@@ -414,6 +378,29 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
         }
     }
 
+    /// Fully reduce hot reducers.
+    fn regular_reduce_tail(&mut self, poly: &SignPoly<O, I, C, P>) {
+        // Borrow mut the tail of the polynomial and fully reduce it:
+        replace_with_or_abort(&mut *poly.tail.borrow_mut(), |tail| {
+            // Build the BTreeMap used as reduction input. It seems to be
+            // faster if inserted in ascending order, thus the rev().
+            let mut to_reduce: BTreeMap<Monomial<O, I, P>, C> = tail
+                .into_iter()
+                .rev()
+                .map(|t| (t.monomial, t.coefficient))
+                .collect();
+
+            let mut tail = Vec::new();
+            while let ReductionStepResult::Reduced(term, _, _) =
+                self.regular_reduce_step(false, &poly.masked_signature, &mut to_reduce)
+            {
+                tail.push(term);
+            }
+
+            tail
+        });
+    }
+
     /// One step of regular reduction algorithm.
     ///
     /// Reduces the leading term until the first term that can't be reduced,
@@ -473,10 +460,15 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
 
                 // Set this polynomial to be reduced if we find it to be hot.
                 if !reducer.is_hot_reducer.get()
-                    && reducer_count * HOT_REDUCER_FACTOR >= self.reduction_count
+                    && reducer_count as f64 >= self.reduction_count as f64 * HOT_REDUCER_FRACTION
                 {
                     reducer.is_hot_reducer.set(true);
-                    self.to_fully_reduce.push(Rc::clone(&reducer));
+                    // It is fine to call this recursively here because no
+                    // reducer found on the call stack so far will be found
+                    // again as reducer, because they necessarily have bigger
+                    // leading monomials than the monomial in any term being
+                    // reduced.
+                    self.regular_reduce_tail(&reducer);
                 }
 
                 // Calculate the multiplier monomial that will nullify the term.
