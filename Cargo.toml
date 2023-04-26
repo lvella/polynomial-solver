@@ -29,6 +29,7 @@ bitvec = "1"
 rand = "0.8"
 replace_with = "0.1"
 r1cs-file = { git = "https://github.com/lvella/zeropool-utils.git" }
+nix = "0.26"
 
 [dependencies.rug]
 version = "1.13"

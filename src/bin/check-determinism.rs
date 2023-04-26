@@ -1,9 +1,21 @@
 #![feature(array_zip)]
+#![feature(pointer_is_aligned)]
 
-use std::{collections::HashMap, fs::File};
+use std::{
+    cmp::min,
+    collections::HashMap,
+    fs::File,
+    num::NonZeroU32,
+    sync::atomic::{AtomicU32, Ordering::Relaxed},
+    thread::available_parallelism,
+};
 
 use clap::Parser;
 use itertools::Itertools;
+use nix::{
+    sys::wait::{wait, WaitStatus},
+    unistd::{getpid, Pid},
+};
 use polynomial_solver::{
     finite_field::{FiniteField, ZkFieldWrapper},
     polynomial::Term,
@@ -12,11 +24,19 @@ use r1cs_file::{FieldElement, R1csFile};
 use rug::{integer::Order, Integer};
 use zokrates_field::{Bls12_377Field, Bls12_381Field, Bn128Field, Bw6_761Field, Field as ZkField};
 
+/// Number of outputs to constraint per process.
+const N: NonZeroU32 = unsafe { NonZeroU32::new_unchecked(4) };
+
 /// Given a zero-knowledge circuit in R1CS format, try to determine if the circuit is deterministic
 /// or not.
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
+    /// The maximum number of worker processes to use. Default uses the value
+    /// returned by std::thread::available_parallelism().
+    #[arg(short, long)]
+    process_count: Option<NonZeroU32>,
+
     /// Input R1CS file
     r1cs_file: String,
 
@@ -45,16 +65,25 @@ fn main() -> std::io::Result<()> {
         return Ok(());
     }
 
+    let num_procs = match args.process_count.ok_or_else(|| available_parallelism()) {
+        Ok(num) => num,
+        Err(Ok(num)) => NonZeroU32::new(min(num.get(), u32::MAX as usize) as u32).unwrap(),
+        Err(Err(e)) => {
+            println!("Error: could not get available parallelism.\nPlease specify the process count explicitly.");
+            return Err(e);
+        }
+    };
+
     println!(
         "{}",
         match if ZkFieldWrapper::<Bn128Field>::get_order() == prime {
-            is_deterministic::<Bn128Field, FS>(r1cs)
+            is_deterministic::<Bn128Field, FS>(num_procs, r1cs)
         } else if ZkFieldWrapper::<Bls12_381Field>::get_order() == prime {
-            is_deterministic::<Bls12_381Field, FS>(r1cs)
+            is_deterministic::<Bls12_381Field, FS>(num_procs, r1cs)
         } else if ZkFieldWrapper::<Bls12_377Field>::get_order() == prime {
-            is_deterministic::<Bls12_377Field, FS>(r1cs)
+            is_deterministic::<Bls12_377Field, FS>(num_procs, r1cs)
         } else if ZkFieldWrapper::<Bw6_761Field>::get_order() == prime {
-            is_deterministic::<Bw6_761Field, FS>(r1cs)
+            is_deterministic::<Bw6_761Field, FS>(num_procs, r1cs)
         } else {
             panic!(concat!(
                 "Prime field used is not supported.\n",
@@ -68,6 +97,139 @@ fn main() -> std::io::Result<()> {
     );
 
     Ok(())
+}
+
+/// It would be nice if there was a full featured portable multiprocessing
+/// library like we have in Python. But there isn't, and rust community doesn't
+/// seem to like processes, so we do with our own version based on nix crate.
+mod multiprocessing {
+    use core::{ffi::c_void, num::NonZeroUsize};
+    use nix::{
+        sys::{
+            mman::{mmap, munmap, MapFlags, ProtFlags},
+            signal::{kill, Signal::SIGKILL},
+            wait::waitpid,
+        },
+        unistd::{fork, getpid, Pid},
+    };
+    use std::{mem::size_of, ops::Deref, panic::AssertUnwindSafe, ptr};
+
+    /// Similar to a Box, but in shared memory, so that the containing object
+    /// will be shared between processes after a fork.
+    ///
+    /// There is no way for this struct to track how many times it has been
+    /// forked into other processes, and which of the process have finished
+    /// and/or dropped the object, so destruction is manually controlled.
+    ///
+    /// The process that created the object will be the only one to drop its
+    /// contents: so you must ensure that the SharedBox object in the parent
+    /// process outlives its counterparts in the children processes.
+    ///
+    /// T is Sync because if you can't share it between threads, even less
+    /// between processes. But being Sync is not sufficient to be safe for use
+    /// across processes, it is just that Rust lacks a trait for inter-process
+    /// sharing safety, and being Sync is the least we can do.
+    pub struct SharedBox<T: Sync> {
+        ptr: *mut T,
+        creator: Pid,
+    }
+
+    impl<T: Sync> SharedBox<T> {
+        /// This is unsafe because any type T that contains a pointer will most
+        /// likely be broken. I don't know of any Rust trait that help us
+        /// restrict T here, so I am making this unsafe.
+        pub unsafe fn new(value: T) -> nix::Result<Self> {
+            Ok(SharedBox {
+                ptr: unsafe {
+                    let ptr = mmap(
+                        None,
+                        NonZeroUsize::new(size_of::<T>()).unwrap(),
+                        ProtFlags::PROT_WRITE | ProtFlags::PROT_READ,
+                        MapFlags::MAP_SHARED | MapFlags::MAP_ANONYMOUS,
+                        -1,
+                        0,
+                    )? as *mut T;
+                    assert!(!ptr.is_null());
+                    assert!(ptr.is_aligned());
+
+                    ptr::write(ptr, value);
+                    ptr
+                },
+                creator: getpid(),
+            })
+        }
+    }
+
+    impl<T: Sync> Drop for SharedBox<T> {
+        fn drop(&mut self) {
+            unsafe {
+                if self.creator == getpid() {
+                    ptr::drop_in_place(self.ptr);
+                }
+
+                munmap(self.ptr as *mut c_void, size_of::<T>()).unwrap();
+            }
+        }
+    }
+
+    impl<T: Sync> Deref for SharedBox<T> {
+        type Target = T;
+
+        fn deref(&self) -> &Self::Target {
+            unsafe { &*self.ptr }
+        }
+    }
+
+    /// Tracks a child process.
+    ///
+    /// The process is killed and collected upon dropping. This is a minimal
+    /// effort to not leave processes running after parent crashes.
+    pub struct Process(Pid);
+
+    impl Process {
+        pub unsafe fn new(func: impl FnOnce() -> u8) -> Self {
+            match fork().unwrap() {
+                nix::unistd::ForkResult::Parent { child } => Self(child),
+                nix::unistd::ForkResult::Child => {
+                    match std::panic::catch_unwind(AssertUnwindSafe(func)) {
+                        Ok(return_code) => std::process::exit(return_code as i32),
+                        Err(err) => {
+                            eprint!("Child process function panicked");
+                            if let Some(msg) = err.downcast_ref::<&'static str>() {
+                                eprintln!(": {}", msg);
+                            } else {
+                                eprint!("! ");
+                            }
+                            eprintln!("Aborting...");
+                            std::process::abort();
+                        }
+                    }
+                }
+            }
+        }
+
+        /// Get the process Pid.
+        pub fn get_pid(&self) -> Pid {
+            self.0
+        }
+
+        /// Stop tracking this process and don't kill or wait for it.
+        pub fn detach(self) {
+            {
+                // This is a no-op because self.0 is Copy, but in the event it
+                // changes, this should cause some error to be fixed.
+                std::mem::drop(self.0);
+            }
+            std::mem::forget(self);
+        }
+    }
+
+    impl Drop for Process {
+        fn drop(&mut self) {
+            kill(self.0, SIGKILL).unwrap();
+            waitpid(self.0, None).unwrap();
+        }
+    }
 }
 
 type Poly<F> = polynomial_solver::polynomial::Polynomial<
@@ -88,12 +250,157 @@ enum Conclusion {
     Unknown,
 }
 
-fn is_deterministic<F: ZkField, const FS: usize>(r1cs: R1csFile<FS>) -> Conclusion {
-    if r1cs.header.n_pub_out == 0 {
-        println!("Has no public outputs, so this is certainly deterministic.");
-        return Conclusion::Deterministic;
+fn ceil_div(a: NonZeroU32, b: NonZeroU32) -> NonZeroU32 {
+    NonZeroU32::new((a.get() - 1) / b + 1).unwrap()
+}
+
+/// Multiprocess function to try to find if the r1cs file is deterministic.
+///
+/// It performs one Gröbner Basis per N output variables, in parallel across
+/// num_procs forked processes. It decides for deterministic when all processes
+/// exits and decides for deterministic on the variables they are handling.
+///
+/// Why processes an not threads? Because processes are interruptible: once a
+/// the first process decides for possibly non-deterministic, I can kill all the
+/// other processes and return.
+fn is_deterministic<F: ZkField, const FS: usize>(
+    num_procs: NonZeroU32,
+    r1cs: R1csFile<FS>,
+) -> Conclusion {
+    let num_outs = match NonZeroU32::new(r1cs.header.n_pub_out) {
+        None => {
+            println!("Has no public outputs, so this is certainly deterministic.");
+            return Conclusion::Deterministic;
+        }
+        Some(v) => v,
+    };
+
+    // Compute how to split the load.
+    // Maybe we can handle less variables per process:
+    let outs_per_run = min(ceil_div(num_outs, num_procs), N);
+    // Maybe we need less processes:
+    let num_procs = min(ceil_div(num_outs, outs_per_run), num_procs);
+
+    println!(
+        "Using {} processes, each with at most {} output variables",
+        num_procs, outs_per_run
+    );
+
+    let (system, wire_map) = build_shared_system::<F, FS>(r1cs, outs_per_run.get());
+
+    // Shared atomic variable with the next output to be processed.
+    let out_counter = unsafe { multiprocessing::SharedBox::new(AtomicU32::new(0)) }.unwrap();
+
+    // Run the worker subprocesses and collect the handles in a hash map.
+    let mut subprocesses: HashMap<Pid, multiprocessing::Process> = (0..num_procs.get())
+        .map(|_| {
+            let new_proc_func = || {
+                // Process the out variables until there are none left.
+                'outer: loop {
+                    // Build the constraint saying that at least one output
+                    // variable must be non unique, using at most `outs_per_run`
+                    // vars at a time.
+                    let mut non_unique_constraint = Poly::one();
+                    let mut vars = Vec::new();
+                    'inner: for inverse_var in 1..=outs_per_run.get() {
+                        let var = out_counter.fetch_add(1, Relaxed);
+                        if var >= num_outs.get() {
+                            if inverse_var == 1 {
+                                // There are no variables left to process, break outer loop.
+                                break 'outer;
+                            } else {
+                                // We have some output variables to process.
+                                break 'inner;
+                            }
+                        }
+
+                        // Get the even and odd identifiers for output variable,
+                        // (they start counting from 1).
+                        vars.push(var + 1);
+                        let (even, odd) = wire_map[&(var + 1)];
+
+                        let factor = Poly::new_var(inverse_var)
+                            * (Poly::new_var(even) - Poly::new_var(odd))
+                            - Poly::one();
+                        non_unique_constraint = non_unique_constraint * factor;
+                    }
+
+                    println!(
+                        "%% {} %% processing vars {:?}, num terms: {}",
+                        getpid(),
+                        vars,
+                        non_unique_constraint.get_terms().len()
+                    );
+                    drop(vars);
+
+                    // Create the system to be tested and include the constraint to the outputs
+                    let mut system = system.clone();
+                    system.push(non_unique_constraint);
+
+                    // Run the grobner basis
+                    system.sort_unstable();
+                    let gb = polynomial_solver::polynomial::signature_basis::grobner_basis(system);
+
+                    // Return 1 immediately if the processed output may be non-deterministic.
+                    if gb.into_iter().all(|p| p.is_zero() || !p.is_constant()) {
+                        return 1;
+                    }
+                }
+
+                // Return 0 means every variable tested was found to be deterministic.
+                0
+            };
+
+            let new_proc = unsafe { multiprocessing::Process::new(new_proc_func) };
+
+            (new_proc.get_pid(), new_proc)
+        })
+        .collect();
+
+    // Wait for the subprocesses to finish:
+    while !subprocesses.is_empty() {
+        let wait_result;
+        {
+            // This is a critical region, where a pid has been waited, but we
+            // still hold the handle that will try to kill and wait that same
+            // process upon dropping. We need to forget it.
+            //
+            // The problem here is the possibility of killing some random
+            // process whose PID happens to reuse the collected process, and we
+            // don't want that.
+            wait_result = wait().unwrap();
+            if let Some(pid) = wait_result.pid() {
+                subprocesses.remove(&pid).unwrap().detach();
+            }
+        }
+
+        match wait_result {
+            WaitStatus::Exited(_, status) => {
+                if status == 1 {
+                    // There is at least one output that can be non-deterministic,
+                    // we can return immediately:
+                    return Conclusion::Unknown;
+                }
+            }
+            WaitStatus::Signaled(pid, signal, _) => {
+                panic!("Subprocess {} was killed by signal {}!", pid, signal);
+            }
+            _ => unreachable!(),
+        }
     }
 
+    // Every process has finished with status != 1, which means all outputs are
+    // deterministic.
+    Conclusion::Deterministic
+}
+
+/// Encodes the zk circuit twice, sharing the input variables.
+///
+/// The uniqueness of output constraints is not encoded, and must be added to the system.
+fn build_shared_system<F: ZkField, const FS: usize>(
+    r1cs: R1csFile<FS>,
+    num_reserved: u32,
+) -> (Vec<Poly<F>>, HashMap<u32, (u32, u32)>) {
     // We will encode the same circuit twice, lets call "even" and "odd"
     // systems. Each has its own set of variables, except for the input
     // variables which are shared. The following will map the wires from the
@@ -107,39 +414,17 @@ fn is_deterministic<F: ZkField, const FS: usize>(r1cs: R1csFile<FS>) -> Conclusi
     let mut poly_set = vec![Poly::<F>::new_var(0) - Poly::<F>::one()];
     wire_map.insert(0u32, (0u32, 0u32));
 
-    let mut var_id_gen = 1..;
+    // Skip id 0 and reserved var ids:
+    let mut var_id_gen = (1 + num_reserved)..;
 
-    // For each of public output, we generate 3 variables: one for each of the
-    // even and odd constraint systems, and one to create the negative
-    // constraint that says the even variable should be different from the odd
-    // variable.
-    //
-    // We should multiply together these negative constraints (effectively
-    // OR'ing them) into one single polynomial, so that if any one can be
-    // satisfied, the whole polynomial is satisfied and the system is considered
-    // non-deterministic.
-    //
-    // This is what connects the even and odd systems and ensures that, if
-    // UNSAT, the circuit is deterministic (i.e., for the same inputs, it is not
-    // possible to have 2 different outputs).
-    //
-    // TODO: This is ridiculous and absolutely impractical. Find a way to encode
-    // this where you don't have to multiply all the polynomials together (it
-    // seems Picus queries one output variable at a time).
-    let mut non_unique_constraint = Poly::one();
+    // For each of public output, we generate 2 variables: one for each of the
+    // even and odd constraint systems.
     for i in 0..r1cs.header.n_pub_out {
         let out_wire = 1 + i;
         let even = var_id_gen.next().unwrap();
         let odd = var_id_gen.next().unwrap();
         wire_map.insert(out_wire, (even, odd));
-
-        // We need an extra variable to encode a negative constraint.
-        let extra = var_id_gen.next().unwrap();
-        let factor =
-            Poly::new_var(extra) * (Poly::new_var(even) - Poly::new_var(odd)) - Poly::one();
-        non_unique_constraint = non_unique_constraint * factor;
     }
-    poly_set.push(non_unique_constraint);
 
     // The input wires are shared between even and odd systems:
     for i in 0..(r1cs.header.n_pub_in + r1cs.header.n_prvt_in) {
@@ -179,15 +464,7 @@ fn is_deterministic<F: ZkField, const FS: usize>(r1cs: R1csFile<FS>) -> Conclusi
         poly_set.extend(new_polys);
     }
 
-    poly_set.sort_unstable();
-    let gb = polynomial_solver::polynomial::signature_basis::grobner_basis(poly_set);
-
-    // If we have a non-zero constant polynomial in GB, the system is UNSAT:
-    if gb.into_iter().any(|p| p.is_constant() && !p.is_zero()) {
-        Conclusion::Deterministic
-    } else {
-        Conclusion::Unknown
-    }
+    (poly_set, wire_map)
 }
 
 mod just_dump {
