@@ -4,19 +4,35 @@
 //!
 //! Intended to be execute on every new version to track performance evolution
 //! and detect serious regressions.
+//!
+//! Uses libc for wait4, that is Linux only, use nix for everything else.
+
+#![feature(local_key_cell_methods)]
 
 use lazy_static::lazy_static;
-use libc::timeval;
+use nix::{
+    sys::{
+        signal::{
+            killpg, sigaction, sigprocmask, SaFlags, SigAction, SigHandler, SigmaskHow,
+            Signal::{SIGABRT, SIGHUP, SIGINT, SIGKILL, SIGTERM},
+        },
+        signalfd::SigSet,
+    },
+    unistd::Pid,
+};
 use regex::Regex;
 use serde::Serialize;
 use std::{
     ffi::OsStr,
     io::{self, BufRead, BufReader},
     mem::MaybeUninit,
-    os::unix::process::ExitStatusExt,
+    os::unix::process::{CommandExt, ExitStatusExt},
     path::Path,
     process::{ChildStdout, Command, ExitStatus, Stdio},
-    sync::mpsc::sync_channel,
+    sync::{
+        atomic::{AtomicU32, Ordering::Relaxed},
+        mpsc::sync_channel,
+    },
     time::{Duration, Instant},
 };
 
@@ -41,10 +57,32 @@ macro_rules! tprintln {
     };
 }
 
+/// The child group currently executing (if different from zero). This is used
+/// to propagate signals, in case this process is interrupted.
+static CHILD_PGID: AtomicU32 = AtomicU32::new(0);
+
+thread_local! {
+    /// List of signals to be propagated
+    static DEATH_SIGNALS: SigSet = death_signals_set();
+}
+
 fn main() {
     unsafe {
         START_TIME.write(Instant::now());
     }
+
+    // Register signal handler that propagates death signals to children.
+    DEATH_SIGNALS.with(|death_signals| {
+        let action = SigAction::new(
+            SigHandler::Handler(death_signal_dispatcher),
+            SaFlags::empty(),
+            *death_signals,
+        );
+
+        for signal in death_signals.iter() {
+            unsafe { sigaction(signal, &action) }.unwrap();
+        }
+    });
 
     // Set the working directory to a convenient place.
     std::env::set_current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/monitoring-cases")).unwrap();
@@ -228,13 +266,31 @@ fn child_runner(
     output_processor: impl FnOnce(BufReader<ChildStdout>) -> (RunOutcome, Option<f64>, u32),
 ) -> RunStatistics {
     tprintln!("Starting {}", case_name);
-    let mut child = command
+    let command = command
+        .process_group(0)
         .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
+        .stdout(Stdio::piped());
 
-    let child_pid = child.id();
+    // Blocks death signals while we fork, so that the child PGID is stored
+    // so that those signals can be propagated by our signal handler.
+    let child;
+    {
+        let prev_mask = mask_death_signals();
+        child = unsafe {
+            command.pre_exec(move || {
+                prev_mask.restore();
+                Ok(())
+            })
+        }
+        .spawn()
+        .map(|child| {
+            let old_pgid = CHILD_PGID.swap(child.id(), Relaxed);
+            (child, old_pgid)
+        });
+        prev_mask.restore();
+    }
+    let (mut child, old_pgid) = child.unwrap();
+    assert!(old_pgid == 0);
 
     // We don't need stdin, so drop it:
     child.stdin.take();
@@ -250,10 +306,14 @@ fn child_runner(
         tprintln!("Waiting for case to finish");
         let unblock_reason = waiter.recv_timeout(TIMEOUT).unwrap_err();
 
-        // Kill the child process 😢. Might be a zombie at this point, but
-        // should not have been collected yet.
+        // Kill the whole child process group 😢. Child might be a zombie at
+        // this point, but should not have been collected yet.
         tprintln!("Done waiting, sending kill signal");
-        let _ = child.kill();
+        killpg(Pid::from_raw(child.id() as libc::pid_t), SIGKILL).unwrap();
+
+        // We no longer have to propagate the signals to this process, because
+        // it was already signaled to die.
+        assert_eq!(CHILD_PGID.swap(0, Relaxed), child.id());
 
         match unblock_reason {
             std::sync::mpsc::RecvTimeoutError::Timeout => true,
@@ -278,14 +338,14 @@ fn child_runner(
     // std::process::Child does not automatically wait for the child when
     // dropped.
     let (usage, wait_status) = unsafe {
-        use libc::{c_int, pid_t, rusage};
+        use libc::{c_int, pid_t, rusage, wait4};
 
-        let pid = child_pid as pid_t;
+        let pid = CHILD_PGID.load(Relaxed) as pid_t;
         let mut status = MaybeUninit::<c_int>::uninit();
         let mut rusage = MaybeUninit::<rusage>::uninit();
 
         tprintln!("Collecting the case's zombie process");
-        libc::wait4(pid, status.as_mut_ptr(), 0, rusage.as_mut_ptr());
+        wait4(pid, status.as_mut_ptr(), 0, rusage.as_mut_ptr());
 
         (rusage.assume_init(), status.assume_init())
     };
@@ -305,6 +365,46 @@ fn child_runner(
     }
 }
 
-fn parse_timeval(duration: &timeval) -> f64 {
+fn parse_timeval(duration: &libc::timeval) -> f64 {
     duration.tv_sec as f64 + (duration.tv_usec as f64 / 1e6)
+}
+
+fn death_signals_set() -> SigSet {
+    let mut sigset = SigSet::empty();
+    sigset.add(SIGABRT);
+    sigset.add(SIGHUP);
+    sigset.add(SIGINT);
+    sigset.add(SIGTERM);
+    sigset
+}
+
+/// Signal handler that forwards various killing signals from this process to
+/// child.
+extern "C" fn death_signal_dispatcher(signal: libc::c_int) {
+    unsafe {
+        let pid = CHILD_PGID.load(Relaxed) as libc::pid_t;
+        if pid != 0 {
+            libc::killpg(pid as i32, signal);
+        }
+        // It seems to be some convention to finish with this exit code.
+        libc::_exit(128 + signal);
+    }
+}
+
+fn mask_death_signals() -> PrevSigMask {
+    let mut prev = SigSet::empty();
+    DEATH_SIGNALS.with(|death_signals| {
+        sigprocmask(SigmaskHow::SIG_BLOCK, Some(death_signals), Some(&mut prev)).unwrap()
+    });
+
+    PrevSigMask(prev)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PrevSigMask(SigSet);
+
+impl PrevSigMask {
+    fn restore(&self) {
+        sigprocmask(SigmaskHow::SIG_SETMASK, Some(&self.0), None).unwrap();
+    }
 }
