@@ -1,4 +1,4 @@
-use std::{fmt::Display, ptr::addr_of, rc::Rc};
+use std::{cell::RefCell, fmt::Display, rc::Rc};
 
 use replace_with::replace_with_or_abort;
 
@@ -27,7 +27,7 @@ pub struct KnownBasis<O: Ordering, I: Id, C: Field, P: SignedExponent> {
 
     /// Owns the basis polynomials, ordered by insertion order (which is
     /// important to the spair triangle).
-    pub polys: Vec<Box<SignPoly<O, I, C, P>>>,
+    pub polys: Vec<Rc<RefCell<SignPoly<O, I, C, P>>>>,
 
     /// Basis indexed both by sinature/LM ratio and LM. Used in multidimensional
     /// search for reducer and high base divisor.
@@ -49,10 +49,8 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display> KnownB
         &self,
         ratio: &Ratio<O, I, P>,
         monomial: MaskedMonomialRef<O, I, P>,
-    ) -> Option<&SignPoly<O, I, C, P>> {
-        self.by_sign_lm_ratio_and_lm
-            .find_a_reducer(ratio, monomial)
-            .map(|ptr| unsafe { &*ptr })
+    ) -> Option<Rc<RefCell<SignPoly<O, I, C, P>>>> {
+        self.by_sign_lm_ratio_and_lm.find_a_reducer(ratio, monomial)
     }
 }
 
@@ -88,8 +86,7 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
     pub fn new(num_vars: usize) -> Self {
         let max_exp = MaximumExponentsTracker::new(num_vars);
         let div_map = Rc::new(DivMap::new(&max_exp));
-        let by_sign_lm_ratio_and_lm =
-            RatioMonomialIndex::new(num_vars, div_map.clone(), Vec::new());
+        let by_sign_lm_ratio_and_lm = RatioMonomialIndex::new(num_vars, div_map.clone(), &[]);
         let syzygies = MonomialIndex::new(num_vars, div_map.clone(), vec![]);
         BasisCalculator {
             basis: KnownBasis {
@@ -135,7 +132,7 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
             .update(&mut self.ratio_map)
             .is_err()
         {
-            // The new ratio does not fit into the ratio_map, rebuid it to make room:
+            // The new ratio does not fit into the ratio_map, rebuild it to make room:
             println!("Rebuilding the ratio map.");
             self.ratio_map.rebuild();
 
@@ -147,29 +144,33 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
                 .unwrap();
 
             // Update every existing polynomial, this can't fail:
-            for p in self.basis.polys.iter_mut() {
+            for p in self.basis.polys.iter() {
                 // Since the elements were already in the map, this can't fail.
-                p.as_mut()
+                p.borrow_mut()
                     .sign_to_lm_ratio
                     .update(&mut self.ratio_map)
                     .unwrap();
             }
         }
 
-        let sign_poly = Box::new(sign_poly);
+        let sign_poly = Rc::new(RefCell::new(sign_poly));
 
         self.max_exp
-            .update(&sign_poly.masked_signature.signature.monomial);
-        for term in sign_poly.polynomial.terms.iter() {
-            self.max_exp.update(&term.monomial);
-        }
+            .update(&sign_poly.borrow_mut().masked_signature.signature.monomial);
 
-        self.spairs
-            .add_column(&sign_poly, &self.basis, &self.syzygies);
+        {
+            let poly_ref = sign_poly.borrow();
+            for term in poly_ref.polynomial.terms.iter() {
+                self.max_exp.update(&term.monomial);
+            }
+
+            self.spairs
+                .add_column(&poly_ref, &self.basis, &self.syzygies);
+        }
 
         self.basis
             .by_sign_lm_ratio_and_lm
-            .insert(sign_poly.as_ref());
+            .insert(Rc::clone(&sign_poly));
 
         self.basis.polys.push(sign_poly);
     }
@@ -185,22 +186,27 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
 
     pub fn add_koszul_syzygies(&mut self, indices: &[(u32, u32)]) {
         for (p, q) in indices {
-            let p = self.basis.polys[*p as usize].as_ref();
-            let q = self.basis.polys[*q as usize].as_ref();
+            let mut signature;
+            let divmask;
+            {
+                let p = self.basis.polys[*p as usize].borrow();
+                let q = self.basis.polys[*q as usize].borrow();
 
-            // Choose q to be the basis of the signature:
-            let (sign_basis, lm_basis) = match p.sign_to_lm_ratio_cmp(q) {
-                std::cmp::Ordering::Less => (q, p),
-                std::cmp::Ordering::Equal => {
-                    // Non-regular Koszul syzygy, skip,
-                    continue;
-                }
-                std::cmp::Ordering::Greater => (p, q),
-            };
+                // Choose q to be the basis of the signature:
+                let (sign_basis, lm_basis) = match p.sign_to_lm_ratio_cmp(&q) {
+                    std::cmp::Ordering::Less => (q, p),
+                    std::cmp::Ordering::Equal => {
+                        // Non-regular Koszul syzygy, skip,
+                        continue;
+                    }
+                    std::cmp::Ordering::Greater => (p, q),
+                };
 
-            let mut signature = sign_basis.signature().clone();
-            signature.monomial = signature.monomial * lm_basis.polynomial.terms[0].monomial.clone();
-            let divmask = self.basis.div_map.map(&signature.monomial);
+                signature = sign_basis.signature().clone();
+                signature.monomial =
+                    signature.monomial * lm_basis.polynomial.terms[0].monomial.clone();
+                divmask = self.basis.div_map.map(&signature.monomial);
+            }
 
             let masked_signature = MaskedSignature { divmask, signature };
             // Do not add redundant koszul syzygies:
@@ -231,12 +237,12 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
         let div_map = self.basis.div_map.clone();
 
         // Recalculate both masks of each polynomial.
-        for poly in self.basis.polys.iter_mut() {
+        for mut poly in self.basis.polys.iter().map(|p| p.borrow_mut()) {
             let lm_divmask = div_map.map(&poly.polynomial.terms[0].monomial);
-            poly.as_mut().lm_divmask = lm_divmask;
+            poly.lm_divmask = lm_divmask;
 
             let sign_divmask = div_map.map(&poly.signature().monomial);
-            poly.as_mut().masked_signature.divmask = sign_divmask;
+            poly.masked_signature.divmask = sign_divmask;
         }
 
         // Recalculates the mask and recreates the index for syzygy basis.
@@ -249,11 +255,8 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display>
         });
 
         // Recreate the index for reductions.
-        self.basis.by_sign_lm_ratio_and_lm = RatioMonomialIndex::new(
-            self.basis.num_vars,
-            div_map,
-            self.basis.polys.iter().map(|p| addr_of!(**p)).collect(),
-        );
+        self.basis.by_sign_lm_ratio_and_lm =
+            RatioMonomialIndex::new(self.basis.num_vars, div_map, &self.basis.polys);
     }
 
     pub fn clear_syzygies(&mut self) {
@@ -288,9 +291,12 @@ impl<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Display> IntoIt
     type IntoIter = impl Iterator<Item = Self::Item>;
 
     fn into_iter(self) -> Self::IntoIter {
+        // Drop the index here otherwise the unwrap of the Rc will fail.
+        drop(self.basis.by_sign_lm_ratio_and_lm);
+
         self.basis
             .polys
             .into_iter()
-            .map(|sign_poly| sign_poly.polynomial)
+            .map(|sign_poly| Rc::try_unwrap(sign_poly).unwrap().into_inner().polynomial)
     }
 }

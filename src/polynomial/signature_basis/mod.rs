@@ -135,12 +135,15 @@ fn sign_to_monomial_ratio<O: Ordering, I: Id, P: SignedExponent>(
 /// polynomial module, but it turns out that representing this element as a pair
 /// (signature, polynomial) is sufficient for all the computations. Other fields
 /// are optimizations.
+#[derive(Debug)]
 pub struct SignPoly<O: Ordering, I: Id, C: Field, P: SignedExponent> {
     masked_signature: MaskedSignature<O, I, P>,
 
     polynomial: Polynomial<O, I, C, P>,
+
     /// The divmask fot the leading monomial.
     lm_divmask: DivMask,
+
     /// The inverse of the leading term coefficient. This is used repeatedly
     /// during reduction and is expensive to calculate.
     inv_leading_coeff: C,
@@ -233,10 +236,11 @@ fn regular_reduce<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Di
             monomial: m,
         };
 
-        // Skip searching for a divisor for 1 and (maybe) save some time.
-        if term.monomial.is_one() {
+        // Early stop reduction if we already have a leading term (or if such
+        // term is constant).
+        if !reduced_terms.is_empty() || term.monomial.is_one() {
             reduced_terms.push(term);
-            break;
+            continue;
         }
 
         // Calculate the divmask for the term to be reduced:
@@ -250,6 +254,8 @@ fn regular_reduce<O: Ordering, I: Id, C: Field + Display, P: SignedExponent + Di
             &sign_to_term_ratio,
             MaskedMonomialRef(&divmask, &term.monomial),
         ) {
+            let reducer = reducer.borrow();
+
             // The reduction is said singular if we are reducing the leading
             // term and the factor*reducer have the same signature as the reduced.
             // This translates to equal signature/monomial ratio. In this case

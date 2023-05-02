@@ -1,6 +1,7 @@
 //! Indices used to accelerate searches in the signature basis algorithm.
 
 use replace_with::replace_with_or_abort;
+use std::ops::Deref;
 
 use crate::polynomial::{divmask::DivMaskTestResult, monomial_ordering::Ordering, Id, Monomial};
 
@@ -29,12 +30,12 @@ impl<'a, O: Ordering + 'a, I: Id + 'a, E: SignedExponent + 'a> MaskedMonomial<O,
     ///
     /// Returns None if input iter is empty.
     pub(super) fn gcd_all(
-        mut iter: impl Iterator<Item = &'a Monomial<O, I, E>>,
+        mut iter: impl Iterator<Item = impl Deref<Target = Monomial<O, I, E>>>,
         div_map: &DivMap<E>,
     ) -> Option<Self> {
         let start = iter.next()?.clone();
 
-        let monomial = iter.fold(start, |a, b| a.gcd(b));
+        let monomial = iter.fold(start, |a, b| a.gcd(&b));
 
         Some(MaskedMonomial {
             divmask: div_map.map(&monomial),
