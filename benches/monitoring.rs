@@ -290,7 +290,7 @@ fn child_runner(
         prev_mask.restore();
     }
     let (mut child, old_pgid) = child.unwrap();
-    assert!(old_pgid == 0);
+    assert_eq!(old_pgid, 0);
 
     // We don't need stdin, so drop it:
     child.stdin.take();
@@ -310,10 +310,6 @@ fn child_runner(
         // this point, but should not have been collected yet.
         tprintln!("Done waiting, sending kill signal");
         killpg(Pid::from_raw(child.id() as libc::pid_t), SIGKILL).unwrap();
-
-        // We no longer have to propagate the signals to this process, because
-        // it was already signaled to die.
-        assert_eq!(CHILD_PGID.swap(0, Relaxed), child.id());
 
         match unblock_reason {
             std::sync::mpsc::RecvTimeoutError::Timeout => true,
@@ -340,12 +336,15 @@ fn child_runner(
     let (usage, wait_status) = unsafe {
         use libc::{c_int, pid_t, rusage, wait4};
 
-        let pid = CHILD_PGID.load(Relaxed) as pid_t;
+        // We no longer have to propagate the signals to this process, because
+        // it was already signaled to die.
+        let pid = CHILD_PGID.swap(0, Relaxed) as pid_t;
         let mut status = MaybeUninit::<c_int>::uninit();
         let mut rusage = MaybeUninit::<rusage>::uninit();
 
-        tprintln!("Collecting the case's zombie process");
-        wait4(pid, status.as_mut_ptr(), 0, rusage.as_mut_ptr());
+        tprintln!("Collecting the case's zombie process (PID {})", pid);
+        let err = wait4(pid, status.as_mut_ptr(), 0, rusage.as_mut_ptr());
+        assert_ne!(err, -1);
 
         (rusage.assume_init(), status.assume_init())
     };
