@@ -1,6 +1,7 @@
 mod maple_like;
 
 use clap::{command, ArgGroup, Parser};
+use mimalloc::MiMalloc;
 use polynomial_solver::{
     finite_field::{FiniteField, U32PrimeField, ZkFieldWrapper},
     polynomial::{
@@ -20,6 +21,9 @@ use zokrates_core::ir::{self, LinComb, ProgEnum};
 use zokrates_field::Field as ZkField;
 
 type Poly<F> = polynomial_solver::polynomial::Polynomial<Grevlex, u32, F, i32>;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 /// Computes the Gröbner Basis of a polynomial system.
 #[derive(Parser, Debug)]

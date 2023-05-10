@@ -4,6 +4,7 @@ use std::{collections::HashMap, fs::File};
 
 use clap::Parser;
 use itertools::Itertools;
+use mimalloc::MiMalloc;
 use polynomial_solver::{
     finite_field::{FiniteField, ZkFieldWrapper},
     polynomial::Term,
@@ -11,6 +12,9 @@ use polynomial_solver::{
 use r1cs_file::{FieldElement, R1csFile};
 use rug::{integer::Order, Integer};
 use zokrates_field::{Bls12_377Field, Bls12_381Field, Bn128Field, Bw6_761Field, Field as ZkField};
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 /// Given a zero-knowledge circuit in R1CS format, try to determine if the circuit is deterministic
 /// or not.

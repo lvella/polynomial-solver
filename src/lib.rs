@@ -13,8 +13,3 @@ pub mod prime_field_solvability;
 
 mod fast_compare;
 mod ordered_ops;
-
-use mimalloc::MiMalloc;
-
-#[global_allocator]
-static GLOBAL: MiMalloc = MiMalloc;
