@@ -20,11 +20,11 @@ walkdir = "2"
 mimalloc = { version = "*", default-features = false }
 num-traits = "0.2"
 itertools = "0.10.1"
-zokrates_core = { git = "https://github.com/Zokrates/ZoKrates.git", rev = "048221bafd2cf808cad0b4c380f"}
-zokrates_field = { git = "https://github.com/Zokrates/ZoKrates.git", rev = "048221bafd2cf808cad0b4c380f" }
+zokrates_ast = { git = "https://github.com/lvella/ZoKrates.git", branch = "patch-1" }
+zokrates_field = { git = "https://github.com/lvella/ZoKrates.git", branch = "patch-1" }
 clap = { version = "4.0", features = ["derive"] }
-pest = "2.0"
-pest_derive = "2.0"
+pest = "2.3"
+pest_derive = "2.3"
 bitvec = "1"
 rand = "0.8"
 replace_with = "0.1"

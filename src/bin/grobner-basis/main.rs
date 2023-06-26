@@ -15,9 +15,7 @@ use std::{
     io::{BufReader, Write},
     time::Instant,
 };
-use zokrates_core::flat_absy::FlatVariable;
-use zokrates_core::ir::Statement::Constraint;
-use zokrates_core::ir::{self, LinComb, ProgEnum};
+use zokrates_ast::ir::{self, LinComb, ProgEnum, Statement, Variable};
 use zokrates_field::Field as ZkField;
 
 type Poly<F> = polynomial_solver::polynomial::Polynomial<Grevlex, u32, F, i32>;
@@ -68,6 +66,8 @@ fn main() -> Result<(), String> {
             ProgEnum::Bn128Program(a) => zok_solve(a, &args),
             ProgEnum::Bls12_377Program(a) => zok_solve(a, &args),
             ProgEnum::Bw6_761Program(a) => zok_solve(a, &args),
+            ProgEnum::PallasProgram(a) => zok_solve(a, &args),
+            ProgEnum::VestaProgram(a) => zok_solve(a, &args),
         }
     } else if let Some(maple_file) = &args.maple_file {
         // Field to use for systems loaded from maple-like file:
@@ -114,15 +114,15 @@ fn main() -> Result<(), String> {
     Ok(())
 }
 
-fn zok_solve<T: ZkField, I: Iterator<Item = ir::Statement<T>>>(
-    ir_prog: ir::ProgIterator<T, I>,
+fn zok_solve<'a, T: ZkField, I: Iterator<Item = ir::Statement<'a, T>>>(
+    ir_prog: ir::ProgIterator<'a, T, I>,
     args: &Args,
 ) {
     fn to_poly<T: ZkField>(lin: LinComb<T>) -> Poly<ZkFieldWrapper<T>> {
         let mut terms = Vec::new();
 
-        for (var, coeff) in lin.0 {
-            let term = if var == FlatVariable::one() {
+        for (var, coeff) in lin.value {
+            let term = if var == Variable::one() {
                 Term::new_constant(ZkFieldWrapper(coeff))
             } else {
                 Term::new(ZkFieldWrapper(coeff), var.id() as u32, 1)
@@ -136,10 +136,10 @@ fn zok_solve<T: ZkField, I: Iterator<Item = ir::Statement<T>>>(
     let mut poly_set = Vec::new();
 
     for s in ir_prog.statements.into_iter() {
-        if let Constraint(quad, lin, _) = s {
-            let ql = to_poly(quad.left);
-            let qr = to_poly(quad.right);
-            let rhs = to_poly(lin);
+        if let Statement::Constraint(c) = s {
+            let ql = to_poly(c.quad.left);
+            let qr = to_poly(c.quad.right);
+            let rhs = to_poly(c.lin);
 
             let p = ql * qr - rhs;
             poly_set.push(p);

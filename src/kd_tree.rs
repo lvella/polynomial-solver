@@ -255,7 +255,7 @@ impl<O: DataOperations> Node<O> {
                     // we can use this dim for partitioning.
                     let avg_filter = min.average_filter(max, dim);
 
-                    let less_than: Vec<_> = elems.drain_filter(|e| avg_filter.is_less(e)).collect();
+                    let less_than: Vec<_> = elems.extract_if(|e| avg_filter.is_less(e)).collect();
                     // TODO: maybe elems.shrink_to_fit() ? If doing it, it would be
                     // better to do it after all the recursive splits.
                     //elems.shrink_to_fit();

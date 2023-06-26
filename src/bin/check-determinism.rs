@@ -1,5 +1,3 @@
-#![feature(array_zip)]
-
 use std::{collections::HashMap, fs::File};
 
 use clap::Parser;
@@ -178,9 +176,7 @@ fn is_deterministic<F: ZkField, const FS: usize>(r1cs: R1csFile<FS>) -> Conclusi
             [Poly::<F>::from_terms(even), Poly::<F>::from_terms(odd)]
         });
 
-        let quad = a.zip(b).map(|(a, b)| a * b);
-        let new_polys = quad.zip(c).map(|(quad, c)| quad - c);
-        poly_set.extend(new_polys);
+        poly_set.extend(itertools::izip!(a, b, c).map(|(a, b, c)| a * b - c));
     }
 
     poly_set.sort_unstable();
