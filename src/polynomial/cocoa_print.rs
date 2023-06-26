@@ -10,7 +10,7 @@ use super::{monomial_ordering::Ordering, CommutativeRing, Exponent, Id, Polynomi
 pub fn set_prime_field_poly_ring<O: Ordering>(
     _ordering: O,
     dest: &mut impl Write,
-    prime: rug::Integer,
+    prime: impl Display,
     mut var_ids: Vec<impl Id>,
 ) -> std::io::Result<()> {
     // Sort from largest to smallest, so that the CoCoA ordering matches ours.

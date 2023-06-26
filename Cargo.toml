@@ -7,8 +7,11 @@ edition = "2021"
 name = "monitoring"
 harness = false
 
+[features]
+arbitrary_size_field = ["dep:rug"]
+
 [dev-dependencies]
-num = "0.4.0"
+num-rational = "0.4.1"
 libc = "0.2"
 regex = "1"
 lazy_static = "1.4"
@@ -29,11 +32,8 @@ bitvec = "1"
 rand = "0.8"
 replace_with = "0.1"
 r1cs-file = { git = "https://github.com/lvella/zeropool-utils.git" }
-
-[dependencies.rug]
-version = "1.13"
-default-features = false
-features = ["integer"]
+num-bigint = "0.2.6"
+rug = {version = "1.13", default-features = false, features = ["integer"], optional = true}
 
 [profile.release]
 lto = "thin"

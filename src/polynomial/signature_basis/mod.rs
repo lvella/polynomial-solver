@@ -13,12 +13,11 @@ use std::{
     ops::Mul,
 };
 
+use crate::field::Field;
+
 use self::basis_calculator::{BasisCalculator, KnownBasis};
 
-use super::{
-    division::Field,
-    divmask::{self, DivMaskTestResult},
-};
+use super::divmask::{self, DivMaskTestResult};
 use super::{monomial_ordering::Ordering, Exponent, Id, Monomial, Polynomial, Term};
 use itertools::Itertools;
 use num_traits::{One, Signed};

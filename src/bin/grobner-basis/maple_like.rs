@@ -2,8 +2,9 @@ use std::{collections::HashMap, fmt::Debug, str::FromStr};
 
 use pest::{iterators::Pair, Parser};
 use pest_derive::Parser;
-use polynomial_solver::polynomial::{
-    monomial_ordering::Ordering, CommutativeRing, Polynomial, Term, VariablePower,
+use polynomial_solver::{
+    field::CommutativeRing,
+    polynomial::{monomial_ordering::Ordering, Polynomial, Term, VariablePower},
 };
 
 #[derive(Parser)]

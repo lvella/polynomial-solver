@@ -5,13 +5,14 @@ use std::cell::{Ref, RefCell};
 use std::marker::PhantomData;
 use std::rc::Rc;
 
+use crate::field::Field;
 use crate::kd_tree::{self, DataOperations, KDTree, SearchPath};
 use crate::polynomial::divmask::DivMaskTestResult;
 use crate::polynomial::signature_basis::{
     get_var_exp_from_monomial, MaskedMonomialRef, MaskedSignature, Ratio, SignPoly,
 };
 use crate::polynomial::Monomial;
-use crate::polynomial::{division::Field, monomial_ordering::Ordering, Id, VariablePower};
+use crate::polynomial::{monomial_ordering::Ordering, Id, VariablePower};
 
 use super::{make_dense_monomial, DivMap, MaskedMonomial, SignedExponent};
 
