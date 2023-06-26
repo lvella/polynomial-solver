@@ -63,7 +63,7 @@ fn main() -> std::io::Result<()> {
             panic!(concat!(
                 "Prime field used is not supported.\n",
                 "TODO: implement a generic, fixed size, large prime field."
-            ));
+            ))
         } {
             Conclusion::Deterministic => "DETERMINISTIC",
             //Conclusion::NonDeterministic => "NON DETERMINISTIC",

@@ -33,7 +33,7 @@ r1cs-file = { git = "https://github.com/lvella/zeropool-utils.git" }
 [dependencies.rug]
 version = "1.13"
 default-features = false
-features = ["integer","float"]
+features = ["integer"]
 
 [profile.release]
 lto = "thin"
