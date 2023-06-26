@@ -1,18 +1,6 @@
-use super::{monomial_ordering::Ordering, CommutativeRing, Exponent, Id, Polynomial, Term};
+use crate::field::Field;
 
-pub trait Field
-where
-    Self: CommutativeRing
-        + for<'a> std::ops::Mul<&'a Self, Output = Self>
-        + num_traits::ops::inv::Inv<Output = Self>,
-{
-    /// Calculate elimination factor, so that self - factor*rhs = 0, and rhs_inv = 1/rhs.
-    fn elimination_factor(self, rhs_inv: &Self) -> Self {
-        let mut factor = Self::zero();
-        factor -= self * rhs_inv;
-        factor
-    }
-}
+use super::{monomial_ordering::Ordering, Exponent, Id, Polynomial, Term};
 
 pub trait TermAccumulator<O, I, C, P>: Default {
     fn push(&mut self, t: Term<O, I, C, P>);
@@ -205,8 +193,8 @@ where
 pub mod tests {
 
     use super::*;
-    use crate::polynomial::Polynomial;
-    use num::Rational32;
+    use crate::{field::CommutativeRing, polynomial::Polynomial};
+    use num_rational::Rational32;
     use num_traits::{One, Pow};
 
     impl CommutativeRing for Rational32 {}

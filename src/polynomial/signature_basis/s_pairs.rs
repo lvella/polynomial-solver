@@ -12,9 +12,12 @@ use std::{
 
 use bitvec::prelude::BitVec;
 
-use crate::polynomial::{
-    division::Field, divmask::MaximumExponentsTracker, monomial_ordering::Ordering, Id, Monomial,
-    Polynomial, Term, VariablePower,
+use crate::{
+    field::Field,
+    polynomial::{
+        divmask::MaximumExponentsTracker, monomial_ordering::Ordering, Id, Monomial, Polynomial,
+        Term, VariablePower,
+    },
 };
 
 use super::{

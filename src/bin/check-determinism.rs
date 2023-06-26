@@ -4,11 +4,11 @@ use clap::Parser;
 use itertools::Itertools;
 use mimalloc::MiMalloc;
 use polynomial_solver::{
-    finite_field::{FiniteField, ZkFieldWrapper},
+    field::{fixed_size::ZkFieldWrapper, FiniteField},
     polynomial::Term,
 };
 use r1cs_file::{FieldElement, R1csFile};
-use rug::{integer::Order, Integer};
+use rug::integer::Order;
 use zokrates_field::{Bls12_377Field, Bls12_381Field, Bn128Field, Bw6_761Field, Field as ZkField};
 
 #[global_allocator]
@@ -40,36 +40,51 @@ fn main() -> std::io::Result<()> {
     // thread, but for now, we only support a fixed set of primes.
     //
     // TODO: improve this
-    let prime = Integer::from_digits(r1cs.header.prime.as_bytes(), Order::Lsf);
+    let prime = rug::Integer::from_digits(r1cs.header.prime.as_bytes(), Order::Lsf);
 
-    if args.just_dump {
-        just_dump::just_dump(prime, r1cs);
-        return Ok(());
+    let p = Processor {
+        r1cs,
+        just_dump: args.just_dump,
+    };
+
+    if ZkFieldWrapper::<Bn128Field>::get_order() == prime {
+        p.process::<Bn128Field>()
+    } else if ZkFieldWrapper::<Bls12_381Field>::get_order() == prime {
+        p.process::<Bls12_381Field>()
+    } else if ZkFieldWrapper::<Bls12_377Field>::get_order() == prime {
+        p.process::<Bls12_377Field>()
+    } else if ZkFieldWrapper::<Bw6_761Field>::get_order() == prime {
+        p.process::<Bw6_761Field>()
+    } else {
+        panic!(concat!(
+            "Prime field used is not supported.\n",
+            "TODO: implement a generic, fixed size, large prime field."
+        ))
     }
 
-    println!(
-        "{}",
-        match if ZkFieldWrapper::<Bn128Field>::get_order() == prime {
-            is_deterministic::<Bn128Field, FS>(r1cs)
-        } else if ZkFieldWrapper::<Bls12_381Field>::get_order() == prime {
-            is_deterministic::<Bls12_381Field, FS>(r1cs)
-        } else if ZkFieldWrapper::<Bls12_377Field>::get_order() == prime {
-            is_deterministic::<Bls12_377Field, FS>(r1cs)
-        } else if ZkFieldWrapper::<Bw6_761Field>::get_order() == prime {
-            is_deterministic::<Bw6_761Field, FS>(r1cs)
-        } else {
-            panic!(concat!(
-                "Prime field used is not supported.\n",
-                "TODO: implement a generic, fixed size, large prime field."
-            ))
-        } {
-            Conclusion::Deterministic => "DETERMINISTIC",
-            //Conclusion::NonDeterministic => "NON DETERMINISTIC",
-            Conclusion::Unknown => "UNKNOWN",
-        }
-    );
-
     Ok(())
+}
+
+struct Processor<const FS: usize> {
+    r1cs: R1csFile<FS>,
+    just_dump: bool,
+}
+
+impl<const FS: usize> Processor<FS> {
+    fn process<F: ZkField>(self) {
+        if self.just_dump {
+            just_dump::just_dump::<F, FS>(self.r1cs);
+        } else {
+            println!(
+                "{}",
+                match is_deterministic::<F, FS>(self.r1cs) {
+                    Conclusion::Deterministic => "DETERMINISTIC",
+                    //Conclusion::NonDeterministic => "NON DETERMINISTIC",
+                    Conclusion::Unknown => "UNKNOWN",
+                }
+            );
+        }
+    }
 }
 
 type Poly<F> = polynomial_solver::polynomial::Polynomial<
@@ -191,14 +206,13 @@ fn is_deterministic<F: ZkField, const FS: usize>(r1cs: R1csFile<FS>) -> Conclusi
 }
 
 mod just_dump {
-    use std::cell::RefCell;
-
+    use super::{to_f, ZkField};
     use polynomial_solver::{
-        finite_field::ThreadPrimeField,
+        field::fixed_size::ZkFieldWrapper,
         polynomial::{Id, Term},
     };
     use r1cs_file::R1csFile;
-    use rug::Integer;
+    use std::cell::RefCell;
 
     /// Id wrapper for better display of R1CS wire roles.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -264,17 +278,16 @@ mod just_dump {
         }
     }
 
-    type DumpPoly = polynomial_solver::polynomial::Polynomial<
+    type DumpPoly<F> = polynomial_solver::polynomial::Polynomial<
         polynomial_solver::polynomial::monomial_ordering::Grevlex,
         R1csId,
-        ThreadPrimeField,
+        ZkFieldWrapper<F>,
         i32,
     >;
 
-    pub(crate) fn just_dump<const FS: usize>(prime: Integer, r1cs: R1csFile<FS>) {
+    pub(crate) fn just_dump<F: ZkField, const FS: usize>(r1cs: R1csFile<FS>) {
         println!("i: private input, I: public input, O: public output, w: internal wire, 𒁹: one");
 
-        ThreadPrimeField::set_prime(prime).unwrap();
         R1csId::INFO.with(|info| {
             info.replace(Some(VarInfo::new(&r1cs)));
         });
@@ -284,13 +297,7 @@ mod just_dump {
             let [a, b, c] = [constraint.0, constraint.1, constraint.2].map(|terms| {
                 let terms = terms
                     .into_iter()
-                    .map(|(coeff, wire_id)| {
-                        Term::new(
-                            Integer::from_digits(coeff.as_bytes(), rug::integer::Order::Lsf).into(),
-                            R1csId(wire_id),
-                            1,
-                        )
-                    })
+                    .map(|(coeff, wire_id)| Term::new(to_f::<F, FS>(&coeff), R1csId(wire_id), 1))
                     .collect();
 
                 DumpPoly::from_terms(terms)

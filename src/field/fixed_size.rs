@@ -1,194 +1,7 @@
-use crate::polynomial::{self, division::Field};
-
-use rug::{self, Complete};
-use std::{cell::RefCell, fmt::Display, num::ParseIntError, str::FromStr};
+use std::{num::ParseIntError, str::FromStr};
 use zokrates_field::Field as ZkField;
 
-use crate::polynomial::CommutativeRing;
-
-pub trait FiniteField: polynomial::division::Field {
-    fn get_order() -> rug::Integer;
-}
-
-pub trait PrimeField: FiniteField {}
-
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
-pub struct ThreadPrimeField(rug::Integer);
-
-fn mod_display(
-    value: &rug::Integer,
-    order: &rug::Integer,
-    f: &mut std::fmt::Formatter<'_>,
-) -> std::fmt::Result {
-    let halfway = (order / 2u8).complete();
-
-    if value > &halfway {
-        std::fmt::Display::fmt(&(value - order).complete(), f)
-    } else {
-        std::fmt::Display::fmt(&value, f)
-    }
-}
-
-impl ThreadPrimeField {
-    thread_local! {
-        static PRIME: std::cell::RefCell<rug::Integer>  = RefCell::new(rug::Integer::from(3));
-    }
-
-    /// Changing the prime when there are instances created
-    /// will denormalize the values >= the new prime.
-    pub fn set_prime<T>(prime: T) -> Result<(), &'static str>
-    where
-        rug::Integer: From<T>,
-    {
-        let prime = rug::Integer::from(prime);
-        if let rug::integer::IsPrime::No = prime.is_probably_prime(50) {
-            return Err("The number is not prime");
-        }
-
-        Self::PRIME.with(|p| *p.borrow_mut() = prime);
-
-        Ok(())
-    }
-
-    fn normalize(&mut self) {
-        Self::PRIME.with(|prime| {
-            let p = &*prime.borrow();
-            self.0 %= p;
-            if self.0 < 0 {
-                self.0 += p
-            }
-        })
-    }
-}
-
-impl FiniteField for ThreadPrimeField {
-    fn get_order() -> rug::Integer {
-        Self::PRIME.with(|prime| prime.borrow().clone())
-    }
-}
-
-impl PrimeField for ThreadPrimeField {}
-
-impl Display for ThreadPrimeField {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        Self::PRIME.with(|prime| mod_display(&self.0, &prime.borrow(), f))
-    }
-}
-
-impl<T> From<T> for ThreadPrimeField
-where
-    rug::Integer: From<T>,
-{
-    fn from(value: T) -> Self {
-        let mut v = ThreadPrimeField(rug::Integer::from(value));
-        v.normalize();
-        v
-    }
-}
-
-impl FromStr for ThreadPrimeField {
-    type Err = <rug::Integer as FromStr>::Err;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut result = ThreadPrimeField(s.parse()?);
-        result.normalize();
-
-        Ok(result)
-    }
-}
-
-impl std::ops::Add for ThreadPrimeField {
-    type Output = Self;
-
-    fn add(self, rhs: Self) -> Self {
-        let mut r = Self(self.0 + rhs.0);
-
-        r.normalize();
-        r
-    }
-}
-
-impl std::ops::Mul for ThreadPrimeField {
-    type Output = Self;
-
-    fn mul(self, rhs: Self) -> Self {
-        let mut r = Self(self.0 * rhs.0);
-        r.normalize();
-        r
-    }
-}
-
-impl std::ops::Mul<&Self> for ThreadPrimeField {
-    type Output = Self;
-
-    fn mul(self, rhs: &Self) -> Self {
-        let mut r = Self(self.0 * &rhs.0);
-        r.normalize();
-        r
-    }
-}
-
-impl std::ops::AddAssign for ThreadPrimeField {
-    fn add_assign(&mut self, rhs: Self) {
-        self.0 += rhs.0;
-        self.normalize();
-    }
-}
-
-impl std::ops::SubAssign for ThreadPrimeField {
-    fn sub_assign(&mut self, rhs: Self) {
-        self.0 -= rhs.0;
-        self.normalize();
-    }
-}
-
-impl std::ops::MulAssign<&Self> for ThreadPrimeField {
-    fn mul_assign(&mut self, rhs: &Self) {
-        self.0 *= &rhs.0;
-        self.normalize();
-    }
-}
-
-impl num_traits::pow::Pow<u32> for ThreadPrimeField {
-    type Output = Self;
-
-    fn pow(mut self, rhs: u32) -> Self {
-        Self::PRIME.with(|prime| {
-            self.0
-                .pow_mod_mut(&rug::Integer::from(rhs), &*prime.borrow())
-                .unwrap();
-            self
-        })
-    }
-}
-
-impl num_traits::Zero for ThreadPrimeField {
-    fn zero() -> Self {
-        ThreadPrimeField(rug::Integer::from(0))
-    }
-
-    fn is_zero(&self) -> bool {
-        self.0 == 0
-    }
-}
-
-impl num_traits::One for ThreadPrimeField {
-    fn one() -> Self {
-        ThreadPrimeField(rug::Integer::from(1))
-    }
-}
-
-impl num_traits::ops::inv::Inv for ThreadPrimeField {
-    type Output = Self;
-
-    fn inv(self) -> Self {
-        Self(Self::PRIME.with(|prime| self.0.invert(&*prime.borrow()).unwrap()))
-    }
-}
-
-impl CommutativeRing for ThreadPrimeField {}
-
-impl Field for ThreadPrimeField {}
+use super::{mod_display, CommutativeRing, Field, FiniteField};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ZkFieldWrapper<T>(pub T);
@@ -435,7 +248,7 @@ impl<const PRIME: u32> CommutativeRing for U32PrimeField<PRIME> {}
 impl<const PRIME: u32> Field for U32PrimeField<PRIME> {}
 impl<const PRIME: u32> FiniteField for U32PrimeField<PRIME> {
     fn get_order() -> rug::Integer {
-        rug::Integer::from(PRIME)
+        PRIME.into()
     }
 }
 
@@ -448,29 +261,27 @@ mod tests {
 
     use super::*;
 
-    type GFPoly = Polynomial<polynomial::monomial_ordering::Lex, u8, ThreadPrimeField, u16>;
-
-    fn gf<T>(v: T) -> ThreadPrimeField
-    where
-        ThreadPrimeField: From<T>,
-    {
-        ThreadPrimeField::from(v)
-    }
+    type GFPoly<const PRIME: u32> =
+        Polynomial<polynomial::monomial_ordering::Lex, u8, U32PrimeField<PRIME>, u16>;
 
     #[test]
-    fn big_grobner_basis() {
-        ThreadPrimeField::set_prime(13u8).unwrap();
+    fn full_grobner_basis() {
+        type Poly = GFPoly<13>;
 
-        let [z, y, x]: [GFPoly; 3] = GFPoly::new_variables([0, 1, 2]).try_into().unwrap();
+        fn gf(v: u32) -> U32PrimeField<13> {
+            U32PrimeField::new(v)
+        }
+
+        let [z, y, x]: [Poly; 3] = Poly::new_variables([0, 1, 2]).try_into().unwrap();
         let input = [
-            &x.clone().pow(3u8) * gf(4u8)
-                + x.clone().pow(2u8) * (&y.clone().pow(2u8) * gf(2u8))
-                + &x.clone() * gf(12u8)
+            &x.clone().pow(3u8) * gf(4)
+                + x.clone().pow(2u8) * (&y.clone().pow(2u8) * gf(2))
+                + &x.clone() * gf(12)
                 - y.clone()
-                - gf(5u8),
+                - gf(5),
             y.clone().pow(3u8)
-                - &x.clone().pow(2u8) * gf(3u8)
-                - x.clone() * (&y.clone().pow(3u8) * gf(7u8))
+                - &x.clone().pow(2u8) * gf(3)
+                - x.clone() * (&y.clone().pow(3u8) * gf(7))
                 - z,
         ];
 

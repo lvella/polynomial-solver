@@ -3,7 +3,10 @@
 //    - https://en.wikipedia.org/wiki/Faug%C3%A8re%27s_F4_and_F5_algorithms
 // - Use degrevlex ordering, and then transform to lex, which is cheaper than calculating in lex directly
 
-use crate::polynomial::{Exponent, Id, Polynomial, Term};
+use crate::{
+    field::Field,
+    polynomial::{Exponent, Id, Polynomial, Term},
+};
 
 use num_traits::{int::PrimInt, Zero};
 use std::{
@@ -14,11 +17,7 @@ use std::{
     iter::Step,
 };
 
-use super::{
-    division::{Field, TermAccumulator},
-    monomial_ordering::Ordering,
-    CommutativeRing,
-};
+use super::{division::TermAccumulator, monomial_ordering::Ordering, CommutativeRing};
 
 /// Replace polynomial variables so that they have an order that is
 /// more suitable to calculate the Gröbner Basis, according to this:

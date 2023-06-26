@@ -6,11 +6,10 @@
 #![feature(impl_trait_in_assoc_type)]
 
 pub mod factorization;
-pub mod finite_field;
+pub mod field;
 pub mod gcd;
 pub mod kd_tree;
 pub mod polynomial;
-pub mod prime_field_solvability;
 
 mod fast_compare;
 mod ordered_ops;

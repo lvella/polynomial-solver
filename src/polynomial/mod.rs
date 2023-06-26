@@ -5,6 +5,8 @@ pub mod grobner_basis;
 pub mod monomial_ordering;
 pub mod signature_basis;
 
+use crate::field::CommutativeRing;
+
 use super::ordered_ops;
 use bitvec::macros::internal::funty::Unsigned;
 use monomial_ordering::Ordering;
@@ -13,7 +15,7 @@ use std::{
     cmp::{Ordering as CmpOrd, Reverse},
     fmt::Write,
     marker::PhantomData,
-    ops::{Mul, MulAssign},
+    ops::Mul,
 };
 
 /// The trait used to identify a variable.
@@ -53,18 +55,6 @@ where
     fn from_idx(idx: usize) -> T {
         idx.try_into().unwrap()
     }
-}
-
-pub trait CommutativeRing:
-    core::fmt::Debug
-    + PartialEq
-    + Clone
-    + std::ops::AddAssign
-    + std::ops::SubAssign
-    + for<'a> MulAssign<&'a Self>
-    + num_traits::Zero
-    + num_traits::One
-{
 }
 
 pub trait Exponent:
@@ -1179,8 +1169,7 @@ impl Exponent for i32 {}
 mod tests {
     use std::time::Duration;
 
-    use num::Zero;
-    use num_traits::Pow;
+    use num_traits::{Pow, Zero};
 
     use super::*;
 

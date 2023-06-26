@@ -2,8 +2,9 @@ use std::{cell::RefCell, fmt::Display, rc::Rc};
 
 use replace_with::replace_with_or_abort;
 
-use crate::polynomial::{
-    division::Field, divmask::MaximumExponentsTracker, monomial_ordering::Ordering, Id, Polynomial,
+use crate::{
+    field::Field,
+    polynomial::{divmask::MaximumExponentsTracker, monomial_ordering::Ordering, Id, Polynomial},
 };
 
 use super::{

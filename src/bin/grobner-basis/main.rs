@@ -3,7 +3,10 @@ mod maple_like;
 use clap::{command, ArgGroup, Parser};
 use mimalloc::MiMalloc;
 use polynomial_solver::{
-    finite_field::{FiniteField, U32PrimeField, ZkFieldWrapper},
+    field::{
+        fixed_size::{U32PrimeField, ZkFieldWrapper},
+        FiniteField,
+    },
     polynomial::{
         cocoa_print, monomial_ordering::Grevlex, signature_basis::make_dense_variable_set, Term,
     },
