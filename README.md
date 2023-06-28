@@ -61,3 +61,18 @@ $ ./target/release/check-determinism ../formalbenchmarks/generated/O2/Montgomery
 #(p: 9, s: 24), [] → idx 9, sign {6, 1}: x5 ...(1)
 DETERMINISTIC
 ```
+
+## Copyright and licensing
+
+Copyright © 2022, 2023 Ethereum Foundation.
+
+This work is, by itself, licensed under
+[MIT](https://opensource.org/license/mit/). However, it depends on
+[rug](https://crates.io/crates/rug) and
+[ZoKrates](https://github.com/Zokrates/ZoKrates), who are licensed under LGPLv3.
+Whether a binary linked against those Rust static libraries, using Rust's
+unstable ABI, with all its inlinings and monomorphizations, can be made to
+comply with LGPL so that it can be licensed differently, IANAL and can not
+answer.
+
+But feel free to remove those dependencies to have a pure MIT-licensed software.
