@@ -66,9 +66,8 @@ DETERMINISTIC
 
 Copyright © 2022, 2023 Ethereum Foundation.
 
-This work is, by itself, licensed under
-[MIT](https://opensource.org/license/mit/). However, it depends on
-[rug](https://crates.io/crates/rug) and
+This work is, by itself, licensed under [MIT](LICENSE-MIT). However, it depends
+on [rug](https://crates.io/crates/rug) and
 [ZoKrates](https://github.com/Zokrates/ZoKrates), who are licensed under LGPLv3.
 Whether a binary linked against those Rust static libraries, using Rust's
 unstable ABI, with all its inlinings and monomorphizations, can be made to
