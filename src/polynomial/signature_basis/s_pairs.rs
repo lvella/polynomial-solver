@@ -459,7 +459,7 @@ impl<'a, O: Ordering, I: Id, C: Field, P: SignedExponent> LowBaseDivisor<'a, O, 
         }
     }
 
-    fn get_discriminator(&self) -> MaskedMonomialRef<O, I, P> {
+    fn get_discriminator(&self) -> MaskedMonomialRef<'_, O, I, P> {
         MaskedMonomialRef(&self.discriminator_mask, &self.discriminator)
     }
 }

@@ -20,7 +20,7 @@ use super::{make_dense_monomial, DivMap, MaskedMonomial, SignedExponent};
 struct Entry<O: Ordering, I: Id, F: Field, E: SignedExponent>(Rc<RefCell<SignPoly<O, I, F, E>>>);
 
 impl<O: Ordering, I: Id, F: Field, E: SignedExponent> Entry<O, I, F, E> {
-    fn lm(&self) -> Ref<Monomial<O, I, E>> {
+    fn lm(&self) -> Ref<'_, Monomial<O, I, E>> {
         Ref::map(self.0.borrow(), |p| &p.polynomial.terms[0].monomial)
     }
 }

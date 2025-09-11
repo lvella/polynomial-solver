@@ -103,7 +103,7 @@ pub struct MaskedSignature<O: Ordering, I: Id, P: SignedExponent> {
 }
 
 impl<O: Ordering, I: Id, P: SignedExponent> MaskedSignature<O, I, P> {
-    fn monomial(&self) -> MaskedMonomialRef<O, I, P> {
+    fn monomial(&self) -> MaskedMonomialRef<'_, O, I, P> {
         MaskedMonomialRef(&self.divmask, &self.signature.monomial)
     }
 }
@@ -175,7 +175,7 @@ impl<O: Ordering, I: Id, C: Field, P: SignedExponent> SignPoly<O, I, C, P> {
     }
 
     /// Gets the leading monomial for division test.
-    fn leading_monomial(&self) -> MaskedMonomialRef<O, I, P> {
+    fn leading_monomial(&self) -> MaskedMonomialRef<'_, O, I, P> {
         MaskedMonomialRef(&self.lm_divmask, &self.polynomial.terms[0].monomial)
     }
 
