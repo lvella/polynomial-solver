@@ -3,7 +3,6 @@ use std::ops::MulAssign;
 use rug::Complete;
 
 pub mod fixed_size;
-pub mod thread_prime;
 
 pub trait CommutativeRing:
     core::fmt::Debug

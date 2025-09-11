@@ -1,4 +1,3 @@
-#![feature(extract_if)]
 #![feature(binary_heap_into_iter_sorted)]
 #![feature(type_alias_impl_trait)]
 #![feature(step_trait)]
