@@ -16,7 +16,7 @@ factor = { sign* ~ (var | literal) ~ ("^" ~ power)? }
 
 sign = { "+" | "-" }
 
-var = @{ ASCII_ALPHA ~ ASCII_ALPHANUMERIC* }
+var = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 
 power = @{ ASCII_DIGIT+ }
 
